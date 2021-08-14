@@ -113,13 +113,18 @@ fn main() {
             }
         });
 
-        match TcpStream::connect(&opts.peer_address) {
-            Ok(mut stream) => loop {
-                let mut val = [0; 4];
-                stream.read_exact(&mut val).unwrap();
-                if let Ok(()) = output_sender.send(f32::from_le_bytes(val)) {}
-            },
-            Err(_) => { eprintln!("Could not connect to peer at {}", &opts.peer_address); },
+        loop {
+            match TcpStream::connect(&opts.peer_address) {
+                Ok(mut stream) => loop {
+                    let mut val = [0; 4];
+                    stream.read_exact(&mut val).unwrap();
+                    if let Ok(()) = output_sender.send(f32::from_le_bytes(val)) {}
+                },
+                Err(_) => { 
+                    eprintln!("Could not connect to peer at {}", &opts.peer_address);
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                },
+            }
         }
     }
 }
