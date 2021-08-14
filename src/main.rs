@@ -51,7 +51,10 @@ fn run_output<T: Sample>(config: cpal::StreamConfig, device: Device, receiver: R
             // *sample = Sample::from(&val);
             // *sample = Sample::from(&0.0);
             // *sample = Sample::from(&rand::random::<f32>());
-            *sample = Sample::from(&receiver.recv().unwrap());
+            match receiver.recv() {
+                Ok(val) => { *sample = Sample::from(&val); },
+                Err(_) => {},
+            }
         }
     }, err_fn).unwrap()
 }
@@ -72,9 +75,9 @@ fn setup_output_stream(device: Device, receiver: Receiver<f32>) -> Stream {
 
 fn main() {
     let opts: Opts = Opts::parse();
-    let host = cpal::default_host();
 
     if opts.list {
+        let host = cpal::default_host();
         let input_devices = host.input_devices().expect("Could not get input devices");
         println!("Input devices");
         for (i, dev) in input_devices.enumerate() {
@@ -91,34 +94,42 @@ fn main() {
         println!("  input: {:?}", host.default_input_device().expect("No default input device").name());
         println!("  output: {:?}", host.default_output_device().expect("No default output device").name());
     } else {
-        let input_device = host.default_input_device().expect("No default input device");
-        let output_device = host.default_output_device().expect("No default output device");
-
-        let (input_sender, input_receiver) = channel();
-        let (output_sender, output_receiver) = channel();
-
         let listener = TcpListener::bind(opts.bind_address).expect("Could not start TCP server (port already in use?)");
 
-
-        let output_stream = setup_output_stream(output_device, output_receiver);
-        output_stream.play().unwrap();
-
         thread::spawn(move || {
-            let mut stream = listener.incoming().next().unwrap().unwrap();
-            let input_stream = setup_input_stream(input_device, input_sender);
-            input_stream.play().unwrap();
-            println!("Peer connected from {:?}", stream.peer_addr());
-            for val in input_receiver.iter() {
-                stream.write_all(&val.to_le_bytes()).unwrap();
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(mut stream) => {
+                        thread::spawn(move || {
+                            let host = cpal::default_host();
+                            let (input_sender, input_receiver) = channel();
+                            let input_device = host.default_input_device().expect("No default input device");
+                            let input_stream = setup_input_stream(input_device, input_sender);
+                            input_stream.play().unwrap();
+                            println!("Peer connected from {:?}", stream.peer_addr());
+                            for val in input_receiver.iter() {
+                                stream.write_all(&val.to_le_bytes()).unwrap();
+                            }
+                        });
+                    },
+                    Err(_) => {},
+                }
             }
         });
 
         loop {
             match TcpStream::connect(&opts.peer_address) {
-                Ok(mut stream) => loop {
-                    let mut val = [0; 4];
-                    stream.read_exact(&mut val).unwrap();
-                    if let Ok(()) = output_sender.send(f32::from_le_bytes(val)) {}
+                Ok(mut stream) => {
+                    let host = cpal::default_host();
+                    let (output_sender, output_receiver) = channel();
+                    let output_device = host.default_output_device().expect("No default output device");
+                    let output_stream = setup_output_stream(output_device, output_receiver);
+                    output_stream.play().unwrap();
+                    loop {
+                        let mut val = [0; 4];
+                        stream.read_exact(&mut val).unwrap();
+                        if let Ok(()) = output_sender.send(f32::from_le_bytes(val)) {}
+                    }
                 },
                 Err(_) => { 
                     eprintln!("Could not connect to peer at {}", &opts.peer_address);
