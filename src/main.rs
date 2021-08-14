@@ -13,7 +13,7 @@ struct Opts {
     #[clap(short, long)]
     list: bool,
 
-    #[clap(short, long, default_value = "127.0.0.1:1337")]
+    #[clap(short, long, default_value = "0.0.0.0:1337")]
     bind_address: String,
 
     #[clap(short, long, default_value = "127.0.0.1:1338")]
