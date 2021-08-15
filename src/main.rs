@@ -3,8 +3,10 @@ use cpal::{Sample, SampleFormat, Stream, Device};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
-use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream, UdpSocket};
+use std::io::{BufReader, Read, Write};
+use std::fs::File;
+use wav::BitDepth::{Eight, Sixteen, TwentyFour, ThirtyTwoFloat, Empty};
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -13,11 +15,17 @@ struct Opts {
     #[clap(short, long)]
     list: bool,
 
+    #[clap(long)]
+    music: Option<String>,
+
     #[clap(short, long, default_value = "0.0.0.0:1337")]
     bind_address: String,
 
     #[clap(short, long, default_value = "127.0.0.1:1338")]
-    peer_address: String
+    peer_address: String,
+
+    #[clap(short, long)]
+    output_device: Option<usize>,
 }
 
 fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
@@ -94,10 +102,13 @@ fn main() {
         println!("  input: {:?}", host.default_input_device().expect("No default input device").name());
         println!("  output: {:?}", host.default_output_device().expect("No default output device").name());
     } else {
-        let listener = TcpListener::bind(opts.bind_address).expect("Could not start TCP server (port already in use?)");
+        let listener = TcpListener::bind(&opts.bind_address).expect("Could not start TCP server (port already in use?)");
+        // let mut socket = UdpSocket::bind(&opts.bind_address).expect("Could not start UDP server (port already in use?)");
+        let path = opts.music.clone();
 
         thread::spawn(move || {
             for stream in listener.incoming() {
+                let music_path = path.clone();
                 match stream {
                     Ok(mut stream) => {
                         thread::spawn(move || {
@@ -107,8 +118,49 @@ fn main() {
                             let input_stream = setup_input_stream(input_device, input_sender);
                             input_stream.play().unwrap();
                             println!("Peer connected from {:?}", stream.peer_addr());
-                            for val in input_receiver.iter() {
-                                stream.write_all(&val.to_le_bytes()).unwrap();
+                            match music_path.clone() {
+                                Some(path) => {
+                                    let mut file = File::open(path).expect("Could not open file");
+                                    let (header, data) = wav::read(&mut file).expect("Could not read sound (wav file?)");
+                                    println!("Music: {:?}", header);
+                                    match data {
+                                        Eight(mut vec) => {
+                                            for val in vec.iter() {
+                                                stream.write(&val.to_le_bytes());
+                                            }
+                                        },
+                                        Sixteen(mut vec) =>  {
+                                            // let mut last: i16 = vec.get(0).unwrap().clone();
+                                            for val in vec.iter() {
+                                                let sample: u16 = Sample::from(val);
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                stream.write(&sample.to_f32().to_le_bytes());
+                                            }
+                                        },
+                                        TwentyFour(mut vec) => {
+                                            for val in vec.iter() {
+                                                stream.write(&val.to_le_bytes());
+                                            }
+                                        },
+                                        ThirtyTwoFloat(mut vec) => { 
+                                            for val in vec.iter() {
+                                                stream.write(&val.to_le_bytes());
+                                            }
+                                        },
+                                        Empty => {},
+                                    }
+                                },
+                                None => {
+                                    for val in input_receiver.iter() {
+                                        stream.write_all(&val.to_le_bytes()).unwrap();
+                                    }
+                                }
                             }
                         });
                     },
@@ -117,22 +169,50 @@ fn main() {
             }
         });
 
+
+        let output_device_index = opts.output_device;
+
+        // let host = cpal::default_host();
+        // let (output_sender, output_receiver) = channel();
+        // let output_device = match output_device_index {
+        //     Some(i) => host.output_devices().expect("No output devices").collect::<Vec<Device>>().swap_remove(i),
+        //     None => host.default_output_device().expect("No default output device"),
+        // };
+        // let output_stream = setup_output_stream(output_device, output_receiver);
+        // output_stream.play().unwrap();
+        // thread::spawn(move || {
+        //     loop {
+        //         let mut buf = [0; 4];
+        //         match socket.recv_from(&mut buf) {
+        //             Ok((nbytes, src_addr)) => {
+        //                 output_sender.send(f32::from_le_bytes(buf));
+        //             },
+        //             Err(_) => {},
+        //         };
+        //     }
+        // });
+
         loop {
             match TcpStream::connect(&opts.peer_address) {
                 Ok(mut stream) => {
                     let host = cpal::default_host();
                     let (output_sender, output_receiver) = channel();
-                    let output_device = host.default_output_device().expect("No default output device");
+                    let output_device = match output_device_index {
+                        Some(i) => host.output_devices().expect("No output devices").collect::<Vec<Device>>().swap_remove(i),
+                        None => host.default_output_device().expect("No default output device"),
+                    };
                     let output_stream = setup_output_stream(output_device, output_receiver);
                     output_stream.play().unwrap();
                     loop {
                         let mut val = [0; 4];
-                        stream.read_exact(&mut val).unwrap();
-                        if let Ok(()) = output_sender.send(f32::from_le_bytes(val)) {}
+                        match stream.read_exact(&mut val) {
+                            Ok(_) => { if let Ok(()) = output_sender.send(f32::from_le_bytes(val)) {} },
+                            Err(_) => {}
+                        };
                     }
                 },
                 Err(_) => { 
-                    eprintln!("Could not connect to peer at {}", &opts.peer_address);
+                    // eprintln!("Could not connect to peer at {}", &opts.peer_address);
                     std::thread::sleep(std::time::Duration::from_millis(1000));
                 },
             }
