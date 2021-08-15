@@ -3,8 +3,8 @@ use cpal::{Sample, SampleFormat, Stream, Device};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
-use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::io::{BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write};
 use std::fs::File;
 use wav::BitDepth::{Eight, Sixteen, TwentyFour, ThirtyTwoFloat, Empty};
 
@@ -38,11 +38,11 @@ fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Send
 }
 
 fn setup_input_stream(device: Device, sender: Sender<f32>) -> Stream {
-    let mut supported_configs_range = device.supported_input_configs().unwrap();
-    let supported_config = supported_configs_range.next().unwrap().with_max_sample_rate();
+    let supported_configs_range = device.supported_input_configs().unwrap();
+    let supported_config = find_stereo_input(supported_configs_range).unwrap().with_max_sample_rate();
     let sample_format = supported_config.sample_format();
     let config = supported_config.into();
-    println!("{:?}", config);
+    println!("Input {:?}", config);
     
     match sample_format {
         SampleFormat::F32 => run_input::<f32>(config, device, sender),
@@ -66,13 +66,36 @@ fn run_output<T: Sample>(config: cpal::StreamConfig, device: Device, receiver: R
         }
     }, err_fn).unwrap()
 }
+fn find_stereo_input(range: cpal::SupportedInputConfigs) -> Option<cpal::SupportedStreamConfigRange> {
+    let mut something = None;
+    for item in range {
+        if item.channels() > 1 {
+            return Some(item);
+        } else {
+            something = Some(item);
+        }
+    }
+    something
+}
+
+fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStreamConfigRange> {
+    let mut something = None;
+    for item in range {
+        if item.channels() > 1 {
+            return Some(item);
+        } else {
+            something = Some(item);
+        }
+    }
+    something
+}
 
 fn setup_output_stream(device: Device, receiver: Receiver<f32>) -> Stream {
-    let mut supported_configs_range = device.supported_output_configs().unwrap();
-    let supported_config = supported_configs_range.next().unwrap().with_max_sample_rate();
+    let supported_configs_range = device.supported_output_configs().unwrap();
+    let supported_config = find_stereo(supported_configs_range).unwrap().with_max_sample_rate(); // supported_configs_range.next().unwrap().with_max_sample_rate();
     let sample_format = supported_config.sample_format();
     let config = supported_config.into();
-    println!("{:?}", config);
+    println!("Output {:?}", config);
     
     match sample_format {
         SampleFormat::F32 => run_output::<f32>(config, device, receiver),
@@ -124,33 +147,33 @@ fn main() {
                                     let (header, data) = wav::read(&mut file).expect("Could not read sound (wav file?)");
                                     println!("Music: {:?}", header);
                                     match data {
-                                        Eight(mut vec) => {
+                                        Eight(vec) => {
                                             for val in vec.iter() {
-                                                stream.write(&val.to_le_bytes());
+                                                if let Ok(_) = stream.write(&val.to_le_bytes()) {};
                                             }
                                         },
-                                        Sixteen(mut vec) =>  {
+                                        Sixteen(vec) =>  {
                                             // let mut last: i16 = vec.get(0).unwrap().clone();
                                             for val in vec.iter() {
-                                                let sample: u16 = Sample::from(val);
-                                                stream.write(&sample.to_f32().to_le_bytes());
-                                                stream.write(&sample.to_f32().to_le_bytes());
-                                                stream.write(&sample.to_f32().to_le_bytes());
-                                                stream.write(&sample.to_f32().to_le_bytes());
-                                                stream.write(&sample.to_f32().to_le_bytes());
-                                                stream.write(&sample.to_f32().to_le_bytes());
-                                                stream.write(&sample.to_f32().to_le_bytes());
-                                                stream.write(&sample.to_f32().to_le_bytes());
+                                                let sample: i16 = Sample::from(val);
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
                                             }
                                         },
-                                        TwentyFour(mut vec) => {
+                                        TwentyFour(vec) => {
                                             for val in vec.iter() {
-                                                stream.write(&val.to_le_bytes());
+                                                if let Ok(_) = stream.write(&val.to_le_bytes()) {};
                                             }
                                         },
-                                        ThirtyTwoFloat(mut vec) => { 
+                                        ThirtyTwoFloat(vec) => { 
                                             for val in vec.iter() {
-                                                stream.write(&val.to_le_bytes());
+                                                if let Ok(_) = stream.write(&val.to_le_bytes()) {};
                                             }
                                         },
                                         Empty => {},
