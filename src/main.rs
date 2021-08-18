@@ -153,17 +153,26 @@ fn main() {
                                             }
                                         },
                                         Sixteen(vec) =>  {
-                                            // let mut last: i16 = vec.get(0).unwrap().clone();
-                                            for val in vec.iter() {
-                                                let sample: i16 = Sample::from(val);
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
-                                                if let Ok(_) = stream.write(&sample.to_f32().to_le_bytes()) {};
+                                            for chunk in vec.chunks(2) {
+                                                let left: i16 = Sample::from(chunk.get(0).unwrap());
+                                                let right: i16 = Sample::from(chunk.get(1).unwrap());
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
+
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&left.to_f32().to_le_bytes()) {};
+                                                if let Ok(_) = stream.write(&right.to_f32().to_le_bytes()) {};
                                             }
                                         },
                                         TwentyFour(vec) => {
