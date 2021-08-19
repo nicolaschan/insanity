@@ -2,7 +2,7 @@ use clap::{AppSettings, Clap};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -192,8 +192,10 @@ fn main() {
                                             );
                                             let mut data = Vec::new();
                                             for subchunk in chunk.chunks(2) {
-                                                let left: i16 = Sample::from(subchunk.get(0).unwrap());
-                                                let right: i16 = Sample::from(subchunk.get(1).unwrap());
+                                                let left: i16 =
+                                                    Sample::from(subchunk.get(0).unwrap());
+                                                let right: i16 =
+                                                    Sample::from(subchunk.get(1).unwrap());
 
                                                 for _ in 0..8 {
                                                     data.push(left.to_f32());
@@ -232,7 +234,7 @@ fn main() {
         let output_device_index = opts.output_device;
         loop {
             match TcpStream::connect(&opts.peer_address) {
-                Ok(mut stream) => {
+                Ok(stream) => {
                     let host = cpal::default_host();
                     let (output_sender, output_receiver) = channel();
                     let output_device = match output_device_index {
@@ -248,24 +250,10 @@ fn main() {
                     let output_stream = setup_output_stream(output_device, output_receiver);
                     output_stream.play().unwrap();
 
-                    let mut length_buffer = [0; 8];
                     loop {
-                        if stream.read_exact(&mut length_buffer).is_ok() {
-                            let length = u64::from_le_bytes(length_buffer);
-                            let mut compressed_data_buffer = vec![0; length as usize];
-                            if stream.read_exact(&mut compressed_data_buffer).is_ok() {
-                                let mut data_buffer = Vec::new();
-                                {
-                                    let mut encoder =
-                                        snap::read::FrameDecoder::new(&compressed_data_buffer[..]);
-                                    if std::io::copy(&mut encoder, &mut data_buffer).is_ok() {}
-                                }
-                                let audio_chunk: AudioChunk =
-                                    bincode::deserialize(&data_buffer[..])
-                                        .expect("Protocol violation: invalid audio chunk");
-                                for val in audio_chunk.audio_data.iter() {
-                                    if let Ok(()) = output_sender.send(*val) {}
-                                }
+                        if let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
+                            for val in audio_chunk.audio_data.iter() {
+                                if let Ok(()) = output_sender.send(*val) {}
                             }
                         }
                     }
