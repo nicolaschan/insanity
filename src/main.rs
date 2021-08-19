@@ -185,20 +185,21 @@ fn main() {
                                         }
                                     }
                                     Sixteen(vec) => {
-                                        for chunk in vec.chunks(2) {
-                                            let left: i16 = Sample::from(chunk.get(0).unwrap());
-                                            let right: i16 = Sample::from(chunk.get(1).unwrap());
+                                        for chunk in vec.chunks(3840) {
                                             let format = AudioFormat::new(
                                                 header.channel_count,
                                                 header.sampling_rate,
                                             );
                                             let mut data = Vec::new();
+                                            for subchunk in chunk.chunks(2) {
+                                                let left: i16 = Sample::from(subchunk.get(0).unwrap());
+                                                let right: i16 = Sample::from(subchunk.get(1).unwrap());
 
-                                            for _ in 0..8 {
-                                                data.push(left.to_f32());
-                                                data.push(right.to_f32());
+                                                for _ in 0..8 {
+                                                    data.push(left.to_f32());
+                                                    data.push(right.to_f32());
+                                                }
                                             }
-
                                             let audio_chunk = AudioChunk::new(format, data);
                                             audio_chunk.write_to_stream(&stream);
                                         }
