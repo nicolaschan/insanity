@@ -7,4 +7,4 @@ COPY . .
 
 RUN cargo install --path .
 
-CMD ["insanity"]
+ENTRYPOINT ["insanity"]
