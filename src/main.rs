@@ -49,7 +49,7 @@ fn setup_input_stream(device: Device, sender: Sender<f32>) -> Stream {
     let supported_configs_range = device.supported_input_configs().unwrap();
     let supported_config = find_stereo_input(supported_configs_range)
         .unwrap()
-        .with_max_sample_rate();
+        .with_sample_rate(cpal::SampleRate(48000));
     let sample_format = supported_config.sample_format();
     let config = supported_config.into();
     println!("Input {:?}", config);
@@ -112,7 +112,7 @@ fn setup_output_stream(device: Device, receiver: Receiver<f32>) -> Stream {
     let supported_configs_range = device.supported_output_configs().unwrap();
     let supported_config = find_stereo(supported_configs_range)
         .unwrap()
-        .with_max_sample_rate(); // supported_configs_range.next().unwrap().with_max_sample_rate();
+        .with_sample_rate(cpal::SampleRate(48000));
     let sample_format = supported_config.sample_format();
     let config = supported_config.into();
     println!("Output {:?}", config);
@@ -185,7 +185,7 @@ fn main() {
                                         }
                                     }
                                     Sixteen(vec) => {
-                                        for chunk in vec.chunks(3840) {
+                                        for chunk in vec.chunks(4800) {
                                             let format = AudioFormat::new(
                                                 header.channel_count,
                                                 header.sampling_rate,
@@ -197,10 +197,8 @@ fn main() {
                                                 let right: i16 =
                                                     Sample::from(subchunk.get(1).unwrap());
 
-                                                for _ in 0..8 {
-                                                    data.push(left.to_f32());
-                                                    data.push(right.to_f32());
-                                                }
+                                                data.push(left.to_f32());
+                                                data.push(right.to_f32());
                                             }
                                             let audio_chunk = AudioChunk::new(format, data);
                                             audio_chunk.write_to_stream(&stream);

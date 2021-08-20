@@ -1,4 +1,7 @@
 // use std::collections::VecDeque;
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
+use flate2::read::ZlibDecoder;
 use serde::{Deserialize, Serialize};
 
 use std::convert::TryInto;
@@ -48,7 +51,7 @@ impl AudioChunk {
         let serialized = bincode::serialize(self).expect("Could not serialize AudioChunk");
         let mut encoded: Vec<u8> = Vec::new();
         {
-            let mut encoder = snap::write::FrameEncoder::new(&mut encoded);
+            let mut encoder = ZlibEncoder::new(&mut encoded, Compression::default());
             if std::io::copy(&mut &serialized[..], &mut encoder).is_ok() {}
         }
         let encoded_length: u64 = encoded.len().try_into().unwrap();
@@ -63,7 +66,7 @@ impl AudioChunk {
         stream.read_exact(&mut compressed_data_buffer)?;
         let mut data_buffer = Vec::new();
         {
-            let mut encoder = snap::read::FrameDecoder::new(&compressed_data_buffer[..]);
+            let mut encoder = ZlibDecoder::new(&compressed_data_buffer[..]);
             if std::io::copy(&mut encoder, &mut data_buffer).is_ok() {}
         }
         Ok(
