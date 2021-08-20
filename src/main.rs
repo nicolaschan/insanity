@@ -157,6 +157,7 @@ fn main() {
     } else {
         let listener = TcpListener::bind(&opts.bind_address)
             .expect("Could not start TCP server (port already in use?)");
+        println!("Started TCP server on {}", &opts.bind_address);
         let path = opts.music.clone();
 
         thread::spawn(move || {
@@ -166,11 +167,6 @@ fn main() {
                     thread::spawn(move || {
                         let host = cpal::default_host();
                         let (input_sender, input_receiver) = channel();
-                        let input_device = host
-                            .default_input_device()
-                            .expect("No default input device");
-                        let input_stream = setup_input_stream(input_device, input_sender);
-                        input_stream.play().unwrap();
                         println!("Peer connected from {:?}", stream.peer_addr());
                         match music_path.clone() {
                             Some(path) => {
@@ -217,12 +213,20 @@ fn main() {
                                     Empty => {}
                                 }
                             }
-                            None => loop {
-                                let data = input_receiver.iter().take(3840).collect();
+                            None => {
+                        let input_device = host
+                            .default_input_device()
+                            .expect("No default input device");
+                        let input_stream = setup_input_stream(input_device, input_sender);
+                        input_stream.play().unwrap();
+
+                                loop {
+                                let data = input_receiver.iter().take(4800).collect();
                                 let format = AudioFormat::new(0, 0);
                                 let audio_chunk = AudioChunk::new(format, data);
                                 audio_chunk.write_to_stream(&stream);
-                            },
+                            }
+                        },
                         }
                     });
                 }
