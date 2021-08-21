@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use std::time::Duration;
@@ -19,6 +20,9 @@ use insanity::processor::{AudioChunk, AudioFormat, AudioProcessor};
 struct Opts {
     #[clap(short, long)]
     list: bool,
+
+    #[clap(short, long)]
+    denoise: bool,
 
     #[clap(long)]
     music: Option<String>,
@@ -67,14 +71,14 @@ fn setup_input_stream(device: Device, sender: Sender<f32>) -> Stream {
 fn run_output<T: Sample>(
     config: cpal::StreamConfig,
     device: Device,
-    processor: Arc<AudioProcessor>,
+    processor: Arc<Mutex<AudioProcessor<'static>>>,
 ) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the output audio stream: {}", err);
     device
         .build_output_stream(
             &config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                processor.fill_buffer(data);
+                processor.lock().unwrap().fill_buffer(data);
             },
             err_fn,
         )
@@ -107,7 +111,7 @@ fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStr
     something
 }
 
-fn setup_output_stream(device: Device, procesor: Arc<AudioProcessor>) -> Stream {
+fn setup_output_stream(device: Device, procesor: Arc<Mutex<AudioProcessor<'static>>>) -> Stream {
     let supported_configs_range = device.supported_output_configs().unwrap();
     let supported_config = find_stereo(supported_configs_range)
         .unwrap()
@@ -234,6 +238,7 @@ fn main() {
         });
 
         let output_device_index = opts.output_device;
+        let enable_denoise = opts.denoise;
         for peer_address in opts.peer_address {
             thread::spawn(move || {
                 loop {
@@ -252,13 +257,13 @@ fn main() {
                                     .expect("No default output device"),
                             };
 
-                            let processor = Arc::new(AudioProcessor::default());
+                            let mut processor = Arc::new(Mutex::new(AudioProcessor::new(enable_denoise)));
                             let output_stream = setup_output_stream(output_device, processor.clone());
                             output_stream.play().unwrap();
 
 
                             while let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
-                                processor.handle_incoming(audio_chunk);
+                                processor.lock().unwrap().handle_incoming(audio_chunk);
                             }
                         }
                         Err(_) => {

@@ -5,11 +5,11 @@ use std::net::TcpStream;
 use std::sync::Mutex;
 
 use cpal::Sample;
-// use std::collections::VecDeque;
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
 use serde::{Deserialize, Serialize};
+use nnnoiseless::DenoiseState;
 
 pub const AUDIO_CHUNK_SIZE: usize = 1024;
 
@@ -79,17 +79,36 @@ impl AudioChunk {
     }
 }
 
-#[derive(Default)]
-pub struct AudioProcessor {
+pub struct AudioProcessor<'a> {
+    enable_denoise: bool,
+    denoise: Box<DenoiseState<'a>>,
     buffer: Mutex<VecDeque<f32>>,
 }
 
-impl AudioProcessor {
+impl AudioProcessor<'_> {
+    pub fn new(enable_denoise: bool) -> Self {
+        AudioProcessor {
+            enable_denoise,
+            denoise: DenoiseState::new(),
+            buffer: Mutex::new(VecDeque::new()),
+        }
+    }
 
-    pub fn handle_incoming(&self, chunk: AudioChunk) {
+    pub fn handle_incoming(&mut self, chunk: AudioChunk) {
         let mut guard = self.buffer.lock().unwrap();
-        for val in chunk.audio_data {
-            guard.push_back(val);
+
+        if self.enable_denoise {
+            let mut denoised_buffer = [0.0; DenoiseState::FRAME_SIZE];
+            for audio_chunk in chunk.audio_data.chunks_exact(DenoiseState::FRAME_SIZE) {
+                self.denoise.process_frame(&mut denoised_buffer[..], audio_chunk);
+                for val in denoised_buffer.iter() {
+                    guard.push_back(*val);
+                }
+            }
+        } else {
+            for val in chunk.audio_data {
+                guard.push_back(val);
+            }
         }
         // Chunks w/ seq num N than the newest chunk should be discarded.
         // todo: replace 10 with N when decided.
@@ -99,10 +118,9 @@ impl AudioProcessor {
         }
     }
 
-
     pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
         let mut guard = self.buffer.lock().unwrap();
-        for  val in to_fill.iter_mut(){
+        for val in to_fill.iter_mut(){
             let sample = match guard.pop_front() {
                 None => {
                     continue// cry b/c there's no packets
