@@ -77,7 +77,7 @@ fn run_output<T: Sample>(
                         *sample = Sample::from(&val);
                     }
                 }
-                for _ in 0..100000 {
+                for _ in 0..1000 {
                     let _ = receiver.try_recv();
                 }
             },
