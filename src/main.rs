@@ -25,7 +25,7 @@ struct Opts {
     bind_address: String,
 
     #[clap(short, long, default_value = "127.0.0.1:1338")]
-    peer_address: String,
+    peer_address: Vec<String>,
 
     #[clap(short, long)]
     output_device: Option<usize>,
@@ -72,8 +72,12 @@ fn run_output<T: Sample>(
         .build_output_stream(
             &config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                for sample in data.iter_mut() {
-                    if let Ok(val) = receiver.recv() {
+                for (index, sample) in data.iter_mut().enumerate() {
+                    if index % 100 == 0 {
+                        let _ = receiver.try_recv();
+                    }
+
+                    if let Ok(val) = receiver.try_recv() {
                         *sample = Sample::from(&val);
                     }
                 }
@@ -236,39 +240,44 @@ fn main() {
         });
 
         let output_device_index = opts.output_device;
-        loop {
-            println!("Attempting to connect to {}", &opts.peer_address);
-            match TcpStream::connect(&opts.peer_address) {
-                Ok(stream) => {
-                    let host = cpal::default_host();
-                    let (output_sender, output_receiver) = channel();
-                    let output_device = match output_device_index {
-                        Some(i) => host
-                            .output_devices()
-                            .expect("No output devices")
-                            .collect::<Vec<Device>>()
-                            .swap_remove(i),
-                        None => host
-                            .default_output_device()
-                            .expect("No default output device"),
-                    };
-                    let output_stream = setup_output_stream(output_device, output_receiver);
-                    output_stream.play().unwrap();
+        for peer_address in opts.peer_address {
+            thread::spawn(move || {
+                loop {
+                    println!("Attempting to connect to {}", peer_address);
+                    match TcpStream::connect(&peer_address) {
+                        Ok(stream) => {
+                            let host = cpal::default_host();
+                            let (output_sender, output_receiver) = channel();
+                            let output_device = match output_device_index {
+                                Some(i) => host
+                                    .output_devices()
+                                    .expect("No output devices")
+                                    .collect::<Vec<Device>>()
+                                    .swap_remove(i),
+                                None => host
+                                    .default_output_device()
+                                    .expect("No default output device"),
+                            };
+                            let output_stream = setup_output_stream(output_device, output_receiver);
+                            output_stream.play().unwrap();
 
-                    loop {
-                        if let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
-                            for val in audio_chunk.audio_data.iter() {
-                                if let Ok(()) = output_sender.send(*val) {}
+                            loop {
+                                if let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
+                                    for val in audio_chunk.audio_data.iter() {
+                                        if let Ok(()) = output_sender.send(*val) {}
+                                    }
+                                } else {
+                                    break;
+                                }
                             }
-                        } else {
-                            break;
+                        }
+                        Err(_) => {
+                            std::thread::sleep(std::time::Duration::from_millis(1000));
                         }
                     }
                 }
-                Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_millis(1000));
-                }
-            }
+            });
         }
+        loop {}
     }
 }
