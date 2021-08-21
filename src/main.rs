@@ -251,7 +251,9 @@ fn main() {
                                     .default_output_device()
                                     .expect("No default output device"),
                             };
-                            let output_stream = setup_output_stream(output_device, output_receiver);
+
+                            let processor = Arc::new(AudioProcessor::default());
+                            let output_stream = setup_output_stream(output_device, processor.clone());
                             output_stream.play().unwrap();
 
 
@@ -266,6 +268,8 @@ fn main() {
                 }
             });
         }
-        loop {}
+        loop {
+            thread::sleep(Duration::new(1900000, 0));
+        }
     }
 }
