@@ -80,7 +80,8 @@ impl AudioChunk {
 
 pub struct AudioProcessor<'a> {
     enable_denoise: bool,
-    denoise: Box<DenoiseState<'a>>,
+    denoise1: Box<DenoiseState<'a>>,
+    denoise2: Box<DenoiseState<'a>>,
     buffer: VecDeque<f32>,
 }
 
@@ -88,18 +89,33 @@ impl AudioProcessor<'_> {
     pub fn new(enable_denoise: bool) -> Self {
         AudioProcessor {
             enable_denoise,
-            denoise: DenoiseState::new(),
+            denoise1: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
+            denoise2: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
             buffer: VecDeque::new(),
         }
     }
 
     pub fn handle_incoming(&mut self, chunk: AudioChunk) {
         if self.enable_denoise {
-            let mut denoised_buffer = [0.0; DenoiseState::FRAME_SIZE];
-            for audio_chunk in chunk.audio_data.chunks_exact(DenoiseState::FRAME_SIZE) {
-                self.denoise.process_frame(&mut denoised_buffer[..], audio_chunk);
-                for val in denoised_buffer.iter() {
-                    self.buffer.push_back(*val);
+            for audio_chunk in chunk.audio_data.chunks_exact(2 * DenoiseState::FRAME_SIZE) {
+                let mut denoised_buffer1 = [0.0; DenoiseState::FRAME_SIZE];
+                let mut denoised_buffer2 = [0.0; DenoiseState::FRAME_SIZE];
+                let mut chunk1 = [0.0; DenoiseState::FRAME_SIZE];
+                let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
+                for (i, val) in audio_chunk.iter().enumerate() {
+                    if i % 2 == 0 {
+                        chunk1[i/2] = *val * 32767.0;
+                    } else {
+                        chunk2[i/2] = *val * 32767.0;
+                    }
+                }
+
+                self.denoise1.process_frame(&mut denoised_buffer1[..], &chunk1);
+                self.denoise2.process_frame(&mut denoised_buffer2[..], &chunk2);
+
+                for (val1, val2) in denoised_buffer1.iter().zip(denoised_buffer2.iter()) {
+                    self.buffer.push_back(*val1 / 32767.0);
+                    self.buffer.push_back(*val2 / 32767.0);
                 }
             }
         } else {
@@ -110,7 +126,7 @@ impl AudioProcessor<'_> {
         // Chunks w/ seq num N than the newest chunk should be discarded.
         // todo: replace 10 with N when decided.
         // If sample rate is 48000 and chunk size is 4800, then 10 will keep us within a second
-        while self.buffer.len() > 14400 {
+        while self.buffer.len() > 9600 {
             self.buffer.pop_front();
         }
     }

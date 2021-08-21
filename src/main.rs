@@ -6,6 +6,8 @@ use std::sync::Mutex;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use std::time::Duration;
+use std::net::ToSocketAddrs;
+use std::net::SocketAddr;
 
 use clap::{AppSettings, Clap};
 use cpal::{Device, Sample, SampleFormat, Stream};
@@ -243,7 +245,9 @@ fn main() {
             thread::spawn(move || {
                 loop {
                     println!("Attempting to connect to {}", peer_address);
-                    match TcpStream::connect(&peer_address) {
+                    match TcpStream::connect_timeout(
+                        &peer_address.to_socket_addrs().expect("Invalid peer address").collect::<Vec<SocketAddr>>().get(0).unwrap(),
+                        Duration::from_millis(1000)) {
                         Ok(stream) => {
                             let host = cpal::default_host();
                             let output_device = match output_device_index {
