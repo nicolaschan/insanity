@@ -1,15 +1,17 @@
 use std::fs::File;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
+use std::sync::mpsc::{channel, Sender};
 use std::thread;
+use std::time::Duration;
 
 use clap::{AppSettings, Clap};
 use cpal::{Device, Sample, SampleFormat, Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use wav::BitDepth::{Eight, Empty, Sixteen, ThirtyTwoFloat, TwentyFour};
 
-use insanity::processor::{AudioChunk, AudioFormat};
+use insanity::processor::{AudioChunk, AudioFormat, AudioProcessor};
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -65,22 +67,14 @@ fn setup_input_stream(device: Device, sender: Sender<f32>) -> Stream {
 fn run_output<T: Sample>(
     config: cpal::StreamConfig,
     device: Device,
-    receiver: Receiver<f32>,
+    processor: Arc<AudioProcessor>,
 ) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the output audio stream: {}", err);
     device
         .build_output_stream(
             &config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                for (index, sample) in data.iter_mut().enumerate() {
-                    if index % 100 == 0 {
-                        let _ = receiver.try_recv();
-                    }
-
-                    if let Ok(val) = receiver.try_recv() {
-                        *sample = Sample::from(&val);
-                    }
-                }
+                processor.fill_buffer(data);
             },
             err_fn,
         )
@@ -113,7 +107,7 @@ fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStr
     something
 }
 
-fn setup_output_stream(device: Device, receiver: Receiver<f32>) -> Stream {
+fn setup_output_stream(device: Device, procesor: Arc<AudioProcessor>) -> Stream {
     let supported_configs_range = device.supported_output_configs().unwrap();
     let supported_config = find_stereo(supported_configs_range)
         .unwrap()
@@ -123,9 +117,9 @@ fn setup_output_stream(device: Device, receiver: Receiver<f32>) -> Stream {
     println!("Output {:?}", config);
 
     match sample_format {
-        SampleFormat::F32 => run_output::<f32>(config, device, receiver),
-        SampleFormat::I16 => run_output::<i16>(config, device, receiver),
-        SampleFormat::U16 => run_output::<u16>(config, device, receiver),
+        SampleFormat::F32 => run_output::<f32>(config, device, procesor),
+        SampleFormat::I16 => run_output::<i16>(config, device, procesor),
+        SampleFormat::U16 => run_output::<u16>(config, device, procesor),
     }
 }
 
@@ -247,7 +241,6 @@ fn main() {
                     match TcpStream::connect(&peer_address) {
                         Ok(stream) => {
                             let host = cpal::default_host();
-                            let (output_sender, output_receiver) = channel();
                             let output_device = match output_device_index {
                                 Some(i) => host
                                     .output_devices()
@@ -261,14 +254,9 @@ fn main() {
                             let output_stream = setup_output_stream(output_device, output_receiver);
                             output_stream.play().unwrap();
 
-                            loop {
-                                if let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
-                                    for val in audio_chunk.audio_data.iter() {
-                                        if let Ok(()) = output_sender.send(*val) {}
-                                    }
-                                } else {
-                                    break;
-                                }
+
+                            while let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
+                                processor.handle_incoming(audio_chunk);
                             }
                         }
                         Err(_) => {

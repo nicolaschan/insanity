@@ -1,12 +1,15 @@
-// use std::collections::VecDeque;
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
-use flate2::read::ZlibDecoder;
-use serde::{Deserialize, Serialize};
-
+use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Mutex;
+
+use cpal::Sample;
+// use std::collections::VecDeque;
+use flate2::Compression;
+use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
+use serde::{Deserialize, Serialize};
 
 pub const AUDIO_CHUNK_SIZE: usize = 1024;
 
@@ -76,26 +79,37 @@ impl AudioChunk {
     }
 }
 
-// pub struct AudioProcessor {
-//     audio_output_sender: Sender<AudioChunk>,
-//     mut buffer: VecDeque<AudioChunk>,
-// }
+#[derive(Default)]
+pub struct AudioProcessor {
+    buffer: Mutex<VecDeque<f32>>,
+}
 
-// impl AudioProcessor {
-//     pub fn new(audio_output_sender: Sender<f32>) {
-//         let audio_processor = AudioProcessor {
-//             audio_output_sender,
-//             buffer: VecDeque::new(),
-//         };
-//         thread::spawn(move || {
-//             loop {
-//                 audio_output_sender.send(buffer.pop_front());
-//             }
-//         });
-//         audio_processor
-//     }
+impl AudioProcessor {
 
-//     pub fn handle_incoming(&self, chunk: AudioChunk) {
-//         self.buffer.push_back(chunk);
-//     }
-// }
+    pub fn handle_incoming(&self, chunk: AudioChunk) {
+        let mut guard = self.buffer.lock().unwrap();
+        for val in chunk.audio_data {
+            guard.push_back(val);
+        }
+        // Chunks w/ seq num N than the newest chunk should be discarded.
+        // todo: replace 10 with N when decided.
+        // If sample rate is 48000 and chunk size is 4800, then 10 will keep us within a second
+        while guard.len() > 48000 {
+            guard.pop_front();
+        }
+    }
+
+
+    pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
+        let mut guard = self.buffer.lock().unwrap();
+        for  val in to_fill.iter_mut(){
+            let sample = match guard.pop_front() {
+                None => {
+                    continue// cry b/c there's no packets
+                }
+                Some(sample) => Sample::from(&sample)
+            };
+            *val = sample;
+        }
+    }
+}
