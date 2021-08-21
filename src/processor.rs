@@ -94,10 +94,8 @@ impl AudioProcessor {
         // Chunks w/ seq num N than the newest chunk should be discarded.
         // todo: replace 10 with N when decided.
         // If sample rate is 48000 and chunk size is 4800, then 10 will keep us within a second
-        if guard.len() > 14400 {
-            for _ in 0..(guard.len() - 9600) {
-                guard.pop_front();
-            }
+        while guard.len() > 14400 {
+            guard.pop_front();
         }
     }
 
