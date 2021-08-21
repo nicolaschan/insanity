@@ -235,6 +235,7 @@ fn main() {
 
         let output_device_index = opts.output_device;
         loop {
+            println!("Attempting to connect to {}", &opts.peer_address);
             match TcpStream::connect(&opts.peer_address) {
                 Ok(stream) => {
                     let host = cpal::default_host();
@@ -257,6 +258,8 @@ fn main() {
                             for val in audio_chunk.audio_data.iter() {
                                 if let Ok(()) = output_sender.send(*val) {}
                             }
+                        } else {
+                            break;
                         }
                     }
                 }
