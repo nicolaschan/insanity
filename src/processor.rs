@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::Mutex;
 
 use cpal::Sample;
 use flate2::Compression;
@@ -82,7 +81,7 @@ impl AudioChunk {
 pub struct AudioProcessor<'a> {
     enable_denoise: bool,
     denoise: Box<DenoiseState<'a>>,
-    buffer: Mutex<VecDeque<f32>>,
+    buffer: VecDeque<f32>,
 }
 
 impl AudioProcessor<'_> {
@@ -90,38 +89,35 @@ impl AudioProcessor<'_> {
         AudioProcessor {
             enable_denoise,
             denoise: DenoiseState::new(),
-            buffer: Mutex::new(VecDeque::new()),
+            buffer: VecDeque::new(),
         }
     }
 
     pub fn handle_incoming(&mut self, chunk: AudioChunk) {
-        let mut guard = self.buffer.lock().unwrap();
-
         if self.enable_denoise {
             let mut denoised_buffer = [0.0; DenoiseState::FRAME_SIZE];
             for audio_chunk in chunk.audio_data.chunks_exact(DenoiseState::FRAME_SIZE) {
                 self.denoise.process_frame(&mut denoised_buffer[..], audio_chunk);
                 for val in denoised_buffer.iter() {
-                    guard.push_back(*val);
+                    self.buffer.push_back(*val);
                 }
             }
         } else {
             for val in chunk.audio_data {
-                guard.push_back(val);
+                self.buffer.push_back(val);
             }
         }
         // Chunks w/ seq num N than the newest chunk should be discarded.
         // todo: replace 10 with N when decided.
         // If sample rate is 48000 and chunk size is 4800, then 10 will keep us within a second
-        while guard.len() > 14400 {
-            guard.pop_front();
+        while self.buffer.len() > 14400 {
+            self.buffer.pop_front();
         }
     }
 
-    pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
-        let mut guard = self.buffer.lock().unwrap();
+    pub fn fill_buffer<T: Sample>(&mut self, to_fill: &mut [T]) {
         for val in to_fill.iter_mut(){
-            let sample = match guard.pop_front() {
+            let sample = match self.buffer.pop_front() {
                 None => {
                     continue// cry b/c there's no packets
                 }
