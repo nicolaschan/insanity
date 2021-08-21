@@ -1,11 +1,12 @@
-use clap::{AppSettings, Clap};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Sample, SampleFormat, Stream};
 use std::fs::File;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
+
+use clap::{AppSettings, Clap};
+use cpal::{Device, Sample, SampleFormat, Stream};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use wav::BitDepth::{Eight, Empty, Sixteen, ThirtyTwoFloat, TwentyFour};
 
 use insanity::processor::{AudioChunk, AudioFormat};
@@ -75,6 +76,9 @@ fn run_output<T: Sample>(
                     if let Ok(val) = receiver.recv() {
                         *sample = Sample::from(&val);
                     }
+                }
+                for _ in 0..100000 {
+                    let _ = receiver.try_recv();
                 }
             },
             err_fn,
@@ -148,6 +152,7 @@ fn main() {
                 .expect("No default input device")
                 .name()
         );
+        dbg!(host.default_input_device().unwrap().name().unwrap());
         println!(
             "  output: {:?}",
             host.default_output_device()
@@ -214,19 +219,19 @@ fn main() {
                                 }
                             }
                             None => {
-                        let input_device = host
-                            .default_input_device()
-                            .expect("No default input device");
-                        let input_stream = setup_input_stream(input_device, input_sender);
-                        input_stream.play().unwrap();
+                                let input_device = host
+                                    .default_input_device()
+                                    .expect("No default input device");
+                                let input_stream = setup_input_stream(input_device, input_sender);
+                                input_stream.play().unwrap();
 
                                 loop {
-                                let data = input_receiver.iter().take(4800).collect();
-                                let format = AudioFormat::new(0, 0);
-                                let audio_chunk = AudioChunk::new(format, data);
-                                audio_chunk.write_to_stream(&stream);
+                                    let data = input_receiver.iter().take(4800).collect();
+                                    let format = AudioFormat::new(0, 0);
+                                    let audio_chunk = AudioChunk::new(format, data);
+                                    audio_chunk.write_to_stream(&stream);
+                                }
                             }
-                        },
                         }
                     });
                 }
