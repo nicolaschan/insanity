@@ -257,7 +257,7 @@ fn main() {
                                     .expect("No default output device"),
                             };
 
-                            let mut processor = Arc::new(Mutex::new(AudioProcessor::new(enable_denoise)));
+                            let processor = Arc::new(Mutex::new(AudioProcessor::new(enable_denoise)));
                             let output_stream = setup_output_stream(output_device, processor.clone());
                             output_stream.play().unwrap();
 
