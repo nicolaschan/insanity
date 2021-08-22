@@ -168,7 +168,7 @@ fn main() {
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let music_path = path.clone();
-                if let Ok(stream) = stream {
+                if let Ok(mut stream) = stream {
                     thread::spawn(move || {
                         let host = cpal::default_host();
                         let (input_sender, input_receiver) = channel();
@@ -199,7 +199,7 @@ fn main() {
                                             // wait
                                         }
                                         now = SystemTime::now();
-                                        audio_chunk.write_to_stream(&stream);
+                                        audio_chunk.write_to_stream(&mut stream);
                                     }
                                 }
                             }
@@ -214,7 +214,7 @@ fn main() {
                                     let data = input_receiver.iter().take(4800).collect();
                                     let format = AudioFormat::new(0, 0);
                                     let audio_chunk = AudioChunk::new(format, data);
-                                    audio_chunk.write_to_stream(&stream);
+                                    audio_chunk.write_to_stream(&mut stream);
                                 }
                             }
                         }
@@ -237,7 +237,7 @@ fn main() {
                         .unwrap(),
                     Duration::from_millis(1000),
                 ) {
-                    Ok(stream) => {
+                    Ok(mut stream) => {
                         let host = cpal::default_host();
                         let output_device = match output_device_index {
                             Some(i) => host
@@ -254,7 +254,7 @@ fn main() {
                         let output_stream = setup_output_stream(output_device, processor.clone());
                         output_stream.play().unwrap();
 
-                        while let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
+                        while let Ok(audio_chunk) = AudioChunk::read_from_stream(&mut stream) {
                             processor.lock().unwrap().handle_incoming(audio_chunk);
                         }
                     }

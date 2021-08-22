@@ -1,7 +1,8 @@
+extern crate test;
+
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::io::{Read, Write};
-use std::net::TcpStream;
 
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
@@ -9,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub const AUDIO_CHUNK_SIZE: usize = 1024;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct AudioFormat {
     channel_count: u16,
     sample_rate: u32,
@@ -24,7 +25,7 @@ impl AudioFormat {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct AudioChunk {
     pub sequence_number: u128,
     pub audio_data: Vec<f32>,
@@ -46,15 +47,16 @@ impl AudioChunk {
             audio_format: format,
         }
     }
-    pub fn write_to_stream(&self, mut stream: &TcpStream) {
+    pub fn write_to_stream<T: Write>(&self, stream: &mut T) {
         let serialized = bincode::serialize(self).expect("Could not serialize AudioChunk");
         let mut encoded: Vec<u8> = Vec::new();
-        if zstd::stream::copy_encode(&serialized[..], &mut encoded, 0).is_ok() {}
+        if zstd::stream::copy_encode(&serialized[..], &mut encoded, 1).is_ok() {}
         let encoded_length: u64 = encoded.len().try_into().unwrap();
+        // println!("compression ratio {}", (serialized.len() as f64) / (encoded_length as f64));
         if stream.write(&encoded_length.to_le_bytes()).is_ok() {}
         if stream.write(&encoded).is_ok() {}
     }
-    pub fn read_from_stream(mut stream: &TcpStream) -> Result<AudioChunk, std::io::Error> {
+    pub fn read_from_stream<T: Read>(stream: &mut T) -> Result<AudioChunk, std::io::Error> {
         let mut length_buffer = [0; 8];
         stream.read_exact(&mut length_buffer)?;
         let length = u64::from_le_bytes(length_buffer);
@@ -66,6 +68,76 @@ impl AudioChunk {
             bincode::deserialize(&data_buffer[..])
                 .expect("Protocol violation: invalid audio chunk"),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test::Bencher;
+
+    #[test]
+    fn read_write_protocol_works() {
+        let mut output: Vec<u8> = Vec::new();
+        let chunk = AudioChunk::new(
+            AudioFormat::new(0, 0),
+            [0.5; 4800].to_vec(),
+        );
+        chunk.write_to_stream(&mut output);
+        let received = AudioChunk::read_from_stream(&mut &output[..]).unwrap();
+        assert_eq!(chunk, received);
+    }
+
+    #[bench]
+    fn bench_write_to_stream(b: &mut Bencher) {
+        b.iter(|| {
+            let mut output: Vec<u8> = Vec::new();
+            let chunk = AudioChunk::new(
+                AudioFormat::new(0, 0),
+                [0.0; 4800].to_vec(),
+            );
+            chunk.write_to_stream(&mut output);
+            output
+        })
+    }
+
+    #[bench]
+    fn bench_write_then_read_from_stream(b: &mut Bencher) {
+        b.iter(|| {
+            let mut output: Vec<u8> = Vec::new();
+            let chunk = AudioChunk::new(
+                AudioFormat::new(0, 0),
+                [0.0; 4800].to_vec(),
+            );
+            chunk.write_to_stream(&mut output);
+            AudioChunk::read_from_stream(&mut &output[..]).unwrap()
+        })
+    }
+
+    #[bench]
+    fn bench_processor_handle_incoming(b: &mut Bencher) {
+        b.iter(|| {
+            let mut processor = AudioProcessor::new(false);
+            let chunk = AudioChunk::new(
+                AudioFormat::new(0, 0),
+                [0.0; 4800].to_vec(),
+            );
+            processor.handle_incoming(chunk);
+            processor
+        });
+    }
+
+    #[bench]
+    fn bench_processor_handle_incoming_denoised(b: &mut Bencher) {
+        b.iter(|| {
+            let mut processor = AudioProcessor::new(true);
+            let chunk = AudioChunk::new(
+                AudioFormat::new(0, 0),
+                [0.0; 4800].to_vec(),
+            );
+            processor.handle_incoming(chunk);
+            processor
+        });
     }
 }
 
@@ -88,11 +160,11 @@ impl AudioProcessor<'_> {
 
     pub fn handle_incoming(&mut self, chunk: AudioChunk) {
         if self.enable_denoise {
+            let mut denoised_buffer1 = [0.0; DenoiseState::FRAME_SIZE];
+            let mut denoised_buffer2 = [0.0; DenoiseState::FRAME_SIZE];
+            let mut chunk1 = [0.0; DenoiseState::FRAME_SIZE];
+            let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
             for audio_chunk in chunk.audio_data.chunks_exact(2 * DenoiseState::FRAME_SIZE) {
-                let mut denoised_buffer1 = [0.0; DenoiseState::FRAME_SIZE];
-                let mut denoised_buffer2 = [0.0; DenoiseState::FRAME_SIZE];
-                let mut chunk1 = [0.0; DenoiseState::FRAME_SIZE];
-                let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
                 for (i, val) in audio_chunk.iter().enumerate() {
                     if i % 2 == 0 {
                         chunk1[i / 2] = *val * 32767.0;
@@ -112,9 +184,7 @@ impl AudioProcessor<'_> {
                 }
             }
         } else {
-            for val in chunk.audio_data {
-                self.buffer.push_back(val);
-            }
+            self.buffer.extend(chunk.audio_data);
         }
         // Chunks w/ seq num N than the newest chunk should be discarded.
         // todo: replace 10 with N when decided.
@@ -128,7 +198,7 @@ impl AudioProcessor<'_> {
         for val in to_fill.iter_mut() {
             let sample = match self.buffer.pop_front() {
                 None => {
-                    continue; // cry b/c there's no packets
+                    break; // cry b/c there's no packets
                 }
                 Some(sample) => Sample::from(&sample),
             };
