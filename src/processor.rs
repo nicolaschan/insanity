@@ -126,7 +126,7 @@ impl AudioProcessor<'_> {
         // Chunks w/ seq num N than the newest chunk should be discarded.
         // todo: replace 10 with N when decided.
         // If sample rate is 48000 and chunk size is 4800, then 10 will keep us within a second
-        while self.buffer.len() > 9600 {
+        while self.buffer.len() > 24000 {
             self.buffer.pop_front();
         }
     }
