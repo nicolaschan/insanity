@@ -1,18 +1,17 @@
 use std::fs::File;
-use std::io::Write;
+use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
 use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc::{channel, Sender};
 use std::thread;
-use std::time::Duration;
-use std::net::ToSocketAddrs;
-use std::net::SocketAddr;
+use std::time::{Duration, SystemTime};
 
 use clap::{AppSettings, Clap};
-use cpal::{Device, Sample, SampleFormat, Stream};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use wav::BitDepth::{Eight, Empty, Sixteen, ThirtyTwoFloat, TwentyFour};
+use cpal::{Device, Sample, SampleFormat, Stream};
+use wav::BitDepth::Sixteen;
 
 use insanity::processor::{AudioChunk, AudioFormat, AudioProcessor};
 
@@ -169,7 +168,7 @@ fn main() {
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let music_path = path.clone();
-                if let Ok(mut stream) = stream {
+                if let Ok(stream) = stream {
                     thread::spawn(move || {
                         let host = cpal::default_host();
                         let (input_sender, input_receiver) = channel();
@@ -180,43 +179,28 @@ fn main() {
                                 let (header, data) =
                                     wav::read(&mut file).expect("Could not read sound (wav file?)");
                                 println!("Music: {:?}", header);
-                                match data {
-                                    Eight(vec) => {
-                                        for val in vec.iter() {
-                                            if stream.write(&val.to_le_bytes()).is_ok() {}
-                                        }
-                                    }
-                                    Sixteen(vec) => {
-                                        for chunk in vec.chunks(4800) {
-                                            let format = AudioFormat::new(
-                                                header.channel_count,
-                                                header.sampling_rate,
-                                            );
-                                            let mut data = Vec::new();
-                                            for subchunk in chunk.chunks(2) {
-                                                let left: i16 =
-                                                    Sample::from(subchunk.get(0).unwrap());
-                                                let right: i16 =
-                                                    Sample::from(subchunk.get(1).unwrap());
+                                if let Sixteen(vec) = data {
+                                    let mut now = SystemTime::now();
+                                    for chunk in vec.chunks(4800) {
+                                        let format = AudioFormat::new(
+                                            header.channel_count,
+                                            header.sampling_rate,
+                                        );
+                                        let mut data = Vec::new();
+                                        for subchunk in chunk.chunks(2) {
+                                            let left: i16 = Sample::from(subchunk.get(0).unwrap());
+                                            let right: i16 = Sample::from(subchunk.get(1).unwrap());
 
-                                                data.push(left.to_f32());
-                                                data.push(right.to_f32());
-                                            }
-                                            let audio_chunk = AudioChunk::new(format, data);
-                                            audio_chunk.write_to_stream(&stream);
+                                            data.push(left.to_f32());
+                                            data.push(right.to_f32());
                                         }
-                                    }
-                                    TwentyFour(vec) => {
-                                        for val in vec.iter() {
-                                            if stream.write(&val.to_le_bytes()).is_ok() {}
+                                        let audio_chunk = AudioChunk::new(format, data);
+                                        while now.elapsed().unwrap() < Duration::from_millis(50) {
+                                            // wait
                                         }
+                                        now = SystemTime::now();
+                                        audio_chunk.write_to_stream(&stream);
                                     }
-                                    ThirtyTwoFloat(vec) => {
-                                        for val in vec.iter() {
-                                            if stream.write(&val.to_le_bytes()).is_ok() {}
-                                        }
-                                    }
-                                    Empty => {}
                                 }
                             }
                             None => {
@@ -242,37 +226,40 @@ fn main() {
         let output_device_index = opts.output_device;
         let enable_denoise = opts.denoise;
         for peer_address in opts.peer_address {
-            thread::spawn(move || {
-                loop {
-                    println!("Attempting to connect to {}", peer_address);
-                    match TcpStream::connect_timeout(
-                        &peer_address.to_socket_addrs().expect("Invalid peer address").collect::<Vec<SocketAddr>>().get(0).unwrap(),
-                        Duration::from_millis(1000)) {
-                        Ok(stream) => {
-                            let host = cpal::default_host();
-                            let output_device = match output_device_index {
-                                Some(i) => host
-                                    .output_devices()
-                                    .expect("No output devices")
-                                    .collect::<Vec<Device>>()
-                                    .swap_remove(i),
-                                None => host
-                                    .default_output_device()
-                                    .expect("No default output device"),
-                            };
+            thread::spawn(move || loop {
+                println!("Attempting to connect to {}", peer_address);
+                match TcpStream::connect_timeout(
+                    peer_address
+                        .to_socket_addrs()
+                        .expect("Invalid peer address")
+                        .collect::<Vec<SocketAddr>>()
+                        .get(0)
+                        .unwrap(),
+                    Duration::from_millis(1000),
+                ) {
+                    Ok(stream) => {
+                        let host = cpal::default_host();
+                        let output_device = match output_device_index {
+                            Some(i) => host
+                                .output_devices()
+                                .expect("No output devices")
+                                .collect::<Vec<Device>>()
+                                .swap_remove(i),
+                            None => host
+                                .default_output_device()
+                                .expect("No default output device"),
+                        };
 
-                            let processor = Arc::new(Mutex::new(AudioProcessor::new(enable_denoise)));
-                            let output_stream = setup_output_stream(output_device, processor.clone());
-                            output_stream.play().unwrap();
+                        let processor = Arc::new(Mutex::new(AudioProcessor::new(enable_denoise)));
+                        let output_stream = setup_output_stream(output_device, processor.clone());
+                        output_stream.play().unwrap();
 
-
-                            while let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
-                                processor.lock().unwrap().handle_incoming(audio_chunk);
-                            }
+                        while let Ok(audio_chunk) = AudioChunk::read_from_stream(&stream) {
+                            processor.lock().unwrap().handle_incoming(audio_chunk);
                         }
-                        Err(_) => {
-                            std::thread::sleep(std::time::Duration::from_millis(1000));
-                        }
+                    }
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(1000));
                     }
                 }
             });

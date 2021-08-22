@@ -16,3 +16,4 @@ rand = "0.8.4"
 serde = { version = "1.0.127", features = ["derive"] }
 wav = "1.0.0"
 itertools = "0.10.1"
+zstd = "0.9"

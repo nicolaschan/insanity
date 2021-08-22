@@ -4,11 +4,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use cpal::Sample;
-use flate2::Compression;
-use flate2::read::ZlibDecoder;
-use flate2::write::ZlibEncoder;
-use serde::{Deserialize, Serialize};
 use nnnoiseless::DenoiseState;
+use serde::{Deserialize, Serialize};
 
 pub const AUDIO_CHUNK_SIZE: usize = 1024;
 
@@ -52,10 +49,7 @@ impl AudioChunk {
     pub fn write_to_stream(&self, mut stream: &TcpStream) {
         let serialized = bincode::serialize(self).expect("Could not serialize AudioChunk");
         let mut encoded: Vec<u8> = Vec::new();
-        {
-            let mut encoder = ZlibEncoder::new(&mut encoded, Compression::default());
-            if std::io::copy(&mut &serialized[..], &mut encoder).is_ok() {}
-        }
+        if zstd::stream::copy_encode(&serialized[..], &mut encoded, 0).is_ok() {}
         let encoded_length: u64 = encoded.len().try_into().unwrap();
         if stream.write(&encoded_length.to_le_bytes()).is_ok() {}
         if stream.write(&encoded).is_ok() {}
@@ -67,10 +61,7 @@ impl AudioChunk {
         let mut compressed_data_buffer = vec![0; length as usize];
         stream.read_exact(&mut compressed_data_buffer)?;
         let mut data_buffer = Vec::new();
-        {
-            let mut encoder = ZlibDecoder::new(&compressed_data_buffer[..]);
-            if std::io::copy(&mut encoder, &mut data_buffer).is_ok() {}
-        }
+        if zstd::stream::copy_decode(&compressed_data_buffer[..], &mut data_buffer).is_ok() {}
         Ok(
             bincode::deserialize(&data_buffer[..])
                 .expect("Protocol violation: invalid audio chunk"),
@@ -104,14 +95,16 @@ impl AudioProcessor<'_> {
                 let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
                 for (i, val) in audio_chunk.iter().enumerate() {
                     if i % 2 == 0 {
-                        chunk1[i/2] = *val * 32767.0;
+                        chunk1[i / 2] = *val * 32767.0;
                     } else {
-                        chunk2[i/2] = *val * 32767.0;
+                        chunk2[i / 2] = *val * 32767.0;
                     }
                 }
 
-                self.denoise1.process_frame(&mut denoised_buffer1[..], &chunk1);
-                self.denoise2.process_frame(&mut denoised_buffer2[..], &chunk2);
+                self.denoise1
+                    .process_frame(&mut denoised_buffer1[..], &chunk1);
+                self.denoise2
+                    .process_frame(&mut denoised_buffer2[..], &chunk2);
 
                 for (val1, val2) in denoised_buffer1.iter().zip(denoised_buffer2.iter()) {
                     self.buffer.push_back(*val1 / 32767.0);
@@ -132,12 +125,12 @@ impl AudioProcessor<'_> {
     }
 
     pub fn fill_buffer<T: Sample>(&mut self, to_fill: &mut [T]) {
-        for val in to_fill.iter_mut(){
+        for val in to_fill.iter_mut() {
             let sample = match self.buffer.pop_front() {
                 None => {
-                    continue// cry b/c there's no packets
+                    continue; // cry b/c there's no packets
                 }
-                Some(sample) => Sample::from(&sample)
+                Some(sample) => Sample::from(&sample),
             };
             *val = sample;
         }
