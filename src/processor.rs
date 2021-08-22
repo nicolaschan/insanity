@@ -1,5 +1,8 @@
 extern crate test;
 
+use itertools::Itertools;
+use rayon::prelude::*;
+
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::io::{Read, Write};
@@ -79,10 +82,7 @@ mod tests {
     #[test]
     fn read_write_protocol_works() {
         let mut output: Vec<u8> = Vec::new();
-        let chunk = AudioChunk::new(
-            AudioFormat::new(0, 0),
-            [0.5; 4800].to_vec(),
-        );
+        let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.5; 4800].to_vec());
         chunk.write_to_stream(&mut output);
         let received = AudioChunk::read_from_stream(&mut &output[..]).unwrap();
         assert_eq!(chunk, received);
@@ -92,10 +92,7 @@ mod tests {
     fn bench_write_to_stream(b: &mut Bencher) {
         b.iter(|| {
             let mut output: Vec<u8> = Vec::new();
-            let chunk = AudioChunk::new(
-                AudioFormat::new(0, 0),
-                [0.0; 4800].to_vec(),
-            );
+            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
             chunk.write_to_stream(&mut output);
             output
         })
@@ -105,10 +102,7 @@ mod tests {
     fn bench_write_then_read_from_stream(b: &mut Bencher) {
         b.iter(|| {
             let mut output: Vec<u8> = Vec::new();
-            let chunk = AudioChunk::new(
-                AudioFormat::new(0, 0),
-                [0.0; 4800].to_vec(),
-            );
+            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
             chunk.write_to_stream(&mut output);
             AudioChunk::read_from_stream(&mut &output[..]).unwrap()
         })
@@ -118,10 +112,7 @@ mod tests {
     fn bench_processor_handle_incoming(b: &mut Bencher) {
         b.iter(|| {
             let mut processor = AudioProcessor::new(false);
-            let chunk = AudioChunk::new(
-                AudioFormat::new(0, 0),
-                [0.0; 4800].to_vec(),
-            );
+            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
             processor.handle_incoming(chunk);
             processor
         });
@@ -131,10 +122,7 @@ mod tests {
     fn bench_processor_handle_incoming_denoised(b: &mut Bencher) {
         b.iter(|| {
             let mut processor = AudioProcessor::new(true);
-            let chunk = AudioChunk::new(
-                AudioFormat::new(0, 0),
-                [0.0; 4800].to_vec(),
-            );
+            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
             processor.handle_incoming(chunk);
             processor
         });
@@ -164,6 +152,39 @@ impl AudioProcessor<'_> {
             let mut denoised_buffer2 = [0.0; DenoiseState::FRAME_SIZE];
             let mut chunk1 = [0.0; DenoiseState::FRAME_SIZE];
             let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
+
+            // let denoised_data: Vec<Vec<f32>> = chunk.audio_data.par_chunks_mut(2 * DenoiseState::FRAME_SIZE)
+            //     .map_with((self.denoise1, self.denoise2), |(denoise1, denoise2), audio_chunk| {
+            //         let mut denoised_buffer1 = [0.0; DenoiseState::FRAME_SIZE];
+            //         let mut denoised_buffer2 = [0.0; DenoiseState::FRAME_SIZE];
+            //         let mut chunk1 = [0.0; DenoiseState::FRAME_SIZE];
+            //         let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
+
+            //         for (i, val) in audio_chunk.iter().enumerate() {
+            //             if i % 2 == 0 {
+            //                 chunk1[i / 2] = *val * 32767.0;
+            //             } else {
+            //                 chunk2[i / 2] = *val * 32767.0;
+            //             }
+            //         }
+
+            //         denoise1
+            //             .process_frame(&mut denoised_buffer1[..], &chunk1);
+            //         denoise2
+            //             .process_frame(&mut denoised_buffer2[..], &chunk2);
+
+            //         denoised_buffer1
+            //             .iter()
+            //             .map(|x| *x / 32767.0)
+            //             .interleave(denoised_buffer2.iter().map(|x| *x / 32767.0))
+            //             .collect()
+            //     })
+            //     .collect();
+
+            // for data in denoised_data.iter() {
+            //     self.buffer.extend(data);
+            // }
+
             for audio_chunk in chunk.audio_data.chunks_exact(2 * DenoiseState::FRAME_SIZE) {
                 for (i, val) in audio_chunk.iter().enumerate() {
                     if i % 2 == 0 {
@@ -173,14 +194,16 @@ impl AudioProcessor<'_> {
                     }
                 }
 
-                self.denoise1
-                    .process_frame(&mut denoised_buffer1[..], &chunk1);
-                self.denoise2
-                    .process_frame(&mut denoised_buffer2[..], &chunk2);
+                let mut denoise1 = &mut self.denoise1;
+                let mut denoise2 = &mut self.denoise2;
+                denoise1.process_frame(&mut denoised_buffer1[..], &chunk1);
+                denoise2.process_frame(&mut denoised_buffer2[..], &chunk2);
+                // rayon::join(|| denoise1.process_frame(&mut denoised_buffer1[..], &chunk1),
+                //     || denoise2.process_frame(&mut denoised_buffer2[..], &chunk2));
 
                 for (val1, val2) in denoised_buffer1.iter().zip(denoised_buffer2.iter()) {
-                    self.buffer.push_back(*val1 / 32767.0);
-                    self.buffer.push_back(*val2 / 32767.0);
+                    self.buffer.push_back(*val1  / 32767.0);
+                    self.buffer.push_back(*val1  / 32767.0);
                 }
             }
         } else {

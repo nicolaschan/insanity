@@ -13,6 +13,7 @@ cpal = "0.13.4"
 flate2 = "1.0"
 nnnoiseless = "0.3.2"
 rand = "0.8.4"
+rayon = "1.5.1"
 serde = { version = "1.0.127", features = ["derive"] }
 wav = "1.0.0"
 itertools = "0.10.1"
