@@ -202,8 +202,8 @@ impl AudioProcessor<'_> {
                 //     || denoise2.process_frame(&mut denoised_buffer2[..], &chunk2));
 
                 for (val1, val2) in denoised_buffer1.iter().zip(denoised_buffer2.iter()) {
-                    self.buffer.push_back(*val1  / 32767.0);
-                    self.buffer.push_back(*val1  / 32767.0);
+                    self.buffer.push_back(*val1 / 32767.0);
+                    self.buffer.push_back(*val2 / 32767.0);
                 }
             }
         } else {
