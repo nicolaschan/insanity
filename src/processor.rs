@@ -1,8 +1,5 @@
 extern crate test;
 
-use itertools::Itertools;
-use rayon::prelude::*;
-
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::io::{Read, Write};
@@ -194,8 +191,8 @@ impl AudioProcessor<'_> {
                     }
                 }
 
-                let mut denoise1 = &mut self.denoise1;
-                let mut denoise2 = &mut self.denoise2;
+                let denoise1 = &mut self.denoise1;
+                let denoise2 = &mut self.denoise2;
                 denoise1.process_frame(&mut denoised_buffer1[..], &chunk1);
                 denoise2.process_frame(&mut denoised_buffer2[..], &chunk2);
                 // rayon::join(|| denoise1.process_frame(&mut denoised_buffer1[..], &chunk1),
