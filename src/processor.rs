@@ -87,41 +87,38 @@ mod tests {
 
     #[bench]
     fn bench_write_to_stream(b: &mut Bencher) {
+        let mut output: Vec<u8> = Vec::new();
+        let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
         b.iter(|| {
-            let mut output: Vec<u8> = Vec::new();
-            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-            chunk.write_to_stream(&mut output);
-            output
+            chunk.write_to_stream(&mut output)
         })
     }
 
     #[bench]
-    fn bench_write_then_read_from_stream(b: &mut Bencher) {
+    fn bench_read_from_stream(b: &mut Bencher) {
+        let mut output: Vec<u8> = Vec::new();
+        let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
+        chunk.write_to_stream(&mut output);
         b.iter(|| {
-            let mut output: Vec<u8> = Vec::new();
-            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-            chunk.write_to_stream(&mut output);
             AudioChunk::read_from_stream(&mut &output[..]).unwrap()
         })
     }
 
     #[bench]
     fn bench_processor_handle_incoming(b: &mut Bencher) {
-        b.iter(|| {
-            let mut processor = AudioProcessor::new(false);
+        let mut processor = AudioProcessor::new(false);
+        b.iter(move || {
             let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-            processor.handle_incoming(chunk);
-            processor
+            processor.handle_incoming(chunk)
         });
     }
 
     #[bench]
     fn bench_processor_handle_incoming_denoised(b: &mut Bencher) {
+        let mut processor = AudioProcessor::new(true);
         b.iter(|| {
-            let mut processor = AudioProcessor::new(true);
             let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-            processor.handle_incoming(chunk);
-            processor
+            processor.handle_incoming(chunk)
         });
     }
 }
