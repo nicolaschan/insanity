@@ -89,9 +89,7 @@ mod tests {
     fn bench_write_to_stream(b: &mut Bencher) {
         let mut output: Vec<u8> = Vec::new();
         let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-        b.iter(|| {
-            chunk.write_to_stream(&mut output)
-        })
+        b.iter(|| chunk.write_to_stream(&mut output))
     }
 
     #[bench]
@@ -99,9 +97,7 @@ mod tests {
         let mut output: Vec<u8> = Vec::new();
         let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
         chunk.write_to_stream(&mut output);
-        b.iter(|| {
-            AudioChunk::read_from_stream(&mut &output[..]).unwrap()
-        })
+        b.iter(|| AudioChunk::read_from_stream(&mut &output[..]).unwrap())
     }
 
     #[bench]
