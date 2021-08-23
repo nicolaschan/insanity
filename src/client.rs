@@ -47,7 +47,7 @@ fn setup_output_stream(device: Device, procesor: Arc<Mutex<AudioProcessor<'stati
         .with_sample_rate(cpal::SampleRate(48000));
     let sample_format = supported_config.sample_format();
     let config = supported_config.into();
-    println!("Output {:?}", config);
+    // println!("Output {:?}", config);
 
     match sample_format {
         SampleFormat::F32 => run_output::<f32>(config, device, procesor),

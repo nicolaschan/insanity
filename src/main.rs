@@ -1,6 +1,5 @@
 use std::thread;
 use std::time::Duration;
-
 use clap::{AppSettings, Clap};
 
 #[derive(Clap)]
@@ -31,7 +30,5 @@ fn main() {
         insanity::client::start_client(peer_address, opts.output_device, opts.denoise);
     }
 
-    loop {
-        thread::sleep(Duration::new(1900000, 0));
-    }
+    insanity::tui::start();
 }

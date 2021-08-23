@@ -35,7 +35,7 @@ fn setup_input_stream(device: Device, sender: Sender<f32>) -> Stream {
         .with_sample_rate(cpal::SampleRate(48000));
     let sample_format = supported_config.sample_format();
     let config = supported_config.into();
-    println!("Input {:?}", config);
+    // println!("Input {:?}", config);
 
     match sample_format {
         SampleFormat::F32 => run_input::<f32>(config, device, sender),
@@ -124,7 +124,7 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
     thread::spawn(move || {
         let mut file = File::open(path).expect("Could not open sound file");
         let (header, data) = wav::read(&mut file).expect("Could not read sound (wav file)");
-        println!("Music: {:?}", header);
+        // println!("Music: {:?}", header);
         if let Sixteen(vec) = data {
             let mut now = SystemTime::now();
             for chunk in vec.chunks(4800) {
