@@ -6,14 +6,12 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::DeviceTrait;
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::Sender;
 
 use crate::clerver::start_clerver;
-use crate::processor::AudioFormat;
-use crate::processor::{AudioChunk, AudioProcessor};
-use crate::server::AudioReceiver;
+use crate::processor::AudioProcessor;
 use crate::server::make_audio_receiver;
 use crate::tui::Peer;
 use crate::tui::PeerStatus;
@@ -67,7 +65,7 @@ pub fn setup_output_stream(device: Device, procesor: Arc<Mutex<AudioProcessor<'s
 
 pub fn start_client(
     peer_address: String,
-    output_device_index: Option<usize>,
+    _output_device_index: Option<usize>,
     enable_denoise: bool,
     ui_message_sender: Sender<TuiEvent>,
 ) {
@@ -85,7 +83,7 @@ pub fn start_client(
                 .unwrap(),
             Duration::from_millis(1000),
         ) {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
                     ip_address: peer_address.clone(),
                     status: PeerStatus::Connected,

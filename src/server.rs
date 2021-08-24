@@ -2,7 +2,6 @@ use std::fs::File;
 
 use std::marker::Send;
 use std::net::TcpListener;
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
@@ -13,8 +12,6 @@ use cpal::{Device, Sample, SampleFormat, Stream};
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
-use crate::client::setup_output_stream;
-use crate::processor::{AudioChunk, AudioFormat, AudioProcessor};
 use crate::tui::{Peer, PeerStatus, TuiEvent, TuiMessage};
 
 fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
@@ -71,7 +68,7 @@ pub fn start_server_with_receiver<R: AudioReceiver + 'static>(
         .expect("Could not start TCP server (port already in use?)");
     println!("Started TCP server on {}", bind_address);
 
-    for mut stream in listener.incoming().flatten() {
+    for stream in listener.incoming().flatten() {
         let peer_address: String = stream.peer_addr().unwrap().to_string();
         let make_receiver_clone = make_receiver.clone();
         let ui_message_sender_clone = ui_message_sender.clone();

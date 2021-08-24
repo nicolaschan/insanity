@@ -1,37 +1,10 @@
-use std::{io::{Read, Write}, net::TcpStream, sync::{Arc, Mutex}, thread};
+use std::{net::TcpStream, sync::{Arc, Mutex}, thread};
 
 use cpal::traits::{HostTrait, StreamTrait};
-use crossbeam::channel::{Receiver, unbounded};
 
 use crate::{client::setup_output_stream, processor::{AudioChunk, AudioFormat, AudioProcessor}, server::AudioReceiver};
 
 // A clerver is a CLient + sERVER.
-
-struct ReadableReceiver {
-    receiver: Receiver<u8>,
-}
-
-impl Read for ReadableReceiver {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut i = 0;
-        while let Ok(val) = self.receiver.try_recv() {
-            if i >= buf.len() {
-                break;
-            }
-            buf[i] = val;
-            i = i + 1;
-        }
-        Ok(i)
-    }
-}
-
-impl ReadableReceiver {
-    pub fn new(receiver: Receiver<u8>) -> ReadableReceiver {
-        ReadableReceiver {
-            receiver
-        }
-    }
-}
 
 pub fn start_clerver<R: AudioReceiver + 'static>(
     mut stream: TcpStream,
@@ -62,6 +35,8 @@ pub fn start_clerver<R: AudioReceiver + 'static>(
         let chunk = AudioChunk::read_from_stream(&mut stream);
         if let Ok(chunk) = chunk {
             processor.lock().unwrap().handle_incoming(chunk);
+        } else {
+            break;
         }
     }
 }
