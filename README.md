@@ -30,3 +30,4 @@ cargo run --release -- --peer-address $YOUR_IP:1337
 - [ ] Expose compression options
 - [ ] Performance benchmarks
 - [ ] Full test coverage
+- [ ] Measure bandwidth and ping to peers (and show in console)

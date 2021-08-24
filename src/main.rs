@@ -14,7 +14,7 @@ struct Opts {
     #[clap(short, long, default_value = "0.0.0.0:1337")]
     bind_address: String,
 
-    #[clap(short, long, default_value = "127.0.0.1:1338")]
+    #[clap(short, long)]
     peer_address: Vec<String>,
 
     #[clap(short, long)]
