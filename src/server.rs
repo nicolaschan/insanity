@@ -92,7 +92,7 @@ pub fn start_server_with_receiver<R: AudioReceiver + 'static>(
     }
 }
 
-struct CpalStreamReceiver {
+pub struct CpalStreamReceiver {
     #[allow(dead_code)]
     input_stream: Stream,
     input_receiver: Receiver<f32>,
@@ -114,7 +114,7 @@ impl AudioReceiver for Receiver<f32> {
     }
 }
 
-fn make_audio_receiver() -> CpalStreamReceiver {
+pub fn make_audio_receiver() -> CpalStreamReceiver {
     let host = cpal::default_host();
     let (input_sender, input_receiver) = channel();
     let input_device = host

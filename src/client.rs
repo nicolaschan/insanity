@@ -10,7 +10,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::Sender;
 
+use crate::processor::AudioFormat;
 use crate::processor::{AudioChunk, AudioProcessor};
+use crate::server::AudioReceiver;
+use crate::server::make_audio_receiver;
 use crate::tui::Peer;
 use crate::tui::PeerStatus;
 use crate::tui::TuiEvent;
@@ -81,7 +84,9 @@ pub fn start_client(
                 .unwrap(),
             Duration::from_millis(1000),
         ) {
-            Ok(mut stream) => {
+            Ok(stream) => {
+                let stream_mutex = Arc::new(Mutex::new(stream));
+
                 if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
                     ip_address: peer_address.clone(),
                     status: PeerStatus::Connected,
@@ -103,7 +108,21 @@ pub fn start_client(
                 let output_stream = setup_output_stream(output_device, processor.clone());
                 output_stream.play().unwrap();
 
-                while let Ok(audio_chunk) = AudioChunk::read_from_stream(&mut stream) {
+                let stream_mutex_clone = stream_mutex.clone();
+                thread::spawn(move || {
+                    let mut audio_receiver = make_audio_receiver();
+                    let input_receiver = audio_receiver.receiver();
+                    loop {
+                        let data = input_receiver.iter().take(4800).collect();
+                        let format = AudioFormat::new(0, 0);
+                        let audio_chunk = AudioChunk::new(format, data);
+                        let mut unlocked = stream_mutex_clone.lock().unwrap();
+                        if audio_chunk.write_to_stream(&mut *unlocked).is_err() {
+                            break;
+                        }
+                    }
+                });
+                while let Ok(audio_chunk) = AudioChunk::read_from_stream(&mut *(stream_mutex.lock().unwrap())) {
                     processor.lock().unwrap().handle_incoming(audio_chunk);
                 }
 
