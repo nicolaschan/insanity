@@ -10,6 +10,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::Sender;
 
+use crate::clerver::start_clerver;
 use crate::processor::AudioFormat;
 use crate::processor::{AudioChunk, AudioProcessor};
 use crate::server::AudioReceiver;
@@ -48,7 +49,7 @@ fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStr
     something
 }
 
-fn setup_output_stream(device: Device, procesor: Arc<Mutex<AudioProcessor<'static>>>) -> Stream {
+pub fn setup_output_stream(device: Device, procesor: Arc<Mutex<AudioProcessor<'static>>>) -> Stream {
     let supported_configs_range = device.supported_output_configs().unwrap();
     let supported_config = find_stereo(supported_configs_range)
         .unwrap()
@@ -84,47 +85,13 @@ pub fn start_client(
                 .unwrap(),
             Duration::from_millis(1000),
         ) {
-            Ok(stream) => {
-                let stream_mutex = Arc::new(Mutex::new(stream));
-
+            Ok(mut stream) => {
                 if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
                     ip_address: peer_address.clone(),
                     status: PeerStatus::Connected,
                 }))).is_ok() {}
 
-                let host = cpal::default_host();
-                let output_device = match output_device_index {
-                    Some(i) => host
-                        .output_devices()
-                        .expect("No output devices")
-                        .collect::<Vec<Device>>()
-                        .swap_remove(i),
-                    None => host
-                        .default_output_device()
-                        .expect("No default output device"),
-                };
-
-                let processor = Arc::new(Mutex::new(AudioProcessor::new(enable_denoise)));
-                let output_stream = setup_output_stream(output_device, processor.clone());
-                output_stream.play().unwrap();
-
-                let stream_mutex_clone = stream_mutex.clone();
-                thread::spawn(move || {
-                    let mut audio_receiver = make_audio_receiver();
-                    let input_receiver = audio_receiver.receiver();
-                    loop {
-                        let data = input_receiver.iter().take(4800).collect();
-                        let format = AudioFormat::new(0, 0);
-                        let audio_chunk = AudioChunk::new(format, data);
-                        let mut unlocked = stream_mutex_clone.lock().unwrap();
-                        if audio_chunk.write_to_stream(&mut *unlocked).is_err() {
-                            break;
-                        }
-                    }
-                });
-                while let Ok(audio_chunk) = AudioChunk::read_from_stream(&mut *(stream_mutex.lock().unwrap())) {
-                    processor.lock().unwrap().handle_incoming(audio_chunk);
-                }
+                start_clerver(stream, enable_denoise, make_audio_receiver);
 
                 if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
                     ip_address: peer_address.clone(),

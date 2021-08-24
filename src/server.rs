@@ -2,6 +2,7 @@ use std::fs::File;
 
 use std::marker::Send;
 use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
@@ -11,7 +12,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
 use wav::BitDepth::Sixteen;
 
-use crate::processor::{AudioChunk, AudioFormat};
+use crate::clerver::start_clerver;
+use crate::client::setup_output_stream;
+use crate::processor::{AudioChunk, AudioFormat, AudioProcessor};
 use crate::tui::{Peer, PeerStatus, TuiEvent, TuiMessage};
 
 fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
@@ -77,16 +80,7 @@ pub fn start_server_with_receiver<R: AudioReceiver + 'static>(
                 ip_address: peer_address.clone(),
                 status: PeerStatus::Connected,
             }))).is_ok() {}
-            let mut receiver = make_receiver_clone();
-            let input_receiver = receiver.receiver();
-            loop {
-                let data = input_receiver.iter().take(4800).collect();
-                let format = AudioFormat::new(0, 0);
-                let audio_chunk = AudioChunk::new(format, data);
-                if audio_chunk.write_to_stream(&mut stream).is_err() {
-                    break;
-                }
-            }
+            start_clerver(stream, true, make_receiver_clone);
             if ui_message_sender_clone.send(TuiEvent::Message(TuiMessage::DeletePeer(peer_address.clone()))).is_ok() {}
         });
     }
