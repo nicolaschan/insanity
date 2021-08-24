@@ -2,13 +2,12 @@ use std::fs::File;
 
 use std::marker::Send;
 use std::net::TcpListener;
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::{channel, Sender};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
+use crossbeam::channel::{Receiver, Sender, unbounded};
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
@@ -107,7 +106,7 @@ impl AudioReceiver for Receiver<f32> {
 
 pub fn make_audio_receiver() -> CpalStreamReceiver {
     let host = cpal::default_host();
-    let (input_sender, input_receiver) = channel();
+    let (input_sender, input_receiver) = unbounded();
     let input_device = host
         .default_input_device()
         .expect("No default input device");
@@ -122,7 +121,7 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
 }
 
 fn make_music_receiver(path: String) -> Receiver<f32> {
-    let (input_sender, input_receiver) = channel();
+    let (input_sender, input_receiver) = unbounded();
     thread::spawn(move || {
         let mut file = File::open(path).expect("Could not open sound file");
         let (_, data) = wav::read(&mut file).expect("Could not read sound (wav file)");

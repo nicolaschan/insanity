@@ -20,3 +20,4 @@ itertools = "0.10.1"
 zstd = "0.9"
 crossterm = "0.21.0"
 tui = { version = "0.16", default-features = false, features = ['crossterm'] }
+nanoid = "0.4.0"

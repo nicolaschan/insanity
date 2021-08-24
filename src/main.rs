@@ -19,10 +19,18 @@ struct Opts {
 
     #[clap(short, long)]
     output_device: Option<usize>,
+
+    #[clap(long)]
+    id: Option<String>,
 }
 
 fn main() {
     let opts: Opts = Opts::parse();
+
+    let _id: String = match opts.id {
+        Some(id) => id,
+        None => nanoid::nanoid!(),
+    };
 
     let (ui_message_sender, ui_message_receiver) = unbounded();
 
