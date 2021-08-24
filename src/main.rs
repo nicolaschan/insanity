@@ -1,6 +1,5 @@
-use std::thread;
-use std::time::Duration;
 use clap::{AppSettings, Clap};
+use crossbeam::channel::unbounded;
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -24,11 +23,14 @@ struct Opts {
 
 fn main() {
     let opts: Opts = Opts::parse();
-    insanity::server::start_server(opts.bind_address, opts.music);
+
+    let (ui_message_sender, ui_message_receiver) = unbounded();
+
+    insanity::server::start_server(opts.bind_address, opts.music, ui_message_sender.clone());
 
     for peer_address in opts.peer_address {
-        insanity::client::start_client(peer_address, opts.output_device, opts.denoise);
+        insanity::client::start_client(peer_address, opts.output_device, opts.denoise, ui_message_sender.clone());
     }
 
-    insanity::tui::start();
+    insanity::tui::start(ui_message_sender, ui_message_receiver);
 }

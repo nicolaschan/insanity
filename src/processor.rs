@@ -47,14 +47,15 @@ impl AudioChunk {
             audio_format: format,
         }
     }
-    pub fn write_to_stream<T: Write>(&self, stream: &mut T) {
+    pub fn write_to_stream<T: Write>(&self, stream: &mut T) -> Result<(), std::io::Error> {
         let serialized = bincode::serialize(self).expect("Could not serialize AudioChunk");
         let mut encoded: Vec<u8> = Vec::new();
         if zstd::stream::copy_encode(&serialized[..], &mut encoded, 1).is_ok() {}
         let encoded_length: u64 = encoded.len().try_into().unwrap();
         // println!("compression ratio {}", (serialized.len() as f64) / (encoded_length as f64));
-        if stream.write(&encoded_length.to_le_bytes()).is_ok() {}
-        if stream.write(&encoded).is_ok() {}
+        stream.write_all(&encoded_length.to_le_bytes())?;
+        stream.write_all(&encoded)?;
+        Ok(())
     }
     pub fn read_from_stream<T: Read>(stream: &mut T) -> Result<AudioChunk, std::io::Error> {
         let mut length_buffer = [0; 8];
@@ -80,7 +81,7 @@ mod tests {
     fn read_write_protocol_works() {
         let mut output: Vec<u8> = Vec::new();
         let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.5; 4800].to_vec());
-        chunk.write_to_stream(&mut output);
+        chunk.write_to_stream(&mut output).unwrap();
         let received = AudioChunk::read_from_stream(&mut &output[..]).unwrap();
         assert_eq!(chunk, received);
     }
@@ -96,7 +97,7 @@ mod tests {
     fn bench_read_from_stream(b: &mut Bencher) {
         let mut output: Vec<u8> = Vec::new();
         let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-        chunk.write_to_stream(&mut output);
+        chunk.write_to_stream(&mut output).unwrap();
         b.iter(|| AudioChunk::read_from_stream(&mut &output[..]).unwrap())
     }
 

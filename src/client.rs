@@ -8,8 +8,13 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
+use crossbeam::channel::Sender;
 
 use crate::processor::{AudioChunk, AudioProcessor};
+use crate::tui::Peer;
+use crate::tui::PeerStatus;
+use crate::tui::TuiEvent;
+use crate::tui::TuiMessage;
 
 fn run_output<T: Sample>(
     config: cpal::StreamConfig,
@@ -60,9 +65,13 @@ pub fn start_client(
     peer_address: String,
     output_device_index: Option<usize>,
     enable_denoise: bool,
+    ui_message_sender: Sender<TuiEvent>,
 ) {
     thread::spawn(move || loop {
-        println!("Attempting to connect to {}", peer_address);
+        if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+            ip_address: peer_address.clone(),
+            status: PeerStatus::Disconnected,
+        }))).is_ok() {}
         match TcpStream::connect_timeout(
             peer_address
                 .to_socket_addrs()
@@ -73,6 +82,11 @@ pub fn start_client(
             Duration::from_millis(1000),
         ) {
             Ok(mut stream) => {
+                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+                    ip_address: peer_address.clone(),
+                    status: PeerStatus::Connected,
+                }))).is_ok() {}
+
                 let host = cpal::default_host();
                 let output_device = match output_device_index {
                     Some(i) => host
@@ -92,6 +106,11 @@ pub fn start_client(
                 while let Ok(audio_chunk) = AudioChunk::read_from_stream(&mut stream) {
                     processor.lock().unwrap().handle_incoming(audio_chunk);
                 }
+
+                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+                    ip_address: peer_address.clone(),
+                    status: PeerStatus::Disconnected,
+                }))).is_ok() {}
             }
             Err(_) => {
                 std::thread::sleep(std::time::Duration::from_millis(1000));
