@@ -38,7 +38,7 @@ fn run_output<T: Sample>(
 fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStreamConfigRange> {
     let mut something = None;
     for item in range {
-        if item.channels() > 1 {
+        if item.channels() == 1 {
             return Some(item);
         } else {
             something = Some(item);
