@@ -7,7 +7,7 @@ pub struct RealTimeBuffer<T> {
 
 impl<T> RealTimeBuffer<T> {
     pub fn new(max_size: usize) -> RealTimeBuffer<T> {
-        let mut buffer: Vec<Option<T>> = Vec::with_capacity(10);
+        let mut buffer: Vec<Option<T>> = Vec::with_capacity(max_size);
         for i in 0..max_size {
             buffer.insert(i, None);
         }
@@ -15,36 +15,39 @@ impl<T> RealTimeBuffer<T> {
             head: 0, current_size: 0, max_size, buffer
         }
     }
-    fn head_index(&self) -> usize {
-        (self.head % (self.max_size as u128)) as usize
-    }
+
     pub fn len(&self) -> usize {
         self.current_size
     }
     pub fn set(&mut self, index: u128, data: T) {
         if index < self.head {
-            return;
+            return; // you got data you already skipped in the past
         }
-        if self.buffer.swap_remove(self.head_index()).is_none() {
+
+        let real_index = (index % (self.max_size as u128)) as usize;
+        if self.buffer[real_index].is_none() {
             self.current_size += 1;
         }
-        self.buffer.insert(self.head_index(), Some(data));
+        self.buffer[real_index] = Some(data);
+
+        // you receive data too far in the future (like a full cycle around the buffer)
         if (index - self.head) >= (self.max_size as u128) {
             self.head = index - (self.max_size as u128) + 1;
         }
     }
     pub fn next(&mut self) -> Option<T> {
-        if self.current_size > 0 {
-            let mut item: Option<T> = None;
-            while item.is_none() {
-                item = self.buffer.swap_remove(self.head_index());
-                self.buffer.insert(self.head_index(), None);
+        let head_index = (self.head % self.max_size as u128) as usize;
+
+        let mut current = None;
+        return if self.current_size > 0 {
+            while current.is_none() {
+                current = self.buffer[head_index].take();
                 self.head += 1;
             }
             self.current_size -= 1;
-            return item;
+            current
         } else {
-            return None;
+            None
         }
     }
 }

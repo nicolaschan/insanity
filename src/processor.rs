@@ -137,7 +137,7 @@ impl AudioProcessor<'_> {
             enable_denoise,
             denoise1: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
             denoise2: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
-            chunk_buffer: Mutex::new(RealTimeBuffer::new(20)),
+            chunk_buffer: Mutex::new(RealTimeBuffer::new(20000)),
             audio_buffer: Mutex::new(VecDeque::new()),
         }
     }
@@ -163,7 +163,7 @@ impl AudioProcessor<'_> {
                 None => {
                     Sample::from(&0.0) // cry b/c there's no packets
                 }
-                Some(sample) => Sample::from(&sample),
+                Some(sample) => Sample::from(&(sample / 12.0)),
             };
             *val = sample;
         }

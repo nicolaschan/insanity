@@ -43,7 +43,7 @@ fn main() {
         insanity::client::start_client(peer_address, opts.output_device, opts.denoise, ui_message_sender.clone());
     }
 
-    if (opts.no_tui) {
+    if opts.no_tui {
         loop {}
     } else {
         insanity::tui::start(ui_message_sender, ui_message_receiver);
