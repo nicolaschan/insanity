@@ -22,6 +22,9 @@ struct Opts {
 
     #[clap(long)]
     id: Option<String>,
+    
+    #[clap(long)]
+    no_tui: bool,
 }
 
 fn main() {
@@ -40,5 +43,9 @@ fn main() {
         insanity::client::start_client(peer_address, opts.output_device, opts.denoise, ui_message_sender.clone());
     }
 
-    insanity::tui::start(ui_message_sender, ui_message_receiver);
+    if (opts.no_tui) {
+        loop {}
+    } else {
+        insanity::tui::start(ui_message_sender, ui_message_receiver);
+    }
 }

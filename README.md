@@ -31,3 +31,4 @@ cargo run --release -- --peer-address $YOUR_IP:1337
 - [ ] Performance benchmarks
 - [ ] Full test coverage
 - [ ] Measure bandwidth and ping to peers (and show in console)
+- [ ] Set up CI to build binaries + Docker image on GitHub

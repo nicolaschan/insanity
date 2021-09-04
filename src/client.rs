@@ -21,14 +21,14 @@ use crate::tui::TuiMessage;
 fn run_output<T: Sample>(
     config: cpal::StreamConfig,
     device: Device,
-    processor: Arc<Mutex<AudioProcessor<'static>>>,
+    processor: Arc<AudioProcessor<'static>>,
 ) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the output audio stream: {}", err);
     device
         .build_output_stream(
             &config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                processor.lock().unwrap().fill_buffer(data);
+                processor.fill_buffer(data);
             },
             err_fn,
         )
@@ -38,7 +38,7 @@ fn run_output<T: Sample>(
 fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStreamConfigRange> {
     let mut something = None;
     for item in range {
-        if item.channels() == 1 {
+        if item.channels() == 2 {
             return Some(item);
         } else {
             something = Some(item);
@@ -47,7 +47,7 @@ fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStr
     something
 }
 
-pub fn setup_output_stream(device: Device, procesor: Arc<Mutex<AudioProcessor<'static>>>) -> Stream {
+pub fn setup_output_stream(device: Device, processor: Arc<AudioProcessor<'static>>) -> Stream {
     let supported_configs_range = device.supported_output_configs().unwrap();
     let supported_config = find_stereo(supported_configs_range)
         .unwrap()
@@ -57,9 +57,9 @@ pub fn setup_output_stream(device: Device, procesor: Arc<Mutex<AudioProcessor<'s
     // println!("Output {:?}", config);
 
     match sample_format {
-        SampleFormat::F32 => run_output::<f32>(config, device, procesor),
-        SampleFormat::I16 => run_output::<i16>(config, device, procesor),
-        SampleFormat::U16 => run_output::<u16>(config, device, procesor),
+        SampleFormat::F32 => run_output::<f32>(config, device, processor),
+        SampleFormat::I16 => run_output::<i16>(config, device, processor),
+        SampleFormat::U16 => run_output::<u16>(config, device, processor),
     }
 }
 

@@ -49,7 +49,7 @@ fn find_stereo_input(
 ) -> Option<cpal::SupportedStreamConfigRange> {
     let mut something = None;
     for item in range {
-        if item.channels() == 1 {
+        if item.channels() == 2 {
             return Some(item);
         } else {
             something = Some(item);
@@ -128,12 +128,12 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
         // println!("Music: {:?}", header);
         if let Sixteen(vec) = data {
             let mut now = SystemTime::now();
-            for chunk in vec.chunks(4800) {
+            for chunk in vec.chunks(480) {
                 for val in chunk {
                     let s: i16 = Sample::from(val);
                     if input_sender.send(s.to_f32()).is_ok() {}
                 }
-                while now.elapsed().unwrap() < Duration::from_millis(50) {
+                while now.elapsed().unwrap() < Duration::from_millis(5) {
                     std::hint::spin_loop();
                 }
                 now = SystemTime::now()

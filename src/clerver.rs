@@ -16,25 +16,27 @@ pub fn start_clerver<R: AudioReceiver + 'static>(
     thread::spawn(move || {
         let mut audio_receiver = make_receiver();
         let receiver = audio_receiver.receiver();
+        let mut sequence_number = 0;
         loop {
-            let data = receiver.iter().take(4800).collect();
+            let data = receiver.iter().take(480).collect();
             let format = AudioFormat::new(0, 0);
-            let audio_chunk = AudioChunk::new(format, data);
+            let audio_chunk = AudioChunk::new(sequence_number, format, data);
             if audio_chunk.write_to_stream(&mut stream_clone).is_err() {
                 break;
             }
+            sequence_number += 1;
         }
     });
 
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
-    let processor = Arc::new(Mutex::new(AudioProcessor::new(enable_denoise)));
+    let processor = Arc::new(AudioProcessor::new(enable_denoise));
     let output_stream = setup_output_stream(output_device, processor.clone());
     output_stream.play().unwrap();
     loop {
         let chunk = AudioChunk::read_from_stream(&mut stream);
         if let Ok(chunk) = chunk {
-            processor.lock().unwrap().handle_incoming(chunk);
+            processor.handle_incoming(chunk);
         } else {
             break;
         }

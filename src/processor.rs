@@ -3,12 +3,15 @@ extern crate test;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::io::{Read, Write};
+use std::sync::Mutex;
 
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
 
-pub const AUDIO_CHUNK_SIZE: usize = 1024;
+use crate::realtime_buffer::RealTimeBuffer;
+
+pub const AUDIO_CHUNK_SIZE: usize = 480;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct AudioFormat {
@@ -33,9 +36,9 @@ pub struct AudioChunk {
 }
 
 impl AudioChunk {
-    pub fn new(audio_format: AudioFormat, audio_data: Vec<f32>) -> AudioChunk {
+    pub fn new(sequence_number: u128, audio_format: AudioFormat, audio_data: Vec<f32>) -> AudioChunk {
         AudioChunk {
-            sequence_number: 0,
+            sequence_number,
             audio_data,
             audio_format,
         }
@@ -80,7 +83,7 @@ mod tests {
     #[test]
     fn read_write_protocol_works() {
         let mut output: Vec<u8> = Vec::new();
-        let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.5; 4800].to_vec());
+        let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.5; 4800].to_vec());
         chunk.write_to_stream(&mut output).unwrap();
         let received = AudioChunk::read_from_stream(&mut &output[..]).unwrap();
         assert_eq!(chunk, received);
@@ -89,14 +92,14 @@ mod tests {
     #[bench]
     fn bench_write_to_stream(b: &mut Bencher) {
         let mut output: Vec<u8> = Vec::new();
-        let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
+        let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
         b.iter(|| chunk.write_to_stream(&mut output))
     }
 
     #[bench]
     fn bench_read_from_stream(b: &mut Bencher) {
         let mut output: Vec<u8> = Vec::new();
-        let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
+        let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
         chunk.write_to_stream(&mut output).unwrap();
         b.iter(|| AudioChunk::read_from_stream(&mut &output[..]).unwrap())
     }
@@ -105,7 +108,7 @@ mod tests {
     fn bench_processor_handle_incoming(b: &mut Bencher) {
         let mut processor = AudioProcessor::new(false);
         b.iter(move || {
-            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
+            let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
             processor.handle_incoming(chunk)
         });
     }
@@ -114,7 +117,7 @@ mod tests {
     fn bench_processor_handle_incoming_denoised(b: &mut Bencher) {
         let mut processor = AudioProcessor::new(true);
         b.iter(|| {
-            let chunk = AudioChunk::new(AudioFormat::new(0, 0), [0.0; 4800].to_vec());
+            let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
             processor.handle_incoming(chunk)
         });
     }
@@ -124,7 +127,8 @@ pub struct AudioProcessor<'a> {
     enable_denoise: bool,
     denoise1: Box<DenoiseState<'a>>,
     denoise2: Box<DenoiseState<'a>>,
-    buffer: VecDeque<f32>,
+    audio_buffer: Mutex<VecDeque<f32>>,
+    chunk_buffer: Mutex<RealTimeBuffer<AudioChunk>>,
 }
 
 impl AudioProcessor<'_> {
@@ -133,86 +137,31 @@ impl AudioProcessor<'_> {
             enable_denoise,
             denoise1: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
             denoise2: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
-            buffer: VecDeque::new(),
+            chunk_buffer: Mutex::new(RealTimeBuffer::new(20)),
+            audio_buffer: Mutex::new(VecDeque::new()),
         }
     }
 
-    pub fn handle_incoming(&mut self, chunk: AudioChunk) {
-        if self.enable_denoise {
-            let mut denoised_buffer1 = [0.0; DenoiseState::FRAME_SIZE];
-            let mut denoised_buffer2 = [0.0; DenoiseState::FRAME_SIZE];
-            let mut chunk1 = [0.0; DenoiseState::FRAME_SIZE];
-            let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
-
-            // let denoised_data: Vec<Vec<f32>> = chunk.audio_data.par_chunks_mut(2 * DenoiseState::FRAME_SIZE)
-            //     .map_with((self.denoise1, self.denoise2), |(denoise1, denoise2), audio_chunk| {
-            //         let mut denoised_buffer1 = [0.0; DenoiseState::FRAME_SIZE];
-            //         let mut denoised_buffer2 = [0.0; DenoiseState::FRAME_SIZE];
-            //         let mut chunk1 = [0.0; DenoiseState::FRAME_SIZE];
-            //         let mut chunk2 = [0.0; DenoiseState::FRAME_SIZE];
-
-            //         for (i, val) in audio_chunk.iter().enumerate() {
-            //             if i % 2 == 0 {
-            //                 chunk1[i / 2] = *val * 32767.0;
-            //             } else {
-            //                 chunk2[i / 2] = *val * 32767.0;
-            //             }
-            //         }
-
-            //         denoise1
-            //             .process_frame(&mut denoised_buffer1[..], &chunk1);
-            //         denoise2
-            //             .process_frame(&mut denoised_buffer2[..], &chunk2);
-
-            //         denoised_buffer1
-            //             .iter()
-            //             .map(|x| *x / 32767.0)
-            //             .interleave(denoised_buffer2.iter().map(|x| *x / 32767.0))
-            //             .collect()
-            //     })
-            //     .collect();
-
-            // for data in denoised_data.iter() {
-            //     self.buffer.extend(data);
-            // }
-
-            for audio_chunk in chunk.audio_data.chunks_exact(2 * DenoiseState::FRAME_SIZE) {
-                for (i, val) in audio_chunk.iter().enumerate() {
-                    if i % 2 == 0 {
-                        chunk1[i / 2] = *val * 32767.0;
-                    } else {
-                        chunk2[i / 2] = *val * 32767.0;
-                    }
-                }
-
-                let denoise1 = &mut self.denoise1;
-                let denoise2 = &mut self.denoise2;
-                denoise1.process_frame(&mut denoised_buffer1[..], &chunk1);
-                denoise2.process_frame(&mut denoised_buffer2[..], &chunk2);
-                // rayon::join(|| denoise1.process_frame(&mut denoised_buffer1[..], &chunk1),
-                //     || denoise2.process_frame(&mut denoised_buffer2[..], &chunk2));
-
-                for (val1, val2) in denoised_buffer1.iter().zip(denoised_buffer2.iter()) {
-                    self.buffer.push_back(*val1 / 32767.0);
-                    self.buffer.push_back(*val2 / 32767.0);
-                }
-            }
-        } else {
-            self.buffer.extend(chunk.audio_data);
-        }
-        // Chunks w/ seq num N than the newest chunk should be discarded.
-        // todo: replace 10 with N when decided.
-        // If sample rate is 48000 and chunk size is 4800, then 10 will keep us within a second
-        while self.buffer.len() > 24000 {
-            self.buffer.pop_front();
-        }
+    pub fn handle_incoming(&self, chunk: AudioChunk) {
+        let mut guard = self.chunk_buffer.lock().unwrap();
+        guard.set(chunk.sequence_number, chunk);
     }
 
-    pub fn fill_buffer<T: Sample>(&mut self, to_fill: &mut [T]) {
+    pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
+        let mut audio_buffer_guard = self.audio_buffer.lock().unwrap();
+        let mut i = 0;
+        while to_fill.len() > audio_buffer_guard.len() {
+            let mut guard = self.chunk_buffer.lock().unwrap();
+            match guard.next() {
+                Some(chunk) => audio_buffer_guard.extend(chunk.audio_data),
+                None => {},
+            };
+            i += 1;
+        }
         for val in to_fill.iter_mut() {
-            let sample = match self.buffer.pop_front() {
+            let sample = match audio_buffer_guard.pop_front() {
                 None => {
-                    break; // cry b/c there's no packets
+                    Sample::from(&0.0) // cry b/c there's no packets
                 }
                 Some(sample) => Sample::from(&sample),
             };
