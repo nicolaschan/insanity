@@ -37,7 +37,7 @@ fn main() {
 
     let (ui_message_sender, ui_message_receiver) = unbounded();
 
-    insanity::server::start_server(opts.bind_address, opts.music, ui_message_sender.clone());
+    insanity::server::start_server(opts.bind_address, opts.denoise, opts.music, ui_message_sender.clone());
 
     for peer_address in opts.peer_address {
         insanity::client::start_client(peer_address, opts.output_device, opts.denoise, ui_message_sender.clone());

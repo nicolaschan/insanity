@@ -2,7 +2,7 @@ use std::{net::TcpStream, sync::{Arc, Mutex}, thread};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
-use crate::{client::setup_output_stream, processor::{AudioChunk, AudioFormat, AudioProcessor}, server::AudioReceiver};
+use crate::{client::setup_output_stream, processor::{AUDIO_CHUNK_SIZE, AudioChunk, AudioFormat, AudioProcessor}, server::AudioReceiver};
 
 // A clerver is a CLient + sERVER.
 
@@ -18,8 +18,8 @@ pub fn start_clerver<R: AudioReceiver + 'static>(
         let receiver = audio_receiver.receiver();
         let mut sequence_number = 0;
         loop {
-            let data = receiver.iter().take(480).collect();
-            let format = AudioFormat::new(0, 0);
+            let data = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
+            let format = AudioFormat::new(2, 48000);
             let audio_chunk = AudioChunk::new(sequence_number, format, data);
             if audio_chunk.write_to_stream(&mut stream_clone).is_err() {
                 break;

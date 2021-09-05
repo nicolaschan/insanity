@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
+use itertools::multizip;
 
 use crate::realtime_buffer::RealTimeBuffer;
 
@@ -123,10 +124,71 @@ mod tests {
     }
 }
 
+pub struct MultiChannelDenoiser<'a> {
+    channels: u16,
+    denoisers: Vec<Box<DenoiseState<'a>>>,
+}
+
+impl MultiChannelDenoiser<'_> {
+    pub fn new() -> Self {
+        let denoisers: Vec<Box<DenoiseState>> = Vec::new();
+        MultiChannelDenoiser { channels: 0, denoisers }
+    }
+
+    fn setup_denoisers(&mut self, channels: u16) {
+        if channels != self.channels {
+            self.denoisers = Vec::new();
+            for _ in 0..channels {
+                self.denoisers.push(DenoiseState::from_model(nnnoiseless::RnnModel::default()));
+            }
+            self.channels = channels;
+        }
+    }
+
+    pub fn denoise_chunk(&mut self, chunk: AudioChunk) -> AudioChunk {
+        let magic = 32767.0;
+
+        let mut denoised_output: Vec<f32> = Vec::new();
+
+        let channels = chunk.audio_format.channel_count;
+        self.setup_denoisers(channels);
+
+        for audio_chunk in chunk.audio_data.chunks_exact((channels as usize) * DenoiseState::FRAME_SIZE) {
+            // Audio data for each channel is interleaved
+            // Separate it into a buffer for each channel in the raw_audio Vec
+            let mut raw_audio: Vec<[f32; DenoiseState::FRAME_SIZE]> = Vec::new();
+            for _ in 0..channels {
+                raw_audio.push([0.0; DenoiseState::FRAME_SIZE]);
+            }
+            let mut denoised_audio: Vec<[f32; DenoiseState::FRAME_SIZE]> = Vec::new();
+            for (i, val) in audio_chunk.iter().enumerate() {
+                raw_audio[i % (channels as usize)][i / (channels as usize)] = *val * magic;
+            }
+
+            // Denoise each channel independently
+            for i in 0..channels {
+                let mut denoiser = self.denoisers.swap_remove(i as usize);
+                let mut denoised_audio_buffer = [0.0; DenoiseState::FRAME_SIZE];
+                denoiser.process_frame(&mut denoised_audio_buffer, &raw_audio[i as usize]);
+                self.denoisers.insert(i as usize, denoiser);
+                denoised_audio.insert(i as usize, denoised_audio_buffer);
+            }
+
+            // Re-interleave the audio data
+            for i in 0..DenoiseState::FRAME_SIZE {
+                for c in 0..channels {
+                    denoised_output.push(denoised_audio[c as usize][i] / magic);
+                }
+            }
+        }
+
+        AudioChunk::new(chunk.sequence_number, chunk.audio_format, denoised_output)
+    }
+}
+
 pub struct AudioProcessor<'a> {
     enable_denoise: bool,
-    denoise1: Box<DenoiseState<'a>>,
-    denoise2: Box<DenoiseState<'a>>,
+    denoiser: Mutex<MultiChannelDenoiser<'a>>,
     audio_buffer: Mutex<VecDeque<f32>>,
     chunk_buffer: Mutex<RealTimeBuffer<AudioChunk>>,
 }
@@ -135,22 +197,25 @@ impl AudioProcessor<'_> {
     pub fn new(enable_denoise: bool) -> Self {
         AudioProcessor {
             enable_denoise,
-            denoise1: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
-            denoise2: DenoiseState::from_model(nnnoiseless::RnnModel::default()),
-            chunk_buffer: Mutex::new(RealTimeBuffer::new(20000)),
+            denoiser: Mutex::new(MultiChannelDenoiser::new()),
+            chunk_buffer: Mutex::new(RealTimeBuffer::new(50)),
             audio_buffer: Mutex::new(VecDeque::new()),
         }
     }
 
-    pub fn handle_incoming(&self, chunk: AudioChunk) {
+    pub fn handle_incoming(&self, mut chunk: AudioChunk) {
         let mut guard = self.chunk_buffer.lock().unwrap();
+        if self.enable_denoise {
+            let mut denoiser_guard = self.denoiser.lock().unwrap();
+            chunk = denoiser_guard.denoise_chunk(chunk);
+        }
         guard.set(chunk.sequence_number, chunk);
     }
 
     pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
         let mut audio_buffer_guard = self.audio_buffer.lock().unwrap();
-        let mut i = 0;
-        while to_fill.len() > audio_buffer_guard.len() {
+        let mut i = 0; // limit the number of tries to get the next chunk or else we wait too long
+        while to_fill.len() > audio_buffer_guard.len() && (i <= to_fill.len() / AUDIO_CHUNK_SIZE) {
             let mut guard = self.chunk_buffer.lock().unwrap();
             match guard.next() {
                 Some(chunk) => audio_buffer_guard.extend(chunk.audio_data),
@@ -163,7 +228,7 @@ impl AudioProcessor<'_> {
                 None => {
                     Sample::from(&0.0) // cry b/c there's no packets
                 }
-                Some(sample) => Sample::from(&(sample / 12.0)),
+                Some(sample) => Sample::from(&sample),
             };
             *val = sample;
         }

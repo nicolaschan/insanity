@@ -14,6 +14,7 @@ crossbeam = "0.8"
 flate2 = "1.0"
 nnnoiseless = "0.3.2"
 rand = "0.8.4"
+ring = "0.16.20"
 serde = { version = "1.0.127", features = ["derive"] }
 wav = "1.0.0"
 itertools = "0.10.1"
@@ -21,3 +22,4 @@ zstd = "0.9"
 crossterm = "0.21.0"
 tui = { version = "0.16", default-features = false, features = ['crossterm'] }
 nanoid = "0.4.0"
+quiche = "0.9.0"

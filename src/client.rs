@@ -9,6 +9,8 @@ use std::time::Duration;
 use cpal::traits::DeviceTrait;
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::Sender;
+use ring::rand::SecureRandom;
+use ring::rand::SystemRandom;
 
 use crate::clerver::start_clerver;
 use crate::processor::AudioProcessor;
@@ -69,18 +71,47 @@ pub fn start_client(
     enable_denoise: bool,
     ui_message_sender: Sender<TuiEvent>,
 ) {
-    thread::spawn(move || loop {
+    thread::spawn(move || -> ! {loop {
         if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
             ip_address: peer_address.clone(),
             status: PeerStatus::Disconnected,
         }))).is_ok() {}
+
+        let peer_socket_addr = *peer_address
+            .to_socket_addrs()
+            .expect("Invalid peer address")
+            .collect::<Vec<SocketAddr>>()
+            .get(0)
+            .unwrap();
+
+        // let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        // config.set_max_idle_timeout(1000);
+        // let mut scid = [0; quiche::MAX_CONN_ID_LEN];
+        // SystemRandom::new().fill(&mut scid[..]).unwrap();
+        // let scid = quiche::ConnectionId::from_ref(&scid);
+
+        // match quiche::connect(None, &scid, peer_socket_addr, &mut config) {
+        //     Ok(conn) => {
+        //         if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+        //             ip_address: peer_address.clone(),
+        //             status: PeerStatus::Connected,
+        //         }))).is_ok() {}
+
+        //         start_clerver(conn, enable_denoise, make_audio_receiver);
+
+        //         if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+        //             ip_address: peer_address.clone(),
+        //             status: PeerStatus::Disconnected,
+        //         }))).is_ok() {}
+
+        //     },
+        //     Err(_) => {
+        //         std::thread::sleep(std::time::Duration::from_millis(1000));
+        //     },
+        // };
+
         match TcpStream::connect_timeout(
-            peer_address
-                .to_socket_addrs()
-                .expect("Invalid peer address")
-                .collect::<Vec<SocketAddr>>()
-                .get(0)
-                .unwrap(),
+            &peer_socket_addr,
             Duration::from_millis(1000),
         ) {
             Ok(stream) => {
@@ -100,5 +131,5 @@ pub fn start_client(
                 std::thread::sleep(std::time::Duration::from_millis(1000));
             }
         }
-    });
+    }});
 }

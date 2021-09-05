@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::fs::File;
 
 use std::marker::Send;
@@ -11,6 +12,7 @@ use crossbeam::channel::{Receiver, Sender, unbounded};
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
+use crate::processor::AUDIO_CHUNK_SIZE;
 use crate::tui::{Peer, PeerStatus, TuiEvent, TuiMessage};
 
 fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
@@ -60,6 +62,7 @@ fn find_stereo_input(
 
 pub fn start_server_with_receiver<R: AudioReceiver + 'static>(
     bind_address: String,
+    denoise: bool,
     ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
@@ -76,7 +79,7 @@ pub fn start_server_with_receiver<R: AudioReceiver + 'static>(
                 ip_address: peer_address.clone(),
                 status: PeerStatus::Connected,
             }))).is_ok() {}
-            start_clerver(stream, true, make_receiver_clone);
+            start_clerver(stream, denoise, make_receiver_clone);
             if ui_message_sender_clone.send(TuiEvent::Message(TuiMessage::DeletePeer(peer_address.clone()))).is_ok() {}
         });
     }
@@ -128,12 +131,12 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
         // println!("Music: {:?}", header);
         if let Sixteen(vec) = data {
             let mut now = SystemTime::now();
-            for chunk in vec.chunks(480) {
+            for chunk in vec.chunks_exact(AUDIO_CHUNK_SIZE * 2) {
                 for val in chunk {
                     let s: i16 = Sample::from(val);
                     if input_sender.send(s.to_f32()).is_ok() {}
                 }
-                while now.elapsed().unwrap() < Duration::from_millis(5) {
+                while now.elapsed().unwrap() < Duration::from_millis(((AUDIO_CHUNK_SIZE * 1000) / 48000).try_into().unwrap()) {
                     std::hint::spin_loop();
                 }
                 now = SystemTime::now()
@@ -143,12 +146,12 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
     input_receiver
 }
 
-pub fn start_server(bind_address: String, music_path: Option<String>, ui_message_sender: crossbeam::channel::Sender<TuiEvent>) {
+pub fn start_server(bind_address: String, denoise: bool, music_path: Option<String>, ui_message_sender: crossbeam::channel::Sender<TuiEvent>) {
     thread::spawn(move || {
         if let Some(path) = music_path {
-            start_server_with_receiver(bind_address, ui_message_sender, move || make_music_receiver(path));
+            start_server_with_receiver(bind_address, denoise, ui_message_sender, move || make_music_receiver(path));
         } else {
-            start_server_with_receiver(bind_address, ui_message_sender, make_audio_receiver);
+            start_server_with_receiver(bind_address, denoise, ui_message_sender, make_audio_receiver);
         }
     });
 }
