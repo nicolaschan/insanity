@@ -105,7 +105,7 @@ pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
         println!("server: incoming conn");
         let mut conn = incoming_conn.await.expect("2");
         let make_receiver_clone = make_receiver.clone();
-        start_clerver(conn, denoise, make_receiver_clone).await;
+        tokio::spawn(start_clerver(conn, denoise, make_receiver_clone));
         println!("server: ending conn");
     }
 }
