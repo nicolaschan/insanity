@@ -20,6 +20,11 @@ wav = "1.0.0"
 itertools = "0.10.1"
 zstd = "0.9"
 crossterm = "0.21.0"
-tui = { version = "0.16", default-features = false, features = ['crossterm'] }
+tokio = { version = "1", features = ["full"] }
+tui = { version = "0.16", default-features = false, features = ["crossterm"] }
 nanoid = "0.4.0"
-quiche = "0.9.0"
+quinn = "0.7.2"
+rustls = { version = "*", features = ["dangerous_configuration", "quic"] }
+webpki = { version = "0.21", default-features = true }
+rcgen = "0.8.13"
+futures-util = "0.3.17"

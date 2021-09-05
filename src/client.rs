@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
@@ -9,6 +10,11 @@ use std::time::Duration;
 use cpal::traits::DeviceTrait;
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::Sender;
+use quinn::ClientConfigBuilder;
+use quinn::Connection;
+use quinn::ConnectionError;
+use quinn::Endpoint;
+use quinn::NewConnection;
 use ring::rand::SecureRandom;
 use ring::rand::SystemRandom;
 
@@ -65,13 +71,49 @@ pub fn setup_output_stream(device: Device, processor: Arc<AudioProcessor<'static
     }
 }
 
-pub fn start_client(
+async fn run_client(peer_socket_addr: SocketAddr) -> Result<NewConnection, ConnectionError> {
+    struct SkipServerVerification;
+
+    impl SkipServerVerification {
+        fn new() -> Arc<Self> {
+            Arc::new(Self)
+        }
+    }
+
+    impl rustls::ServerCertVerifier for SkipServerVerification {
+        fn verify_server_cert(
+            &self,
+            roots: &rustls::RootCertStore,
+            presented_certs: &[rustls::Certificate],
+            dns_name: webpki::DNSNameRef,
+            ocsp_response: &[u8],
+        ) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
+            Ok(rustls::ServerCertVerified::assertion())
+        }
+    }
+
+    let mut client_config = ClientConfigBuilder::default().build();
+    let tls_config = Arc::get_mut(&mut client_config.crypto).unwrap();
+    tls_config.dangerous().set_certificate_verifier(SkipServerVerification::new());
+
+    let mut endpoint_builder = Endpoint::builder();
+    endpoint_builder.default_client_config(client_config);
+    let (endpoint, _) = endpoint_builder.bind(&"0.0.0.0:0".parse().unwrap()).unwrap();
+
+    endpoint
+        .connect(&peer_socket_addr, "localhost")
+        .unwrap()
+        .await
+}
+
+#[tokio::main]
+pub async fn start_client(
     peer_address: String,
     _output_device_index: Option<usize>,
     enable_denoise: bool,
     ui_message_sender: Sender<TuiEvent>,
 ) {
-    thread::spawn(move || -> ! {loop {
+    loop {
         if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
             ip_address: peer_address.clone(),
             status: PeerStatus::Disconnected,
@@ -83,53 +125,16 @@ pub fn start_client(
             .collect::<Vec<SocketAddr>>()
             .get(0)
             .unwrap();
-
-        // let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
-        // config.set_max_idle_timeout(1000);
-        // let mut scid = [0; quiche::MAX_CONN_ID_LEN];
-        // SystemRandom::new().fill(&mut scid[..]).unwrap();
-        // let scid = quiche::ConnectionId::from_ref(&scid);
-
-        // match quiche::connect(None, &scid, peer_socket_addr, &mut config) {
-        //     Ok(conn) => {
-        //         if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-        //             ip_address: peer_address.clone(),
-        //             status: PeerStatus::Connected,
-        //         }))).is_ok() {}
-
-        //         start_clerver(conn, enable_denoise, make_audio_receiver);
-
-        //         if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-        //             ip_address: peer_address.clone(),
-        //             status: PeerStatus::Disconnected,
-        //         }))).is_ok() {}
-
-        //     },
-        //     Err(_) => {
-        //         std::thread::sleep(std::time::Duration::from_millis(1000));
-        //     },
-        // };
-
-        match TcpStream::connect_timeout(
-            &peer_socket_addr,
-            Duration::from_millis(1000),
-        ) {
-            Ok(stream) => {
-                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-                    ip_address: peer_address.clone(),
-                    status: PeerStatus::Connected,
-                }))).is_ok() {}
-
-                start_clerver(stream, enable_denoise, make_audio_receiver);
-
-                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-                    ip_address: peer_address.clone(),
-                    status: PeerStatus::Disconnected,
-                }))).is_ok() {}
-            }
-            Err(_) => {
-                std::thread::sleep(std::time::Duration::from_millis(1000));
+        
+        println!("client: connecting to {}", peer_socket_addr);
+        match run_client(peer_socket_addr).await {
+            Ok(conn) => {
+                start_clerver(conn, enable_denoise, make_audio_receiver).await;
+            },
+            Err(e) => {
+                println!("{:?}", e);
             }
         }
-    }});
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+    }
 }

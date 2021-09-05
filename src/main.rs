@@ -1,3 +1,5 @@
+use std::thread;
+
 use clap::{AppSettings, Clap};
 use crossbeam::channel::unbounded;
 
@@ -37,10 +39,21 @@ fn main() {
 
     let (ui_message_sender, ui_message_receiver) = unbounded();
 
-    insanity::server::start_server(opts.bind_address, opts.denoise, opts.music, ui_message_sender.clone());
+    let bind_address = opts.bind_address;
+    let denoise_clone = opts.denoise.clone();
+    let music_clone = opts.music.clone();
+    let ui_message_sender_clone = ui_message_sender.clone();
+    thread::spawn(move || {
+        insanity::server::start_server(bind_address, denoise_clone, music_clone, ui_message_sender_clone);
+    });
 
     for peer_address in opts.peer_address {
-        insanity::client::start_client(peer_address, opts.output_device, opts.denoise, ui_message_sender.clone());
+        let output_device_clone = opts.output_device.clone();
+        let denoise_clone = opts.denoise.clone();
+        let ui_message_sender_clone = ui_message_sender.clone();
+        thread::spawn(move || {
+            insanity::client::start_client(peer_address, output_device_clone, denoise_clone, ui_message_sender_clone);
+        });
     }
 
     if opts.no_tui {
