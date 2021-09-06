@@ -2,14 +2,12 @@
 
 use std::collections::VecDeque;
 use std::convert::TryInto;
-use std::io::{Read, Write};
 use std::sync::Mutex;
 
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
 use quinn::{ReadExactError, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
-use itertools::multizip;
 
 use crate::realtime_buffer::RealTimeBuffer;
 
@@ -127,12 +125,18 @@ impl AudioChunk {
 
 pub struct MultiChannelDenoiser<'a> {
     channels: u16,
-    denoisers: Vec<Box<DenoiseState<'a>>>,
+    denoisers: Vec<DenoiseState<'a>>,
+}
+
+impl Default for MultiChannelDenoiser<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MultiChannelDenoiser<'_> {
     pub fn new() -> Self {
-        let denoisers: Vec<Box<DenoiseState>> = Vec::new();
+        let denoisers: Vec<DenoiseState> = Vec::new();
         MultiChannelDenoiser { channels: 0, denoisers }
     }
 
@@ -140,7 +144,7 @@ impl MultiChannelDenoiser<'_> {
         if channels != self.channels {
             self.denoisers = Vec::new();
             for _ in 0..channels {
-                self.denoisers.push(DenoiseState::from_model(nnnoiseless::RnnModel::default()));
+                self.denoisers.push(*DenoiseState::from_model(nnnoiseless::RnnModel::default()));
             }
             self.channels = channels;
         }
@@ -218,9 +222,8 @@ impl AudioProcessor<'_> {
         let mut i = 0; // limit the number of tries to get the next chunk or else we wait too long
         while to_fill.len() > audio_buffer_guard.len() && (i <= to_fill.len() / AUDIO_CHUNK_SIZE) {
             let mut guard = self.chunk_buffer.lock().unwrap();
-            match guard.next() {
-                Some(chunk) => audio_buffer_guard.extend(chunk.audio_data),
-                None => {},
+            if let Some(chunk) = guard.next_item() {
+                audio_buffer_guard.extend(chunk.audio_data);
             };
             i += 1;
         }

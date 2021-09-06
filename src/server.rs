@@ -3,8 +3,8 @@ use std::error::Error;
 use std::fs::File;
 
 use std::marker::Send;
-use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use std::net::{SocketAddr, ToSocketAddrs};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -13,7 +13,6 @@ use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use futures_util::StreamExt;
 use quinn::{Certificate, CertificateChain, Endpoint, Incoming, NewConnection, PrivateKey, ServerConfig, ServerConfigBuilder, TransportConfig};
-use send_safe::SendWrapperThread;
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
@@ -116,7 +115,7 @@ pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
     let mut incoming = make_quic_server(bind_address).await.unwrap();
     loop {
         let incoming_conn = incoming.next().await.expect("1");
-        let mut conn = incoming_conn.await.expect("2");
+        let conn = incoming_conn.await.expect("2");
         let make_receiver_clone = make_receiver.clone();
         let ui_message_sender_clone = ui_message_sender.clone();
         tokio::spawn(start_clerver_with_ui(conn, denoise, make_receiver_clone, ui_message_sender_clone));

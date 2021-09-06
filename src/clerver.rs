@@ -1,35 +1,29 @@
-use std::{net::TcpStream, sync::{Arc, Mutex}, thread, time::Duration};
+use std::sync::Arc;
 
 use futures_util::StreamExt;
 use cpal::traits::{HostTrait, StreamTrait};
 use futures_util::future::join;
-use quinn::{Connection, ConnectionError, IncomingBiStreams, IncomingUniStreams, NewConnection, RecvStream, SendStream, crypto::rustls::TlsSession};
-use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWriteExt}};
+use quinn::{Connection, IncomingUniStreams, NewConnection};
 
-use crate::{client::setup_output_stream, processor::{AUDIO_CHUNK_SIZE, AudioChunk, AudioFormat, AudioProcessor}, server::{AudioReceiver, CpalStreamReceiver}};
+use crate::{client::setup_output_stream, processor::{AUDIO_CHUNK_SIZE, AudioChunk, AudioFormat, AudioProcessor}, server::AudioReceiver};
 
 // A clerver is a CLient + sERVER.
 
-pub async fn run_sender<R: AudioReceiver + Send + 'static>(mut conn: Connection, make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static) {
+pub async fn run_sender<R: AudioReceiver + Send + 'static>(conn: Connection, make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static) {
     let mut audio_receiver = make_receiver();
     let receiver = audio_receiver.receiver();
     let mut sequence_number = 0;
 
     // println!("{:?}", audio_receiver);
-    loop {
-        match conn.open_uni().await {
-            Ok(mut send) => {
-                let data = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
-                let format = AudioFormat::new(2, 48000);
-                let audio_chunk = AudioChunk::new(sequence_number, format, data);
-                if audio_chunk.write_to_stream(&mut send).await.is_err() {
-                    break;
-                }
-                sequence_number += 1;
-                send.finish().await;
-            },
-            Err(_) => { break; }
+    while let Ok(mut send) = conn.open_uni().await {
+        let data = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
+        let format = AudioFormat::new(2, 48000);
+        let audio_chunk = AudioChunk::new(sequence_number, format, data);
+        if audio_chunk.write_to_stream(&mut send).await.is_err() {
+            break;
         }
+        sequence_number += 1;
+        if send.finish().await.is_ok() {}
     }
 }
 
@@ -50,7 +44,7 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
             Ok(chunk) => {
                 processor.handle_incoming(chunk);
             },
-            Err(e) => {
+            Err(_) => {
                 break;
             }
         }

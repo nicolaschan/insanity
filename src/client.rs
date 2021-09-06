@@ -1,22 +1,14 @@
-use std::error::Error;
 use std::net::SocketAddr;
-use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::thread;
-use std::time::Duration;
 
 use cpal::traits::DeviceTrait;
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::Sender;
 use quinn::ClientConfigBuilder;
-use quinn::Connection;
 use quinn::ConnectionError;
 use quinn::Endpoint;
 use quinn::NewConnection;
-use ring::rand::SecureRandom;
-use ring::rand::SystemRandom;
 
 use crate::clerver::start_clerver;
 use crate::processor::AudioProcessor;
@@ -83,10 +75,10 @@ async fn run_client(peer_socket_addr: SocketAddr) -> Result<NewConnection, Conne
     impl rustls::ServerCertVerifier for SkipServerVerification {
         fn verify_server_cert(
             &self,
-            roots: &rustls::RootCertStore,
-            presented_certs: &[rustls::Certificate],
-            dns_name: webpki::DNSNameRef,
-            ocsp_response: &[u8],
+            _roots: &rustls::RootCertStore,
+            _presented_certs: &[rustls::Certificate],
+            _dns_name: webpki::DNSNameRef,
+            _ocsp_response: &[u8],
         ) -> Result<rustls::ServerCertVerified, rustls::TLSError> {
             Ok(rustls::ServerCertVerified::assertion())
         }
@@ -142,6 +134,6 @@ pub async fn start_client(
                 println!("{:?}", e);
             }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(1000));
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
 }

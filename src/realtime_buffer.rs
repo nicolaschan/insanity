@@ -19,6 +19,9 @@ impl<T> RealTimeBuffer<T> {
     pub fn len(&self) -> usize {
         self.current_size
     }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     pub fn set(&mut self, index: u128, data: T) {
         if index < self.head {
             return; // you got data you already skipped in the past
@@ -35,11 +38,11 @@ impl<T> RealTimeBuffer<T> {
             self.head = index - (self.max_size as u128) + 1;
         }
     }
-    pub fn next(&mut self) -> Option<T> {
+    pub fn next_item(&mut self) -> Option<T> {
         let head_index = (self.head % self.max_size as u128) as usize;
 
         let mut current = None;
-        return if self.current_size > 0 {
+        if self.current_size > 0 {
             while current.is_none() {
                 current = self.buffer[head_index].take();
                 self.head += 1;
