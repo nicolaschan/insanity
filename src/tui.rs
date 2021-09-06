@@ -4,14 +4,14 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam::channel::{Receiver, Sender};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, read};
+use crossterm::event::{read, Event, KeyCode, KeyEvent, KeyModifiers};
 use itertools::Itertools;
-use tui::Terminal;
+use tui::backend::CrosstermBackend;
+use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, List, ListItem};
-use tui::backend::CrosstermBackend;
-use tui::layout::{Layout, Constraint, Direction};
+use tui::Terminal;
 
 pub struct InsanityTui {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
@@ -73,8 +73,12 @@ fn draw_peers(peers: &HashMap<String, Peer>) -> List<'static> {
             };
             let content = vec![Spans::from(vec![
                 match peer.status {
-                    PeerStatus::Connected => Span::styled("✓ ", Style::default().fg(Color::LightGreen)),
-                    PeerStatus::Disconnected => Span::styled("✗ ", Style::default().fg(Color::LightRed)),
+                    PeerStatus::Connected => {
+                        Span::styled("✓ ", Style::default().fg(Color::LightGreen))
+                    }
+                    PeerStatus::Disconnected => {
+                        Span::styled("✗ ", Style::default().fg(Color::LightRed))
+                    }
                 },
                 // Span::styled(format!("{} ", id.to_string()), peer_style),
                 Span::styled(peer.ip_address.clone(), peer_style),
@@ -88,28 +92,27 @@ fn draw_peers(peers: &HashMap<String, Peer>) -> List<'static> {
 
 impl InsanityTui {
     fn draw_dashboard(&mut self, status: &TuiStatus) {
-        self.terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Percentage(100),
-                ].as_ref())
-                .split(f.size());
-            
-            let peers_list = draw_peers(&status.peers);
-            f.render_widget(peers_list, chunks[0]);
-        }).unwrap();
+        self.terminal
+            .draw(|f| {
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Percentage(100)].as_ref())
+                    .split(f.size());
+
+                let peers_list = draw_peers(&status.peers);
+                f.render_widget(peers_list, chunks[0]);
+            })
+            .unwrap();
     }
 
     fn redraw(&mut self, state: &TuiState) {
         match &state.route {
             TuiRoute::Dashboard => self.draw_dashboard(&state.status),
-            TuiRoute::Killed => {},
+            TuiRoute::Killed => {}
         }
     }
 
     // key events update the TuiState
-
 }
 
 fn next_state_key_event(event: Event, state: TuiState) -> TuiState {
@@ -117,7 +120,7 @@ fn next_state_key_event(event: Event, state: TuiState) -> TuiState {
         return TuiState {
             route: TuiRoute::Killed,
             status: state.status,
-        }
+        };
     }
     state
 }
@@ -126,10 +129,10 @@ fn next_state_message(message: TuiMessage, mut state: TuiState) -> TuiState {
     match message {
         TuiMessage::UpdatePeer(k, v) => {
             state.status.peers.insert(k, v);
-        },
+        }
         TuiMessage::DeletePeer(k) => {
             state.status.peers.remove(&k);
-        },
+        }
     }
     state
 }
@@ -153,7 +156,7 @@ pub fn start(ui_message_sender: Sender<TuiEvent>, receiver: Receiver<TuiEvent>) 
 
     let mut state = TuiState {
         route: TuiRoute::Dashboard,
-        status: TuiStatus { peers }
+        status: TuiStatus { peers },
     };
 
     thread::spawn(move || {

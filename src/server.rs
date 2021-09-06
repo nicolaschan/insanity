@@ -10,14 +10,18 @@ use std::time::{Duration, SystemTime};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
-use crossbeam::channel::{Receiver, Sender, unbounded};
+use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures_util::StreamExt;
-use quinn::{Certificate, CertificateChain, Endpoint, Incoming, NewConnection, PrivateKey, ServerConfig, ServerConfigBuilder, TransportConfig};
+use quinn::{
+    Certificate, CertificateChain, Endpoint, Incoming, NewConnection, PrivateKey, ServerConfig,
+    ServerConfigBuilder, TransportConfig,
+};
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
 use crate::processor::AUDIO_CHUNK_SIZE;
 use crate::tui::{Peer, PeerStatus, TuiEvent, TuiMessage};
+use crate::InsanityConfig;
 
 fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the input audio stream: {}", err);
@@ -65,7 +69,7 @@ fn find_stereo_input(
 }
 
 async fn make_quic_server(bind_address: String) -> Result<Incoming, Box<dyn Error>> {
-    let bind_socket_addr= *bind_address
+    let bind_socket_addr = *bind_address
         .to_socket_addrs()
         .expect("Invalid peer address")
         .collect::<Vec<SocketAddr>>()
@@ -85,7 +89,7 @@ async fn make_quic_server(bind_address: String) -> Result<Incoming, Box<dyn Erro
     let cert = Certificate::from_der(&cert_der)?;
     cfg_builder.certificate(CertificateChain::from_certs(vec![cert]), priv_key)?;
     let server_config = cfg_builder.build();
- 
+
     let mut endpoint_builder = Endpoint::builder();
     endpoint_builder.listen(server_config);
     let (_endpoint, incoming) = endpoint_builder.bind(&bind_socket_addr).unwrap();
@@ -93,32 +97,52 @@ async fn make_quic_server(bind_address: String) -> Result<Incoming, Box<dyn Erro
 }
 
 async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
-    conn: NewConnection, denoise: bool, make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static, ui_message_sender: crossbeam::channel::Sender<TuiEvent>) {
+    conn: NewConnection,
+    denoise: bool,
+    make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
+    ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
+) {
     let peer_address = conn.connection.remote_address().to_string();
-    if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-        ip_address: peer_address.clone(),
-        status: PeerStatus::Connected,
-    }))).is_ok() {}
+    if ui_message_sender
+        .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+            peer_address.clone(),
+            Peer {
+                ip_address: peer_address.clone(),
+                status: PeerStatus::Connected,
+            },
+        )))
+        .is_ok()
+    {}
     start_clerver(conn, denoise, make_receiver).await;
-    if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-        ip_address: peer_address.clone(),
-        status: PeerStatus::Disconnected,
-    }))).is_ok() {}
+    if ui_message_sender
+        .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+            peer_address.clone(),
+            Peer {
+                ip_address: peer_address.clone(),
+                status: PeerStatus::Disconnected,
+            },
+        )))
+        .is_ok()
+    {}
 }
 
 pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
     bind_address: String,
-    denoise: bool,
-    ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
+    config: InsanityConfig,
 ) {
     let mut incoming = make_quic_server(bind_address).await.unwrap();
     loop {
         let incoming_conn = incoming.next().await.expect("1");
         let conn = incoming_conn.await.expect("2");
         let make_receiver_clone = make_receiver.clone();
-        let ui_message_sender_clone = ui_message_sender.clone();
-        tokio::spawn(start_clerver_with_ui(conn, denoise, make_receiver_clone, ui_message_sender_clone));
+        let ui_message_sender_clone = config.ui_message_sender.clone();
+        tokio::spawn(start_clerver_with_ui(
+            conn,
+            config.denoise,
+            make_receiver_clone,
+            ui_message_sender_clone,
+        ));
     }
 }
 
@@ -144,7 +168,7 @@ impl AudioReceiver for Receiver<f32> {
     }
 }
 
-pub fn make_audio_receiver() -> CpalStreamReceiver {
+pub fn make_audio_receiver(config: InsanityConfig) -> CpalStreamReceiver {
     let host = cpal::default_host();
     let (input_sender, input_receiver) = unbounded();
     let input_device = host
@@ -152,13 +176,16 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
         .expect("No default input device");
     // If input_stream is dropped, then the input_receiver stops receiving data.
     // CpalStreamReceiver keeps input_stream alive along with input_receiver.
+    let mut wrapper =
+        send_safe::SendWrapperThread::new(move || setup_input_stream(input_device, input_sender));
+    wrapper
+        .execute(|input_stream| {
+            input_stream.play().unwrap();
+        })
+        .unwrap();
     CpalStreamReceiver {
         input_receiver,
-        input_stream: send_safe::SendWrapperThread::new(move || {
-            let input_stream = setup_input_stream(input_device, input_sender);
-            input_stream.play().unwrap();
-            input_stream
-        }),
+        input_stream: wrapper,
     }
 }
 
@@ -175,7 +202,9 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
                     let s: i16 = Sample::from(val);
                     if input_sender.send(s.to_f32()).is_ok() {}
                 }
-                while now.elapsed().unwrap() < Duration::from_millis(((AUDIO_CHUNK_SIZE * 1000) / 48000).try_into().unwrap()) {
+                while now.elapsed().unwrap()
+                    < Duration::from_millis(((AUDIO_CHUNK_SIZE * 1000) / 48000).try_into().unwrap())
+                {
                     std::hint::spin_loop();
                 }
                 now = SystemTime::now()
@@ -186,10 +215,16 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
 }
 
 #[tokio::main]
-pub async fn start_server(bind_address: String, denoise: bool, music_path: Option<String>, ui_message_sender: crossbeam::channel::Sender<TuiEvent>) {
-    if let Some(path) = music_path {
-        start_server_with_receiver(bind_address, denoise, ui_message_sender, move || make_music_receiver(path)).await;
+pub async fn start_server(bind_address: String, config: InsanityConfig) {
+    if let Some(path) = config.music.clone() {
+        start_server_with_receiver(bind_address, move || make_music_receiver(path), config).await;
     } else {
-        start_server_with_receiver(bind_address, denoise, ui_message_sender, make_audio_receiver).await;
+        let config_clone = config.clone();
+        start_server_with_receiver(
+            bind_address,
+            move || make_audio_receiver(config_clone),
+            config,
+        )
+        .await;
     }
 }

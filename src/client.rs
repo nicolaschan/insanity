@@ -17,6 +17,7 @@ use crate::tui::Peer;
 use crate::tui::PeerStatus;
 use crate::tui::TuiEvent;
 use crate::tui::TuiMessage;
+use crate::InsanityConfig;
 
 fn run_output<T: Sample>(
     config: cpal::StreamConfig,
@@ -86,11 +87,15 @@ async fn run_client(peer_socket_addr: SocketAddr) -> Result<NewConnection, Conne
 
     let mut client_config = ClientConfigBuilder::default().build();
     let tls_config = Arc::get_mut(&mut client_config.crypto).unwrap();
-    tls_config.dangerous().set_certificate_verifier(SkipServerVerification::new());
+    tls_config
+        .dangerous()
+        .set_certificate_verifier(SkipServerVerification::new());
 
     let mut endpoint_builder = Endpoint::builder();
     endpoint_builder.default_client_config(client_config);
-    let (endpoint, _) = endpoint_builder.bind(&"0.0.0.0:0".parse().unwrap()).unwrap();
+    let (endpoint, _) = endpoint_builder
+        .bind(&"0.0.0.0:0".parse().unwrap())
+        .unwrap();
 
     endpoint
         .connect(&peer_socket_addr, "localhost")
@@ -99,17 +104,19 @@ async fn run_client(peer_socket_addr: SocketAddr) -> Result<NewConnection, Conne
 }
 
 #[tokio::main]
-pub async fn start_client(
-    peer_address: String,
-    _output_device_index: Option<usize>,
-    enable_denoise: bool,
-    ui_message_sender: Sender<TuiEvent>,
-) {
+pub async fn start_client(peer_address: String, config: InsanityConfig) {
     loop {
-        if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-            ip_address: peer_address.clone(),
-            status: PeerStatus::Disconnected,
-        }))).is_ok() {}
+        if config
+            .ui_message_sender
+            .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+                peer_address.clone(),
+                Peer {
+                    ip_address: peer_address.clone(),
+                    status: PeerStatus::Disconnected,
+                },
+            )))
+            .is_ok()
+        {}
 
         let peer_socket_addr = *peer_address
             .to_socket_addrs()
@@ -117,19 +124,37 @@ pub async fn start_client(
             .collect::<Vec<SocketAddr>>()
             .get(0)
             .unwrap();
-        
+
         match run_client(peer_socket_addr).await {
             Ok(conn) => {
-                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-                    ip_address: peer_address.clone(),
-                    status: PeerStatus::Connected,
-                }))).is_ok() {}
-                start_clerver(conn, enable_denoise, make_audio_receiver).await;
-                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
-                    ip_address: peer_address.clone(),
-                    status: PeerStatus::Disconnected,
-                }))).is_ok() {}
-            },
+                if config
+                    .ui_message_sender
+                    .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+                        peer_address.clone(),
+                        Peer {
+                            ip_address: peer_address.clone(),
+                            status: PeerStatus::Connected,
+                        },
+                    )))
+                    .is_ok()
+                {}
+                let config_clone = config.clone();
+                start_clerver(conn, config.denoise, move || {
+                    make_audio_receiver(config_clone)
+                })
+                .await;
+                if config
+                    .ui_message_sender
+                    .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+                        peer_address.clone(),
+                        Peer {
+                            ip_address: peer_address.clone(),
+                            status: PeerStatus::Disconnected,
+                        },
+                    )))
+                    .is_ok()
+                {}
+            }
             Err(e) => {
                 println!("{:?}", e);
             }

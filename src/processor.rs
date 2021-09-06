@@ -36,7 +36,11 @@ pub struct AudioChunk {
 }
 
 impl AudioChunk {
-    pub fn new(sequence_number: u128, audio_format: AudioFormat, audio_data: Vec<f32>) -> AudioChunk {
+    pub fn new(
+        sequence_number: u128,
+        audio_format: AudioFormat,
+        audio_data: Vec<f32>,
+    ) -> AudioChunk {
         AudioChunk {
             sequence_number,
             audio_data,
@@ -137,14 +141,18 @@ impl Default for MultiChannelDenoiser<'_> {
 impl MultiChannelDenoiser<'_> {
     pub fn new() -> Self {
         let denoisers: Vec<DenoiseState> = Vec::new();
-        MultiChannelDenoiser { channels: 0, denoisers }
+        MultiChannelDenoiser {
+            channels: 0,
+            denoisers,
+        }
     }
 
     fn setup_denoisers(&mut self, channels: u16) {
         if channels != self.channels {
             self.denoisers = Vec::new();
             for _ in 0..channels {
-                self.denoisers.push(*DenoiseState::from_model(nnnoiseless::RnnModel::default()));
+                self.denoisers
+                    .push(*DenoiseState::from_model(nnnoiseless::RnnModel::default()));
             }
             self.channels = channels;
         }
@@ -158,7 +166,10 @@ impl MultiChannelDenoiser<'_> {
         let channels = chunk.audio_format.channel_count;
         self.setup_denoisers(channels);
 
-        for audio_chunk in chunk.audio_data.chunks_exact((channels as usize) * DenoiseState::FRAME_SIZE) {
+        for audio_chunk in chunk
+            .audio_data
+            .chunks_exact((channels as usize) * DenoiseState::FRAME_SIZE)
+        {
             // Audio data for each channel is interleaved
             // Separate it into a buffer for each channel in the raw_audio Vec
             let mut raw_audio: Vec<[f32; DenoiseState::FRAME_SIZE]> = Vec::new();

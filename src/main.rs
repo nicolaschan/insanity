@@ -1,7 +1,8 @@
 use std::{thread, time::Duration};
 
 use clap::{AppSettings, Clap};
-use crossbeam::channel::unbounded;
+use crossbeam::channel::{unbounded, Sender};
+use insanity::{tui::TuiEvent, InsanityConfig};
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -19,14 +20,17 @@ struct Opts {
     #[clap(short, long)]
     peer_address: Vec<String>,
 
-    #[clap(short, long)]
-    output_device: Option<usize>,
-
     #[clap(long)]
     id: Option<String>,
-    
+
     #[clap(long)]
     no_tui: bool,
+
+    #[clap(long, default_value = "48000")]
+    sample_rate: usize,
+
+    #[clap(long, default_value = "2")]
+    channels: usize,
 }
 
 fn main() {
@@ -39,20 +43,24 @@ fn main() {
 
     let (ui_message_sender, ui_message_receiver) = unbounded();
 
+    let config = InsanityConfig {
+        denoise: opts.denoise,
+        ui_message_sender: ui_message_sender.clone(),
+        music: opts.music,
+        sample_rate: opts.sample_rate,
+        channels: opts.channels,
+    };
+
+    let config_clone = config.clone();
     let bind_address = opts.bind_address;
-    let denoise_clone = opts.denoise;
-    let music_clone = opts.music.clone();
-    let ui_message_sender_clone = ui_message_sender.clone();
     thread::spawn(move || {
-        insanity::server::start_server(bind_address, denoise_clone, music_clone, ui_message_sender_clone);
+        insanity::server::start_server(bind_address, config_clone);
     });
 
     for peer_address in opts.peer_address {
-        let output_device_clone = opts.output_device;
-        let denoise_clone = opts.denoise;
-        let ui_message_sender_clone = ui_message_sender.clone();
+        let config_clone = config.clone();
         thread::spawn(move || {
-            insanity::client::start_client(peer_address, output_device_clone, denoise_clone, ui_message_sender_clone);
+            insanity::client::start_client(peer_address, config_clone);
         });
     }
 

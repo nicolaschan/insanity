@@ -12,7 +12,10 @@ impl<T> RealTimeBuffer<T> {
             buffer.insert(i, None);
         }
         RealTimeBuffer {
-            head: 0, current_size: 0, max_size, buffer
+            head: 0,
+            current_size: 0,
+            max_size,
+            buffer,
         }
     }
 

@@ -1489,8 +1489,9 @@ dependencies = [
 [[package]]
 name = "send_safe"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/send_safe.git#d0d3f7b95f9cb03b197a3f48031512edc3af4e4b"
+source = "git+https://github.com/nicolaschan/send_safe.git#48ebae2075818695ce0425b8e8e503bb80b3909b"
 dependencies = [
+ "crossbeam",
  "thiserror",
 ]
 
