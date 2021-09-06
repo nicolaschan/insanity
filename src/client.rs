@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use cpal::traits::DeviceTrait;
 use cpal::{Device, Sample, SampleFormat, Stream};
-use crossbeam::channel::Sender;
+
 use quinn::ClientConfigBuilder;
 use quinn::ConnectionError;
 use quinn::Endpoint;

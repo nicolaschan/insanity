@@ -19,7 +19,7 @@ cargo run --release -- --peer-address $YOUR_IP:1337
 - [ ] Optimize for latency (low ping/pong delay)
 - [ ] Mesh networking (add peers automatically)
 - [ ] Encryption
-- [ ] UDP
+- [x] UDP/QUIC
 - [ ] Better interpolation for missing packets
 - [ ] Handle different sampling rates
 - [ ] Multi-channel and mono audio

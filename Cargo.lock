@@ -63,6 +63,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
+name = "autotools"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b875eaceeddbbfb52c4d102af0e28872be06ba363b9b28c7551304beb3eac42"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "base64"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -517,6 +526,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
+name = "fs_extra"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2022715d62ab30faffd124d40b76f4134a550a87792276512b18d63272333394"
+
+[[package]]
 name = "futures"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -685,6 +700,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "itertools",
+ "libtor",
  "nanoid",
  "nnnoiseless",
  "quinn",
@@ -783,6 +799,53 @@ checksum = "6f84d96438c15fcd6c3f244c8fce01d1e2b9c6b5623e9c711dc9286d8fc92d6a"
 dependencies = [
  "cfg-if",
  "winapi",
+]
+
+[[package]]
+name = "libtor"
+version = "46.6.0+0.4.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a549e399ff8ccc83b93599f6c6bc21509fa4e7c278a674b31c2490a590a62162"
+dependencies = [
+ "libtor-derive",
+ "libtor-sys",
+ "log",
+]
+
+[[package]]
+name = "libtor-derive"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "177781b25e83853831c5af66320ceaf5e456e1b6d533426fcd9c7544b5543043"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "libtor-sys"
+version = "46.7.0+0.4.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6922b82e153bd4b419146fe576b0fbe1c13a7ab2e95473152e476d1fcf84a00"
+dependencies = [
+ "autotools",
+ "cc",
+ "fs_extra",
+ "libz-sys",
+ "openssl-sys",
+]
+
+[[package]]
+name = "libz-sys"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de5435b8549c16d423ed0c03dbaafe57cf6c3344744f1242520d59c9d8ecec66"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -1092,6 +1155,19 @@ name = "openssl-probe"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28988d872ab76095a6e6ac88d99b54fd267702734fd7ffe610ca27f533ddb95a"
+
+[[package]]
+name = "openssl-sys"
+version = "0.9.66"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1996d2d305e561b70d1ee0c53f1542833f4e1ac6ce9a6708b6ff2738ca67dc82"
+dependencies = [
+ "autocfg",
+ "cc",
+ "libc",
+ "pkg-config",
+ "vcpkg",
+]
 
 [[package]]
 name = "os_str_bytes"
@@ -1801,6 +1877,12 @@ name = "untrusted"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vec_map"

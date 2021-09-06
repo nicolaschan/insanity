@@ -29,3 +29,4 @@ webpki = { version = "0.21", default-features = true }
 rcgen = "0.8.13"
 futures-util = "0.3.17"
 send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
+libtor = "46.6.0+0.4.6.6"

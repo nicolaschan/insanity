@@ -168,7 +168,7 @@ impl AudioReceiver for Receiver<f32> {
     }
 }
 
-pub fn make_audio_receiver(config: InsanityConfig) -> CpalStreamReceiver {
+pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
     let host = cpal::default_host();
     let (input_sender, input_receiver) = unbounded();
     let input_device = host

@@ -1,8 +1,8 @@
 use std::{thread, time::Duration};
 
 use clap::{AppSettings, Clap};
-use crossbeam::channel::{unbounded, Sender};
-use insanity::{tui::TuiEvent, InsanityConfig};
+use crossbeam::channel::{unbounded};
+use insanity::{InsanityConfig};
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
