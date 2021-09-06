@@ -12,7 +12,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::{Receiver, Sender, unbounded};
 use futures_util::StreamExt;
-use quinn::{Certificate, CertificateChain, Endpoint, Incoming, PrivateKey, ServerConfig, ServerConfigBuilder, TransportConfig};
+use quinn::{Certificate, CertificateChain, Endpoint, Incoming, NewConnection, PrivateKey, ServerConfig, ServerConfigBuilder, TransportConfig};
+use send_safe::SendWrapperThread;
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
@@ -78,7 +79,7 @@ async fn make_quic_server(bind_address: String) -> Result<Incoming, Box<dyn Erro
     let priv_key = PrivateKey::from_der(&priv_key)?;
 
     let mut transport_config = TransportConfig::default();
-    transport_config.max_concurrent_uni_streams(0).unwrap();
+    transport_config.max_concurrent_uni_streams(100).unwrap();
     let mut server_config = ServerConfig::default();
     server_config.transport = Arc::new(transport_config);
     let mut cfg_builder = ServerConfigBuilder::new(server_config);
@@ -92,31 +93,41 @@ async fn make_quic_server(bind_address: String) -> Result<Incoming, Box<dyn Erro
     Ok(incoming)
 }
 
+async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
+    conn: NewConnection, denoise: bool, make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static, ui_message_sender: crossbeam::channel::Sender<TuiEvent>) {
+    let peer_address = conn.connection.remote_address().to_string();
+    if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+        ip_address: peer_address.clone(),
+        status: PeerStatus::Connected,
+    }))).is_ok() {}
+    start_clerver(conn, denoise, make_receiver).await;
+    if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+        ip_address: peer_address.clone(),
+        status: PeerStatus::Disconnected,
+    }))).is_ok() {}
+}
+
 pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
     bind_address: String,
     denoise: bool,
     ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
-    println!("server: binding to {}", bind_address);
     let mut incoming = make_quic_server(bind_address).await.unwrap();
     loop {
         let incoming_conn = incoming.next().await.expect("1");
-        println!("server: incoming conn");
         let mut conn = incoming_conn.await.expect("2");
         let make_receiver_clone = make_receiver.clone();
-        tokio::spawn(start_clerver(conn, denoise, make_receiver_clone));
-        println!("server: ending conn");
+        let ui_message_sender_clone = ui_message_sender.clone();
+        tokio::spawn(start_clerver_with_ui(conn, denoise, make_receiver_clone, ui_message_sender_clone));
     }
 }
 
 pub struct CpalStreamReceiver {
     #[allow(dead_code)]
-    input_stream: Mutex<Stream>,
+    input_stream: send_safe::SendWrapperThread<Stream>,
     input_receiver: Receiver<f32>,
 }
-
-unsafe impl Send for CpalStreamReceiver {}
 
 pub trait AudioReceiver {
     fn receiver(&mut self) -> &mut Receiver<f32>;
@@ -140,13 +151,15 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
     let input_device = host
         .default_input_device()
         .expect("No default input device");
-    let input_stream = setup_input_stream(input_device, input_sender);
-    input_stream.play().unwrap();
     // If input_stream is dropped, then the input_receiver stops receiving data.
     // CpalStreamReceiver keeps input_stream alive along with input_receiver.
     CpalStreamReceiver {
         input_receiver,
-        input_stream: Mutex::new(input_stream),
+        input_stream: send_safe::SendWrapperThread::new(move || {
+            let input_stream = setup_input_stream(input_device, input_sender);
+            input_stream.play().unwrap();
+            input_stream
+        }),
     }
 }
 

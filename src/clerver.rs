@@ -15,16 +15,21 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(mut conn: Connection,
     let receiver = audio_receiver.receiver();
     let mut sequence_number = 0;
 
+    // println!("{:?}", audio_receiver);
     loop {
-        let mut send = conn.open_uni().await.unwrap();
-        let data = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
-        let format = AudioFormat::new(2, 48000);
-        let audio_chunk = AudioChunk::new(sequence_number, format, data);
-        if audio_chunk.write_to_stream(&mut send).await.is_err() {
-            break;
+        match conn.open_uni().await {
+            Ok(mut send) => {
+                let data = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
+                let format = AudioFormat::new(2, 48000);
+                let audio_chunk = AudioChunk::new(sequence_number, format, data);
+                if audio_chunk.write_to_stream(&mut send).await.is_err() {
+                    break;
+                }
+                sequence_number += 1;
+                send.finish().await;
+            },
+            Err(_) => { break; }
         }
-        sequence_number += 1;
-        send.finish().await;
     }
 }
 
@@ -32,8 +37,12 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
     let processor = Arc::new(AudioProcessor::new(enable_denoise));
-    let output_stream = Arc::new(Mutex::new(setup_output_stream(output_device, processor.clone())));
-    output_stream.lock().unwrap().play().unwrap();
+    let processor_clone = processor.clone();
+    let mut output_stream_wrapper = send_safe::SendWrapperThread::new(move || setup_output_stream(output_device, processor_clone));
+    output_stream_wrapper.execute(|output_stream| {
+        output_stream.play().unwrap();
+        (Some(output_stream), ())
+    }).unwrap();
 
     while let Ok(mut recv) = uni_streams.next().await.unwrap() {
         let chunk = AudioChunk::read_from_stream(&mut recv).await;

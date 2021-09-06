@@ -126,15 +126,22 @@ pub async fn start_client(
             .get(0)
             .unwrap();
         
-        println!("client: connecting to {}", peer_socket_addr);
         match run_client(peer_socket_addr).await {
             Ok(conn) => {
+                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+                    ip_address: peer_address.clone(),
+                    status: PeerStatus::Connected,
+                }))).is_ok() {}
                 start_clerver(conn, enable_denoise, make_audio_receiver).await;
+                if ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(peer_address.clone(), Peer {
+                    ip_address: peer_address.clone(),
+                    status: PeerStatus::Disconnected,
+                }))).is_ok() {}
             },
             Err(e) => {
                 println!("{:?}", e);
             }
         }
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        tokio::time::sleep(std::time::Duration::from_millis(1000));
     }
 }
