@@ -156,7 +156,7 @@ pub async fn start_client(peer_name: String, peer_address: String, config: Insan
                 {}
             }
             Err(e) => {
-                println!("{:?}", e);
+                // println!("{:?}", e);
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;

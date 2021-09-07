@@ -1,9 +1,9 @@
-use std::{fs::File, sync::{Arc, Mutex}, thread, time::Duration};
+use std::{path::PathBuf, str::FromStr, sync::{Arc}, thread, time::Duration};
 
 use clap::{AppSettings, Clap};
 use crossbeam::channel::{unbounded};
-use insanity::{InsanityConfig, coordinator::{start_coordinator, start_tor}, protocol::{ConnectionManager, PeerIdentity}, tui::{Peer, PeerStatus, TuiEvent, TuiMessage}};
-use libtor::{HiddenServiceVersion, Tor, TorAddress, TorFlag};
+use insanity::{InsanityConfig, coordinator::{start_coordinator, start_tor}, protocol::{ConnectionManager}, tui::{Peer, PeerStatus, TuiEvent, TuiMessage}};
+
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -35,6 +35,15 @@ struct Opts {
 
     #[clap(long, default_value = "2")]
     channels: usize,
+
+    #[clap(long, default_value = "19050")]
+    socks_port: u16,
+
+    #[clap(long, default_value = "11337")]
+    coordinator_port: u16,
+
+    #[clap(long)]
+    dir: Option<String>,
 }
 
 #[tokio::main]
@@ -46,15 +55,17 @@ async fn main() {
         None => nanoid::nanoid!(),
     };
 
-    let insanity_dir = dirs::data_local_dir().expect("no data directory!?").join("insanity");
+    let insanity_dir = match opts.dir {
+        Some(dir) => PathBuf::from_str(&dir).unwrap(),
+        None => dirs::data_local_dir().expect("no data directory!?").join("insanity"),
+    };
     std::fs::create_dir_all(&insanity_dir).expect("could not create insanity data directory");
 
     let tor_dir = insanity_dir.join("tor");
     std::fs::create_dir_all(&tor_dir).expect("could not create tor data directory");
-    let socks_port = 19050;
-    let coordinator_port = 11337;
+    let socks_port = opts.socks_port;
+    let coordinator_port = opts.coordinator_port;
     let onion_address= start_tor(&tor_dir, socks_port, coordinator_port);
-    println!("Your address: {}", onion_address);
 
     let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{}", socks_port)).unwrap();
     let client = reqwest::Client::builder()
@@ -82,6 +93,7 @@ async fn main() {
         let ui_message_sender_clone = ui_message_sender.clone();
         let ui_message_receiver_clone = ui_message_receiver.clone();
         thread::spawn(move || insanity::tui::start(ui_message_sender_clone, ui_message_receiver_clone));
+        ui_message_sender.send(TuiEvent::Message(TuiMessage::SetOwnAddress(Some(onion_address)))).unwrap();
     }
 
     let config_clone = config.clone();

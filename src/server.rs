@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fs::File;
 
 use std::marker::Send;
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{UdpSocket};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};

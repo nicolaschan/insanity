@@ -1,4 +1,4 @@
-use std::{fmt::write, sync::Arc};
+use std::{sync::Arc};
 
 use cpal::traits::{HostTrait, StreamTrait};
 use futures_util::future::join;
