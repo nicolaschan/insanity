@@ -9,6 +9,8 @@ pub mod processor;
 pub mod realtime_buffer;
 pub mod server;
 pub mod tui;
+pub mod protocol;
+pub mod coordinator;
 
 #[derive(Clone)]
 pub struct InsanityConfig {

@@ -9,11 +9,11 @@ use nnnoiseless::DenoiseState;
 use quinn::{ReadExactError, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 
-use crate::realtime_buffer::RealTimeBuffer;
+use crate::{protocol::ProtocolMessage, realtime_buffer::RealTimeBuffer};
 
 pub const AUDIO_CHUNK_SIZE: usize = 480;
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct AudioFormat {
     channel_count: u16,
     sample_rate: u32,
@@ -28,7 +28,8 @@ impl AudioFormat {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AudioChunk {
     pub sequence_number: u128,
     pub audio_data: Vec<f32>,
@@ -55,27 +56,8 @@ impl AudioChunk {
         }
     }
     pub async fn write_to_stream(&self, stream: &mut SendStream) -> Result<(), std::io::Error> {
-        let serialized = bincode::serialize(self).expect("Could not serialize AudioChunk");
-        let mut encoded: Vec<u8> = Vec::new();
-        if zstd::stream::copy_encode(&serialized[..], &mut encoded, 1).is_ok() {}
-        let encoded_length: u64 = encoded.len().try_into().unwrap();
-        // println!("compression ratio {}", (serialized.len() as f64) / (encoded_length as f64));
-        stream.write_all(&encoded_length.to_le_bytes()).await?;
-        stream.write_all(&encoded).await?;
-        Ok(())
-    }
-    pub async fn read_from_stream(stream: &mut RecvStream) -> Result<AudioChunk, ReadExactError> {
-        let mut length_buffer = [0; 8];
-        stream.read_exact(&mut length_buffer).await?;
-        let length = u64::from_le_bytes(length_buffer);
-        let mut compressed_data_buffer = vec![0; length as usize];
-        stream.read_exact(&mut compressed_data_buffer).await?;
-        let mut data_buffer = Vec::new();
-        if zstd::stream::copy_decode(&compressed_data_buffer[..], &mut data_buffer).is_ok() {}
-        Ok(
-            bincode::deserialize(&data_buffer[..])
-                .expect("Protocol violation: invalid audio chunk"),
-        )
+        let protocol_message = ProtocolMessage::AudioChunk(self.clone());
+        protocol_message.write_to_stream(stream).await
     }
 }
 

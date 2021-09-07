@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fs::File;
 
 use std::marker::Send;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -68,14 +68,7 @@ fn find_stereo_input(
     something
 }
 
-async fn make_quic_server(bind_address: String) -> Result<Incoming, Box<dyn Error>> {
-    let bind_socket_addr = *bind_address
-        .to_socket_addrs()
-        .expect("Invalid peer address")
-        .collect::<Vec<SocketAddr>>()
-        .get(0)
-        .unwrap();
-
+async fn make_quic_server(udp: UdpSocket) -> Result<Incoming, Box<dyn Error>> {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let cert_der = cert.serialize_der().unwrap();
     let priv_key = cert.serialize_private_key_der();
@@ -92,7 +85,7 @@ async fn make_quic_server(bind_address: String) -> Result<Incoming, Box<dyn Erro
 
     let mut endpoint_builder = Endpoint::builder();
     endpoint_builder.listen(server_config);
-    let (_endpoint, incoming) = endpoint_builder.bind(&bind_socket_addr).unwrap();
+    let (_endpoint, incoming) =  endpoint_builder.with_socket(udp).unwrap();
     Ok(incoming)
 }
 
@@ -102,13 +95,13 @@ async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
     ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
 ) {
-    let peer_address = conn.connection.remote_address().to_string();
+    let peer_address = conn.connection.remote_address();
     if ui_message_sender
         .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-            peer_address.clone(),
+            peer_address.to_string(),
             Peer {
-                ip_address: peer_address.clone(),
-                status: PeerStatus::Connected,
+                name: peer_address.to_string(),
+                status: PeerStatus::Connected(peer_address),
             },
         )))
         .is_ok()
@@ -116,9 +109,9 @@ async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
     start_clerver(conn, denoise, make_receiver).await;
     if ui_message_sender
         .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-            peer_address.clone(),
+            peer_address.to_string(),
             Peer {
-                ip_address: peer_address.clone(),
+                name: peer_address.to_string(),
                 status: PeerStatus::Disconnected,
             },
         )))
@@ -127,11 +120,11 @@ async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
 }
 
 pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
-    bind_address: String,
+    udp: UdpSocket,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
     config: InsanityConfig,
 ) {
-    let mut incoming = make_quic_server(bind_address).await.unwrap();
+    let mut incoming = make_quic_server(udp).await.unwrap();
     loop {
         let incoming_conn = incoming.next().await.expect("1");
         let conn = incoming_conn.await.expect("2");
@@ -215,13 +208,13 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
 }
 
 #[tokio::main]
-pub async fn start_server(bind_address: String, config: InsanityConfig) {
+pub async fn start_server(udp: UdpSocket, config: InsanityConfig) {
     if let Some(path) = config.music.clone() {
-        start_server_with_receiver(bind_address, move || make_music_receiver(path), config).await;
+        start_server_with_receiver(udp,  move || make_music_receiver(path), config).await;
     } else {
         let config_clone = config.clone();
         start_server_with_receiver(
-            bind_address,
+            udp,
             move || make_audio_receiver(config_clone),
             config,
         )

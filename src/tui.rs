@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::default::Default;
+use std::net::SocketAddr;
 use std::thread;
 use std::time::Duration;
 
@@ -48,13 +49,13 @@ pub enum TuiMessage {
 
 #[derive(Eq, PartialEq, Clone)]
 pub struct Peer {
-    pub ip_address: String,
+    pub name: String,
     pub status: PeerStatus,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum PeerStatus {
-    Connected,
+    Connected(SocketAddr),
     Disconnected,
 }
 
@@ -68,21 +69,22 @@ fn draw_peers(peers: &HashMap<String, Peer>) -> List<'static> {
         .sorted_by(|(id1, _), (id2, _)| id1.cmp(id2))
         .map(|(_, peer)| {
             let peer_style = match peer.status {
-                PeerStatus::Connected => Style::default().fg(Color::LightGreen),
+                PeerStatus::Connected(_socket_addr) => Style::default().fg(Color::LightGreen),
                 PeerStatus::Disconnected => Style::default().fg(Color::LightRed),
             };
-            let content = vec![Spans::from(vec![
-                match peer.status {
-                    PeerStatus::Connected => {
-                        Span::styled("✓ ", Style::default().fg(Color::LightGreen))
-                    }
-                    PeerStatus::Disconnected => {
-                        Span::styled("✗ ", Style::default().fg(Color::LightRed))
-                    }
+            let content = match peer.status {
+                PeerStatus::Connected(socket_addr) => {
+                    vec![Spans::from(vec![
+                        Span::styled(format!("✓ {}", peer.name), peer_style),
+                        Span::styled(format!(" @ {}", socket_addr), Style::default()),
+                    ])]
                 },
-                // Span::styled(format!("{} ", id.to_string()), peer_style),
-                Span::styled(peer.ip_address.clone(), peer_style),
-            ])];
+                PeerStatus::Disconnected => {
+                    vec![Spans::from(vec![
+                        Span::styled(format!("✗ {}", peer.name), peer_style),
+                    ])]
+                }
+            };
             ListItem::new(content)
         })
         .collect();

@@ -1,15 +1,11 @@
-use std::sync::Arc;
+use std::{fmt::write, sync::Arc};
 
 use cpal::traits::{HostTrait, StreamTrait};
 use futures_util::future::join;
 use futures_util::StreamExt;
 use quinn::{Connection, IncomingUniStreams, NewConnection};
 
-use crate::{
-    client::setup_output_stream,
-    processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
-    server::AudioReceiver,
-};
+use crate::{client::setup_output_stream, processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE}, protocol::ProtocolMessage, server::AudioReceiver};
 
 // A clerver is a CLient + sERVER.
 
@@ -26,11 +22,12 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
         let data = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
         let format = AudioFormat::new(2, 48000);
         let audio_chunk = AudioChunk::new(sequence_number, format, data);
-        if audio_chunk.write_to_stream(&mut send).await.is_err() {
-            break;
-        }
-        sequence_number += 1;
+        let write_result = audio_chunk.write_to_stream(&mut send).await;
         if send.finish().await.is_ok() {}
+        sequence_number = match write_result {
+            Ok(_) => sequence_number + 1,
+            Err(_) => { break; },
+        }
     }
 }
 
@@ -48,15 +45,20 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
         })
         .unwrap();
 
-    while let Ok(mut recv) = uni_streams.next().await.unwrap() {
-        let chunk = AudioChunk::read_from_stream(&mut recv).await;
-        match chunk {
-            Ok(chunk) => {
-                processor.handle_incoming(chunk);
-            }
-            Err(_) => {
-                break;
-            }
+    while let Ok(recv) = uni_streams.next().await.unwrap() {
+        let protocol_message = ProtocolMessage::read_from_stream(recv).await;
+        if protocol_message.is_err() {
+            break;
+        }
+        match protocol_message {
+            Ok(message) => {
+                match message {
+                    ProtocolMessage::AudioChunk(chunk) => { processor.handle_incoming(chunk); },
+                    ProtocolMessage::IdentityDeclaration(_) => todo!(),
+                    ProtocolMessage::PeerDiscovery(_) => todo!(),
+                }
+            },
+            Err(_) => { break; }
         }
     }
 }

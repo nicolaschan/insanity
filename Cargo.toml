@@ -30,3 +30,9 @@ rcgen = "0.8.13"
 futures-util = "0.3.17"
 send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
 libtor = "46.6.0+0.4.6.6"
+uuid = { version = "0.8", features = ["serde", "v4"] }
+dirs = "3.0.2"
+warp = "0.3.1"
+stunclient = "0.3.0"
+reqwest = { version = "0.11", features = ["socks", "json"] }
+serde_json = "1.0.67"

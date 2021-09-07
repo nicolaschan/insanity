@@ -104,14 +104,14 @@ async fn run_client(peer_socket_addr: SocketAddr) -> Result<NewConnection, Conne
 }
 
 #[tokio::main]
-pub async fn start_client(peer_address: String, config: InsanityConfig) {
+pub async fn start_client(peer_name: String, peer_address: String, config: InsanityConfig) {
     loop {
         if config
             .ui_message_sender
             .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-                peer_address.clone(),
+                peer_name.clone(),
                 Peer {
-                    ip_address: peer_address.clone(),
+                    name: peer_name.clone(),
                     status: PeerStatus::Disconnected,
                 },
             )))
@@ -130,10 +130,10 @@ pub async fn start_client(peer_address: String, config: InsanityConfig) {
                 if config
                     .ui_message_sender
                     .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-                        peer_address.clone(),
+                        peer_name.clone(),
                         Peer {
-                            ip_address: peer_address.clone(),
-                            status: PeerStatus::Connected,
+                            name: peer_name.clone(),
+                            status: PeerStatus::Connected(peer_socket_addr),
                         },
                     )))
                     .is_ok()
@@ -146,9 +146,9 @@ pub async fn start_client(peer_address: String, config: InsanityConfig) {
                 if config
                     .ui_message_sender
                     .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-                        peer_address.clone(),
+                        peer_name.clone(),
                         Peer {
-                            ip_address: peer_address.clone(),
+                            name: peer_name.clone(),
                             status: PeerStatus::Disconnected,
                         },
                     )))
