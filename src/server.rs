@@ -20,6 +20,7 @@ use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
 use crate::processor::AUDIO_CHUNK_SIZE;
+use crate::protocol::ProtocolMessage;
 use crate::tui::{Peer, PeerStatus, TuiEvent, TuiMessage};
 use crate::InsanityConfig;
 
@@ -90,22 +91,38 @@ async fn make_quic_server(udp: UdpSocket) -> Result<Incoming, Box<dyn Error>> {
 }
 
 async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
-    conn: NewConnection,
+    mut conn: NewConnection,
     denoise: bool,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
     ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
 ) {
     let peer_address = conn.connection.remote_address();
-    if ui_message_sender
-        .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-            peer_address.to_string(),
-            Peer {
-                name: peer_address.to_string(),
-                status: PeerStatus::Connected(peer_address),
-            },
-        )))
-        .is_ok()
-    {}
+    match conn.uni_streams.next().await {
+        Some(recv) => {
+            match recv {
+                Ok(recv) => {
+                    let message = ProtocolMessage::read_from_stream(recv).await.unwrap();
+                    match message {
+                        ProtocolMessage::IdentityDeclaration(identity) => {
+                            if ui_message_sender
+                                .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+                                    identity.canonical_name.clone(),
+                                    Peer {
+                                        name: identity.canonical_name.clone(),
+                                        status: PeerStatus::Connected(peer_address),
+                                    },
+                                )))
+                                .is_ok()
+                            {}
+                        },
+                        _ => {}
+                    }
+                },
+                Err(_) => {},
+            }
+        }
+        None => {},
+    }
     start_clerver(conn, denoise, make_receiver).await;
     if ui_message_sender
         .send(TuiEvent::Message(TuiMessage::UpdatePeer(

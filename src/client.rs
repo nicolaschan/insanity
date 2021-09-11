@@ -12,6 +12,8 @@ use quinn::NewConnection;
 
 use crate::clerver::start_clerver;
 use crate::processor::AudioProcessor;
+use crate::protocol::PeerIdentity;
+use crate::protocol::ProtocolMessage;
 use crate::server::make_audio_receiver;
 use crate::tui::Peer;
 use crate::tui::PeerStatus;
@@ -104,7 +106,7 @@ async fn run_client(peer_socket_addr: SocketAddr) -> Result<NewConnection, Conne
 }
 
 #[tokio::main]
-pub async fn start_client(peer_name: String, peer_address: String, config: InsanityConfig) {
+pub async fn start_client(own_address: String, peer_name: String, peer_address: String, config: InsanityConfig) {
     loop {
         if config
             .ui_message_sender
@@ -139,6 +141,16 @@ pub async fn start_client(peer_name: String, peer_address: String, config: Insan
                     .is_ok()
                 {}
                 let config_clone = config.clone();
+
+                let identification = ProtocolMessage::IdentityDeclaration(PeerIdentity::new(&own_address));
+                match conn.connection.open_uni().await {
+                    Ok(mut send) => { 
+                        identification.write_to_stream(&mut send).await.unwrap();
+                        send.finish().await.unwrap();
+                    },
+                    Err(_) => {},
+                }
+
                 start_clerver(conn, config.denoise, move || {
                     make_audio_receiver(config_clone)
                 })

@@ -22,7 +22,7 @@ pub enum ProtocolMessage {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PeerIdentity {
-    canonical_name: String,
+    pub canonical_name: String,
     display_name: Option<String>,
     addresses: Vec<String>,
 }

@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr, sync::{Arc}, thread, time::Duration};
+use std::{path::PathBuf, str::FromStr, sync::{Arc}, thread::{self, JoinHandle}, time::Duration};
 
 use clap::{AppSettings, Clap};
 use crossbeam::channel::{unbounded};
@@ -89,11 +89,12 @@ async fn main() {
         channels: opts.channels,
     };
 
+    let mut tui_join_handle: Option<JoinHandle<()>> = None;
     if ! opts.no_tui {
         let ui_message_sender_clone = ui_message_sender.clone();
         let ui_message_receiver_clone = ui_message_receiver.clone();
-        thread::spawn(move || insanity::tui::start(ui_message_sender_clone, ui_message_receiver_clone));
-        ui_message_sender.send(TuiEvent::Message(TuiMessage::SetOwnAddress(Some(onion_address)))).unwrap();
+        tui_join_handle = Some(thread::spawn(move || insanity::tui::start(ui_message_sender_clone, ui_message_receiver_clone)));
+        ui_message_sender.send(TuiEvent::Message(TuiMessage::SetOwnAddress(Some(onion_address.clone())))).unwrap();
     }
 
     let config_clone = config.clone();
@@ -113,8 +114,9 @@ async fn main() {
         for address in addresses {
             let config_clone = config.clone();
             let peer_clone = peer.clone();
+            let onion_address_clone = onion_address.clone();
             thread::spawn(move || {
-                insanity::client::start_client(peer_clone, address, config_clone)
+                insanity::client::start_client(onion_address_clone, peer_clone, address, config_clone)
             });
         }
     }
@@ -126,7 +128,12 @@ async fn main() {
     //     });
     // }
 
-    loop {
-        std::thread::sleep(Duration::from_millis(1000));
+    match tui_join_handle {
+        Some(handle) => { handle.join().unwrap(); },
+        None => {
+            loop {
+                std::thread::sleep(Duration::from_millis(1000));
+            }
+        }
     }
 }

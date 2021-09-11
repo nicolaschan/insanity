@@ -54,8 +54,8 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
             Ok(message) => {
                 match message {
                     ProtocolMessage::AudioChunk(chunk) => { processor.handle_incoming(chunk); },
-                    ProtocolMessage::IdentityDeclaration(_) => todo!(),
-                    ProtocolMessage::PeerDiscovery(_) => todo!(),
+                    ProtocolMessage::IdentityDeclaration(_) => {},
+                    ProtocolMessage::PeerDiscovery(_) => {},
                 }
             },
             Err(_) => { break; }
