@@ -14,7 +14,6 @@ crossbeam = "0.8"
 flate2 = "1.0"
 nnnoiseless = "0.3.2"
 rand = "0.8.4"
-ring = "0.16.20"
 serde = { version = "1.0.127", features = ["derive"] }
 wav = "1.0.0"
 itertools = "0.10.1"
@@ -29,7 +28,7 @@ webpki = { version = "0.21", default-features = true }
 rcgen = "0.8.13"
 futures-util = "0.3.17"
 send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
-libtor = "46.6.0+0.4.6.6"
+libtor = { version = "46.6.0+0.4.6.6", features = ["vendored-openssl"] }
 uuid = { version = "0.8", features = ["serde", "v4"] }
 dirs = "3.0.2"
 warp = "0.3.1"

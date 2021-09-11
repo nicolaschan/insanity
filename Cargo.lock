@@ -996,7 +996,6 @@ dependencies = [
  "rand 0.8.4",
  "rcgen",
  "reqwest",
- "ring",
  "rustls",
  "send_safe",
  "serde",
