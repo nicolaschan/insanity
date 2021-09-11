@@ -19,7 +19,7 @@ use quinn::{
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
-use crate::processor::AUDIO_CHUNK_SIZE;
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
 use crate::protocol::ProtocolMessage;
 use crate::tui::{Peer, PeerStatus, TuiEvent, TuiMessage};
 use crate::InsanityConfig;
@@ -60,7 +60,7 @@ fn find_stereo_input(
 ) -> Option<cpal::SupportedStreamConfigRange> {
     let mut something = None;
     for item in range {
-        if item.channels() == 2 {
+        if item.channels() == AUDIO_CHANNELS {
             return Some(item);
         } else {
             something = Some(item);
@@ -100,8 +100,8 @@ async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
     match conn.uni_streams.next().await {
         Some(recv) => {
             match recv {
-                Ok(recv) => {
-                    let message = ProtocolMessage::read_from_stream(recv).await.unwrap();
+                Ok(mut recv) => {
+                    let message = ProtocolMessage::read_from_stream(&mut recv).await.unwrap();
                     match message {
                         ProtocolMessage::IdentityDeclaration(identity) => {
                             if ui_message_sender
@@ -207,7 +207,7 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
         // println!("Music: {:?}", header);
         if let Sixteen(vec) = data {
             let mut now = SystemTime::now();
-            for chunk in vec.chunks_exact(AUDIO_CHUNK_SIZE * 2) {
+            for chunk in vec.chunks_exact(AUDIO_CHUNK_SIZE * (AUDIO_CHANNELS as usize)) {
                 for val in chunk {
                     let s: i16 = Sample::from(val);
                     if input_sender.send(s.to_f32()).is_ok() {}

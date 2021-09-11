@@ -19,15 +19,18 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
 
     // println!("{:?}", audio_receiver);
     while let Ok(mut send) = conn.open_uni().await {
-        let data: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
-        let format = AudioFormat::new(2, 48000);
-        let audio_chunk = AudioChunk::new(sequence_number, format, data);
-        let write_result = audio_chunk.write_to_stream(&mut send).await;
-        if send.finish().await.is_ok() {}
-        sequence_number = match write_result {
-            Ok(_) => sequence_number + 1,
-            Err(_) => { break; },
+        loop {
+            let data: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
+            let format = AudioFormat::new(2, 48000);
+            let audio_chunk = AudioChunk::new(sequence_number, format, data);
+            let write_result = audio_chunk.write_to_stream(&mut send).await;
+            // if send.finish().await.is_ok() {}
+            sequence_number = match write_result {
+                Ok(_) => sequence_number + 1,
+                Err(_) => { break; },
+            }
         }
+        if send.finish().await.is_ok() {}
     }
 }
 
@@ -45,20 +48,13 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
         })
         .unwrap();
 
-    while let Ok(recv) = uni_streams.next().await.unwrap() {
-        let protocol_message = ProtocolMessage::read_from_stream(recv).await;
-        if protocol_message.is_err() {
-            break;
-        }
-        match protocol_message {
-            Ok(message) => {
-                match message {
-                    ProtocolMessage::AudioChunk(chunk) => { processor.handle_incoming(chunk); },
-                    ProtocolMessage::IdentityDeclaration(_) => {},
-                    ProtocolMessage::PeerDiscovery(_) => {},
-                }
-            },
-            Err(_) => { break; }
+    while let Ok(mut recv) = uni_streams.next().await.unwrap() {
+        while let Ok(message) = ProtocolMessage::read_from_stream(&mut recv).await {
+            match message {
+                ProtocolMessage::AudioChunk(chunk) => { processor.handle_incoming(chunk); },
+                ProtocolMessage::IdentityDeclaration(_) => {},
+                ProtocolMessage::PeerDiscovery(_) => {},
+            }
         }
     }
 }

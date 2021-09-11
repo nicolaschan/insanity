@@ -3,6 +3,7 @@ use quinn::{ReadToEndError, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use stunclient::StunClient;
+use std::convert::TryInto;
 use std::io::Error;
 use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -47,14 +48,20 @@ impl ProtocolMessage {
         let serialized = bincode::serialize(self).unwrap();
         let mut compressed: Vec<u8> = Vec::new();
         if zstd::stream::copy_encode(&serialized[..], &mut compressed, 1).is_ok() {}
+        let encoded_length: u64 = compressed.len().try_into().unwrap();
+        stream.write_all(&encoded_length.to_le_bytes()).await?;
         stream.write_all(&compressed).await?;
         Ok(())
     }
-    pub async fn read_from_stream(stream: RecvStream) -> Result<ProtocolMessage, ReadToEndError> {
-        let compressed= stream.read_to_end(usize::max_value()).await?;
-        let mut serialized = Vec::new();
-        if zstd::stream::copy_decode(&compressed[..], &mut serialized).is_ok() {}
-        let protocol_message = bincode::deserialize(&serialized[..])
+    pub async fn read_from_stream(stream: &mut RecvStream) -> Result<ProtocolMessage, ReadToEndError> {
+        let mut length_buffer = [0; 8];
+        stream.read_exact(&mut length_buffer).await.unwrap();
+        let length = u64::from_le_bytes(length_buffer);
+        let mut compressed_data_buffer = vec![0; length as usize];
+        stream.read_exact(&mut compressed_data_buffer).await.unwrap();
+        let mut data_buffer = Vec::new();
+        if zstd::stream::copy_decode(&compressed_data_buffer[..], &mut data_buffer).is_ok() {}
+        let protocol_message = bincode::deserialize(&data_buffer[..])
             .expect("Protocol violation");
         Ok(protocol_message)
     }
