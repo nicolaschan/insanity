@@ -76,7 +76,7 @@ async fn make_quic_server(udp: UdpSocket) -> Result<Incoming, Box<dyn Error>> {
     let priv_key = PrivateKey::from_der(&priv_key)?;
 
     let mut transport_config = TransportConfig::default();
-    transport_config.max_concurrent_uni_streams(100).unwrap();
+    transport_config.max_concurrent_uni_streams(10000).unwrap();
     let mut server_config = ServerConfig::default();
     server_config.transport = Arc::new(transport_config);
     let mut cfg_builder = ServerConfigBuilder::new(server_config);

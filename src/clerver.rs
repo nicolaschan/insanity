@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::{sync::Arc, thread};
 
 use cpal::traits::{HostTrait, StreamTrait};
 use futures_util::future::join;
@@ -19,7 +19,7 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
 
     // println!("{:?}", audio_receiver);
     while let Ok(mut send) = conn.open_uni().await {
-        let data = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
+        let data: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
         let format = AudioFormat::new(2, 48000);
         let audio_chunk = AudioChunk::new(sequence_number, format, data);
         let write_result = audio_chunk.write_to_stream(&mut send).await;
@@ -63,12 +63,21 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
     }
 }
 
+#[tokio::main]
+async fn run_sender_sync<R: AudioReceiver + Send + 'static>(
+    conn: Connection,
+    make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
+) {
+    run_sender(conn, make_receiver).await;
+}
+
 pub async fn start_clerver<R: AudioReceiver + Send + 'static>(
     conn: NewConnection,
     enable_denoise: bool,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
-    let sender = run_sender(conn.connection, make_receiver);
+    let connection = conn.connection.clone();
+    thread::spawn(|| run_sender_sync(connection, make_receiver));
     let receiver = run_receiver(conn.uni_streams, enable_denoise);
-    join(sender, receiver).await;
+    receiver.await;
 }
