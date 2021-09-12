@@ -1,11 +1,16 @@
 use std::{sync::Arc, thread};
 
 use cpal::traits::{HostTrait, StreamTrait};
-use futures_util::future::join;
+
 use futures_util::StreamExt;
 use quinn::{Connection, IncomingUniStreams, NewConnection};
 
-use crate::{client::setup_output_stream, processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE}, protocol::ProtocolMessage, server::AudioReceiver};
+use crate::{
+    client::setup_output_stream,
+    processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
+    protocol::ProtocolMessage,
+    server::AudioReceiver,
+};
 
 // A clerver is a CLient + sERVER.
 
@@ -27,7 +32,9 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
             // if send.finish().await.is_ok() {}
             sequence_number = match write_result {
                 Ok(_) => sequence_number + 1,
-                Err(_) => { break; },
+                Err(_) => {
+                    break;
+                }
             }
         }
         if send.finish().await.is_ok() {}
@@ -51,9 +58,11 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
     while let Ok(mut recv) = uni_streams.next().await.unwrap() {
         while let Ok(message) = ProtocolMessage::read_from_stream(&mut recv).await {
             match message {
-                ProtocolMessage::AudioChunk(chunk) => { processor.handle_incoming(chunk); },
-                ProtocolMessage::IdentityDeclaration(_) => {},
-                ProtocolMessage::PeerDiscovery(_) => {},
+                ProtocolMessage::AudioChunk(chunk) => {
+                    processor.handle_incoming(chunk);
+                }
+                ProtocolMessage::IdentityDeclaration(_) => {}
+                ProtocolMessage::PeerDiscovery(_) => {}
             }
         }
     }

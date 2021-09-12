@@ -1,9 +1,19 @@
-use std::{path::PathBuf, str::FromStr, sync::{Arc}, thread::{self, JoinHandle}, time::Duration};
+use std::{
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 
 use clap::{AppSettings, Clap};
-use crossbeam::channel::{unbounded};
-use insanity::{InsanityConfig, coordinator::{start_coordinator, start_tor}, protocol::{ConnectionManager}, tui::{Peer, PeerStatus, TuiEvent, TuiMessage}};
-
+use crossbeam::channel::unbounded;
+use insanity::{
+    coordinator::{start_coordinator, start_tor},
+    protocol::ConnectionManager,
+    tui::{Peer, PeerStatus, TuiEvent, TuiMessage},
+    InsanityConfig,
+};
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -57,7 +67,9 @@ async fn main() {
 
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
-        None => dirs::data_local_dir().expect("no data directory!?").join("insanity"),
+        None => dirs::data_local_dir()
+            .expect("no data directory!?")
+            .join("insanity"),
     };
     std::fs::create_dir_all(&insanity_dir).expect("could not create insanity data directory");
 
@@ -65,17 +77,14 @@ async fn main() {
     std::fs::create_dir_all(&tor_dir).expect("could not create tor data directory");
     let socks_port = opts.socks_port;
     let coordinator_port = opts.coordinator_port;
-    let onion_address= start_tor(&tor_dir, socks_port, coordinator_port);
+    let onion_address = start_tor(&tor_dir, socks_port, coordinator_port);
 
     let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{}", socks_port)).unwrap();
-    let client = reqwest::Client::builder()
-        .proxy(proxy)
-        .build()
-        .unwrap();
+    let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
 
     let mut connection_manager = ConnectionManager::new(&onion_address, client);
     let udp = connection_manager.create_server_socket(opts.listen_port);
-    let connection_manager_arc= Arc::new(connection_manager);
+    let connection_manager_arc = Arc::new(connection_manager);
     let connection_manager_arc_clone = connection_manager_arc.clone();
     thread::spawn(move || start_coordinator(coordinator_port, connection_manager_arc_clone));
 
@@ -90,11 +99,17 @@ async fn main() {
     };
 
     let mut tui_join_handle: Option<JoinHandle<()>> = None;
-    if ! opts.no_tui {
+    if !opts.no_tui {
         let ui_message_sender_clone = ui_message_sender.clone();
         let ui_message_receiver_clone = ui_message_receiver.clone();
-        tui_join_handle = Some(thread::spawn(move || insanity::tui::start(ui_message_sender_clone, ui_message_receiver_clone)));
-        ui_message_sender.send(TuiEvent::Message(TuiMessage::SetOwnAddress(Some(onion_address.clone())))).unwrap();
+        tui_join_handle = Some(thread::spawn(move || {
+            insanity::tui::start(ui_message_sender_clone, ui_message_receiver_clone)
+        }));
+        ui_message_sender
+            .send(TuiEvent::Message(TuiMessage::SetOwnAddress(Some(
+                onion_address.clone(),
+            ))))
+            .unwrap();
     }
 
     let config_clone = config.clone();
@@ -103,20 +118,27 @@ async fn main() {
     });
 
     for peer in opts.peer {
-        ui_message_sender.send(TuiEvent::Message(TuiMessage::UpdatePeer(
-            peer.clone(),
-            Peer {
-                name: peer.clone(),
-                status: PeerStatus::Disconnected,
-            },
-        ))).unwrap();
+        ui_message_sender
+            .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+                peer.clone(),
+                Peer {
+                    name: peer.clone(),
+                    status: PeerStatus::Disconnected,
+                },
+            )))
+            .unwrap();
         let addresses = connection_manager_arc.add_peer(&peer).await;
         for address in addresses {
             let config_clone = config.clone();
             let peer_clone = peer.clone();
             let onion_address_clone = onion_address.clone();
             thread::spawn(move || {
-                insanity::client::start_client(onion_address_clone, peer_clone, address, config_clone)
+                insanity::client::start_client(
+                    onion_address_clone,
+                    peer_clone,
+                    address,
+                    config_clone,
+                )
             });
         }
     }
@@ -129,11 +151,11 @@ async fn main() {
     // }
 
     match tui_join_handle {
-        Some(handle) => { handle.join().unwrap(); },
-        None => {
-            loop {
-                std::thread::sleep(Duration::from_millis(1000));
-            }
+        Some(handle) => {
+            handle.join().unwrap();
         }
+        None => loop {
+            std::thread::sleep(Duration::from_millis(1000));
+        },
     }
 }

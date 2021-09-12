@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fs::File;
 
 use std::marker::Send;
-use std::net::{UdpSocket};
+use std::net::UdpSocket;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -86,7 +86,7 @@ async fn make_quic_server(udp: UdpSocket) -> Result<Incoming, Box<dyn Error>> {
 
     let mut endpoint_builder = Endpoint::builder();
     endpoint_builder.listen(server_config);
-    let (_endpoint, incoming) =  endpoint_builder.with_socket(udp).unwrap();
+    let (_endpoint, incoming) = endpoint_builder.with_socket(udp).unwrap();
     Ok(incoming)
 }
 
@@ -97,31 +97,20 @@ async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
     ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
 ) {
     let peer_address = conn.connection.remote_address();
-    match conn.uni_streams.next().await {
-        Some(recv) => {
-            match recv {
-                Ok(mut recv) => {
-                    let message = ProtocolMessage::read_from_stream(&mut recv).await.unwrap();
-                    match message {
-                        ProtocolMessage::IdentityDeclaration(identity) => {
-                            if ui_message_sender
-                                .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-                                    identity.canonical_name.clone(),
-                                    Peer {
-                                        name: identity.canonical_name.clone(),
-                                        status: PeerStatus::Connected(peer_address),
-                                    },
-                                )))
-                                .is_ok()
-                            {}
-                        },
-                        _ => {}
-                    }
-                },
-                Err(_) => {},
-            }
+    if let Some(Ok(mut recv)) = conn.uni_streams.next().await {
+        let message = ProtocolMessage::read_from_stream(&mut recv).await.unwrap();
+        if let ProtocolMessage::IdentityDeclaration(identity) = message {
+            if ui_message_sender
+                .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+                    identity.canonical_name.clone(),
+                    Peer {
+                        name: identity.canonical_name,
+                        status: PeerStatus::Connected(peer_address),
+                    },
+                )))
+                .is_ok()
+            {}
         }
-        None => {},
     }
     start_clerver(conn, denoise, make_receiver).await;
     if ui_message_sender
@@ -227,14 +216,9 @@ fn make_music_receiver(path: String) -> Receiver<f32> {
 #[tokio::main]
 pub async fn start_server(udp: UdpSocket, config: InsanityConfig) {
     if let Some(path) = config.music.clone() {
-        start_server_with_receiver(udp,  move || make_music_receiver(path), config).await;
+        start_server_with_receiver(udp, move || make_music_receiver(path), config).await;
     } else {
         let config_clone = config.clone();
-        start_server_with_receiver(
-            udp,
-            move || make_audio_receiver(config_clone),
-            config,
-        )
-        .await;
+        start_server_with_receiver(udp, move || make_audio_receiver(config_clone), config).await;
     }
 }

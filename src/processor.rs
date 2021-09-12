@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
-use quinn::{SendStream};
+use quinn::SendStream;
 use serde::{Deserialize, Serialize};
 
 use crate::{protocol::ProtocolMessage, realtime_buffer::RealTimeBuffer};
@@ -28,7 +28,6 @@ impl AudioFormat {
         }
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AudioChunk {

@@ -11,8 +11,8 @@ use quinn::Endpoint;
 use quinn::NewConnection;
 
 use crate::clerver::start_clerver;
-use crate::processor::AUDIO_CHANNELS;
 use crate::processor::AudioProcessor;
+use crate::processor::AUDIO_CHANNELS;
 use crate::protocol::PeerIdentity;
 use crate::protocol::ProtocolMessage;
 use crate::server::make_audio_receiver;
@@ -107,7 +107,12 @@ async fn run_client(peer_socket_addr: SocketAddr) -> Result<NewConnection, Conne
 }
 
 #[tokio::main]
-pub async fn start_client(own_address: String, peer_name: String, peer_address: String, config: InsanityConfig) {
+pub async fn start_client(
+    own_address: String,
+    peer_name: String,
+    peer_address: String,
+    config: InsanityConfig,
+) {
     loop {
         if config
             .ui_message_sender
@@ -143,13 +148,11 @@ pub async fn start_client(own_address: String, peer_name: String, peer_address: 
                 {}
                 let config_clone = config.clone();
 
-                let identification = ProtocolMessage::IdentityDeclaration(PeerIdentity::new(&own_address));
-                match conn.connection.open_uni().await {
-                    Ok(mut send) => { 
-                        identification.write_to_stream(&mut send).await.unwrap();
-                        send.finish().await.unwrap();
-                    },
-                    Err(_) => {},
+                let identification =
+                    ProtocolMessage::IdentityDeclaration(PeerIdentity::new(&own_address));
+                if let Ok(mut send) = conn.connection.open_uni().await {
+                    identification.write_to_stream(&mut send).await.unwrap();
+                    send.finish().await.unwrap();
                 }
 
                 start_clerver(conn, config.denoise, move || {
@@ -168,7 +171,7 @@ pub async fn start_client(own_address: String, peer_name: String, peer_address: 
                     .is_ok()
                 {}
             }
-            Err(e) => {
+            Err(_e) => {
                 // println!("{:?}", e);
             }
         }

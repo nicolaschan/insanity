@@ -2,17 +2,16 @@ use itertools::Itertools;
 use quinn::{ReadToEndError, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use stunclient::StunClient;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::io::Error;
-use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
+use stunclient::StunClient;
 
 use std::time::Duration;
 
 use crate::processor::AudioChunk;
-
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProtocolMessage {
@@ -29,9 +28,9 @@ pub struct PeerIdentity {
 }
 
 impl PeerIdentity {
-    pub fn new(canonical_name: &String) -> PeerIdentity {
+    pub fn new(canonical_name: &str) -> PeerIdentity {
         PeerIdentity {
-            canonical_name: canonical_name.clone(),
+            canonical_name: canonical_name.to_string(),
             display_name: None,
             addresses: Vec::new(),
         }
@@ -39,8 +38,8 @@ impl PeerIdentity {
 }
 
 pub struct PeerState {
-    identity: PeerIdentity,
-    sockets: HashMap<String, Vec<UdpSocket>>,
+    _identity: PeerIdentity,
+    _sockets: HashMap<String, Vec<UdpSocket>>,
 }
 
 impl ProtocolMessage {
@@ -53,16 +52,20 @@ impl ProtocolMessage {
         stream.write_all(&compressed).await?;
         Ok(())
     }
-    pub async fn read_from_stream(stream: &mut RecvStream) -> Result<ProtocolMessage, ReadToEndError> {
+    pub async fn read_from_stream(
+        stream: &mut RecvStream,
+    ) -> Result<ProtocolMessage, ReadToEndError> {
         let mut length_buffer = [0; 8];
         stream.read_exact(&mut length_buffer).await.unwrap();
         let length = u64::from_le_bytes(length_buffer);
         let mut compressed_data_buffer = vec![0; length as usize];
-        stream.read_exact(&mut compressed_data_buffer).await.unwrap();
+        stream
+            .read_exact(&mut compressed_data_buffer)
+            .await
+            .unwrap();
         let mut data_buffer = Vec::new();
         if zstd::stream::copy_decode(&compressed_data_buffer[..], &mut data_buffer).is_ok() {}
-        let protocol_message = bincode::deserialize(&data_buffer[..])
-            .expect("Protocol violation");
+        let protocol_message = bincode::deserialize(&data_buffer[..]).expect("Protocol violation");
         Ok(protocol_message)
     }
 }
@@ -93,10 +96,11 @@ pub fn socket_addr(string: String) -> SocketAddr {
 impl ConnectionManager {
     pub fn new(own_name: &str, client: reqwest::Client) -> ConnectionManager {
         let peers = Arc::new(Mutex::new(HashMap::new()));
-        
+
         // manager.add_peer(own_name);
         ConnectionManager {
-            identity: own_name.to_string().clone(), peers,
+            identity: own_name.to_string(),
+            peers,
             addresses: HashSet::new(),
             client,
         }
@@ -105,13 +109,16 @@ impl ConnectionManager {
         let peers_guard = self.peers.lock().unwrap();
         peers_guard.keys().into_iter().cloned().collect_vec()
     }
-    pub async fn add_peer(&self, canonical_name: &String) -> Vec<String> {
+    pub async fn add_peer(&self, canonical_name: &str) -> Vec<String> {
         let identity = PeerIdentity::new(canonical_name);
         let mut peers_guard = self.peers.lock().unwrap();
-        peers_guard.insert(canonical_name.clone(), PeerState { 
-            identity: identity.clone(), 
-            sockets: HashMap::new(),
-        });
+        peers_guard.insert(
+            canonical_name.to_string(),
+            PeerState {
+                _identity: identity.clone(),
+                _sockets: HashMap::new(),
+            },
+        );
         drop(peers_guard);
         let url = format!("http://{}/addresses", canonical_name);
         loop {
@@ -127,13 +134,11 @@ impl ConnectionManager {
                                 .map(|x| x.as_str().unwrap().to_string())
                                 .collect_vec();
                             return addresses;
-                        },
-                        Err(_e) => {
                         }
+                        Err(_e) => {}
                     }
-                },
-                Err(_e) => {
                 }
+                Err(_e) => {}
             }
             tokio::time::sleep(Duration::from_millis(1000)).await;
         }
@@ -146,17 +151,15 @@ impl ConnectionManager {
         self.addresses.insert(external_addr);
         udp
     }
-    fn establish_socket(&mut self, address: SocketAddr) -> Result<UdpSocket, Error> {
+    fn _establish_socket(&mut self, address: SocketAddr) -> Result<UdpSocket, Error> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.set_read_timeout(Some(Duration::from_millis(1000)));
+        socket.set_read_timeout(Some(Duration::from_millis(1000)))?;
         let ping_message = ConnectMessage::Ping(self.identity.clone());
         let serialized_ping_message = bincode::serialize(&ping_message).unwrap();
-        socket.send_to(&serialized_ping_message[..], address);
+        socket.send_to(&serialized_ping_message[..], address)?;
         let mut buf = Vec::new();
         match socket.recv_from(&mut buf) {
-            Ok((_len, _src)) => {
-                Ok(socket)
-            },
+            Ok((_len, _src)) => Ok(socket),
             Err(e) => Err(e),
         }
     }

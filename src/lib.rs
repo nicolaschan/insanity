@@ -5,12 +5,12 @@ use crossbeam::channel::Sender;
 
 pub mod clerver;
 pub mod client;
+pub mod coordinator;
 pub mod processor;
+pub mod protocol;
 pub mod realtime_buffer;
 pub mod server;
 pub mod tui;
-pub mod protocol;
-pub mod coordinator;
 
 #[derive(Clone)]
 pub struct InsanityConfig {

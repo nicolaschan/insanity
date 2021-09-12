@@ -10,10 +10,9 @@ use itertools::Itertools;
 use tui::backend::CrosstermBackend;
 use tui::layout::{Constraint, Direction, Layout};
 use tui::style::{Color, Style};
-use tui::text::{Span, Spans, Text};
-use tui::widgets::{Block, Borders, Cell, List, ListItem, Row};
+use tui::text::{Span, Spans};
+use tui::widgets::{Block, Borders, List, ListItem};
 use tui::Terminal;
-use warp::addr;
 
 pub struct InsanityTui {
     terminal: Terminal<CrosstermBackend<std::io::Stdout>>,
@@ -81,11 +80,12 @@ fn draw_peers(peers: &HashMap<String, Peer>) -> List<'static> {
                         Span::styled(format!("✓ {}", peer.name), peer_style),
                         Span::styled(format!(" @ {}", socket_addr), Style::default()),
                     ])]
-                },
+                }
                 PeerStatus::Disconnected => {
-                    vec![Spans::from(vec![
-                        Span::styled(format!("✗ {}", peer.name), peer_style),
-                    ])]
+                    vec![Spans::from(vec![Span::styled(
+                        format!("✗ {}", peer.name),
+                        peer_style,
+                    )])]
                 }
             };
             ListItem::new(content)
@@ -96,13 +96,13 @@ fn draw_peers(peers: &HashMap<String, Peer>) -> List<'static> {
 }
 
 fn draw_own_info(address: &Option<String>) -> List<'static> {
-    let address = address.clone().unwrap_or("".to_string());
-    let block = Block::default()
-        .title("Your address")
-        .borders(Borders::ALL);
-    List::new(vec![ListItem::new(
-        vec![Spans::from(vec![
-            Span::styled(address, Style::default().fg(Color::LightBlue))])])]).block(block)
+    let address = address.clone().unwrap_or_else(|| "".to_string());
+    let block = Block::default().title("Your address").borders(Borders::ALL);
+    List::new(vec![ListItem::new(vec![Spans::from(vec![Span::styled(
+        address,
+        Style::default().fg(Color::LightBlue),
+    )])])])
+    .block(block)
 }
 
 impl InsanityTui {
@@ -149,7 +149,7 @@ fn next_state_message(message: TuiMessage, mut state: TuiState) -> TuiState {
         }
         TuiMessage::DeletePeer(k) => {
             state.status.peers.remove(&k);
-        },
+        }
         TuiMessage::SetOwnAddress(address) => {
             state.status.own_address = address;
         }
@@ -176,9 +176,9 @@ pub fn start(ui_message_sender: Sender<TuiEvent>, receiver: Receiver<TuiEvent>) 
 
     let mut state = TuiState {
         route: TuiRoute::Dashboard,
-        status: TuiStatus { 
+        status: TuiStatus {
             own_address: None,
-            peers
+            peers,
         },
     };
 
