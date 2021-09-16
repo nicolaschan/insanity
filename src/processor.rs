@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::{protocol::ProtocolMessage, realtime_buffer::RealTimeBuffer};
 
 pub const AUDIO_CHUNK_SIZE: usize = 480;
-pub const AUDIO_CHANNELS: u16 = 2;
+pub const AUDIO_CHANNELS: u16 = 1;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct AudioFormat {
