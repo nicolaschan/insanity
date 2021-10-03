@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use quinn::{ReadToEndError, RecvStream, SendStream};
+use quinn::{ReadExactError, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -54,15 +54,14 @@ impl ProtocolMessage {
     }
     pub async fn read_from_stream(
         stream: &mut RecvStream,
-    ) -> Result<ProtocolMessage, ReadToEndError> {
+    ) -> Result<ProtocolMessage, ReadExactError> {
         let mut length_buffer = [0; 8];
-        stream.read_exact(&mut length_buffer).await.unwrap();
+        stream.read_exact(&mut length_buffer).await?;
         let length = u64::from_le_bytes(length_buffer);
         let mut compressed_data_buffer = vec![0; length as usize];
         stream
             .read_exact(&mut compressed_data_buffer)
-            .await
-            .unwrap();
+            .await?;
         let mut data_buffer = Vec::new();
         if zstd::stream::copy_decode(&compressed_data_buffer[..], &mut data_buffer).is_ok() {}
         let protocol_message = bincode::deserialize(&data_buffer[..]).expect("Protocol violation");
@@ -111,15 +110,16 @@ impl ConnectionManager {
     }
     pub async fn add_peer(&self, canonical_name: &str) -> Vec<String> {
         let identity = PeerIdentity::new(canonical_name);
-        let mut peers_guard = self.peers.lock().unwrap();
-        peers_guard.insert(
-            canonical_name.to_string(),
-            PeerState {
-                _identity: identity.clone(),
-                _sockets: HashMap::new(),
-            },
-        );
-        drop(peers_guard);
+        {
+            let mut peers_guard = self.peers.lock().unwrap();
+            peers_guard.insert(
+                canonical_name.to_string(),
+                PeerState {
+                    _identity: identity.clone(),
+                    _sockets: HashMap::new(),
+                },
+            );
+        }
         let url = format!("http://{}/addresses", canonical_name);
         loop {
             match self.client.get(&url).send().await {

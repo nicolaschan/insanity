@@ -28,9 +28,6 @@ struct Opts {
     #[clap(short, long, default_value = "1337")]
     listen_port: u16,
 
-    #[clap(short, long)]
-    peer_address: Vec<String>,
-
     #[clap(long)]
     peer: Vec<String>,
 

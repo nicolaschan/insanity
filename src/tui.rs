@@ -100,7 +100,7 @@ fn draw_own_info(address: &Option<String>) -> List<'static> {
     let block = Block::default().title("Your address").borders(Borders::ALL);
     List::new(vec![ListItem::new(vec![Spans::from(vec![Span::styled(
         address,
-        Style::default().fg(Color::LightBlue),
+        Style::default(),
     )])])])
     .block(block)
 }
