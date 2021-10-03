@@ -14,6 +14,9 @@ use insanity::{
     tui::{Peer, PeerStatus, TuiEvent, TuiMessage},
     InsanityConfig,
 };
+use std::iter::Iterator;
+use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 
 #[derive(Clap)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -114,7 +117,7 @@ async fn main() {
         insanity::server::start_server(udp, config_clone);
     });
 
-    for peer in opts.peer {
+    for peer in &opts.peer {
         ui_message_sender
             .send(TuiEvent::Message(TuiMessage::UpdatePeer(
                 peer.clone(),
@@ -124,6 +127,14 @@ async fn main() {
                 },
             )))
             .unwrap();
+    }
+
+    opts.peer
+    .iter()
+    .zip(std::iter::repeat(config))
+    .zip(std::iter::repeat(onion_address))
+    .zip(std::iter::repeat(connection_manager_arc))
+    .map(|(((peer, config), onion_address), connection_manager_arc)| async move {
         let addresses = connection_manager_arc.add_peer(&peer).await;
         for address in addresses {
             let config_clone = config.clone();
@@ -138,7 +149,10 @@ async fn main() {
                 )
             });
         }
-    }
+    })
+    .collect::<FuturesUnordered<_>>()
+    .collect::<Vec<_>>()
+    .await;
 
     // for peer_address in opts.peer_address {
     //     let config_clone = config.clone();
