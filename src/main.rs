@@ -131,10 +131,8 @@ async fn main() {
 
     opts.peer
     .iter()
-    .zip(std::iter::repeat(config))
-    .zip(std::iter::repeat(onion_address))
-    .zip(std::iter::repeat(connection_manager_arc))
-    .map(|(((peer, config), onion_address), connection_manager_arc)| async move {
+    .zip(std::iter::repeat((config, onion_address, connection_manager_arc)))
+    .map(|(peer, (config, onion_address, connection_manager_arc))| async move {
         let addresses = connection_manager_arc.add_peer(&peer).await;
         for address in addresses {
             let config_clone = config.clone();
