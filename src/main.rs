@@ -23,7 +23,7 @@ use futures_util::stream::FuturesUnordered;
 #[clap(setting = AppSettings::ColoredHelp)]
 struct Opts {
     #[clap(short, long)]
-    denoise: bool,
+    deez_nuts: bool,
 
     #[clap(long)]
     music: Option<String>,
