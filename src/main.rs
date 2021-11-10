@@ -91,7 +91,7 @@ async fn main() {
     let (ui_message_sender, ui_message_receiver) = unbounded();
 
     let config = InsanityConfig {
-        denoise: opts.denoise,
+        denoise: opts.deez_nuts,
         ui_message_sender: ui_message_sender.clone(),
         music: opts.music,
         sample_rate: opts.sample_rate,
