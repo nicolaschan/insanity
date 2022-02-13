@@ -1361,6 +1361,7 @@ dependencies = [
  "nanoid",
  "nnnoiseless",
  "openssl",
+ "opus",
  "rand 0.8.4",
  "rcgen",
  "reqwest",
@@ -1932,6 +1933,26 @@ dependencies = [
  "openssl-src",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "opus"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e9059a7daf1e6665eb88c4a95ca9ff393a6d276fd66e9d85191280d7e5ec18b"
+dependencies = [
+ "libc",
+ "opus-sys",
+]
+
+[[package]]
+name = "opus-sys"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad8b294f482f7972fa466b1c64d5a564e4ee6975599d80483ee4fa83f25b6ec"
+dependencies = [
+ "libc",
+ "pkg-config",
 ]
 
 [[package]]
@@ -3377,7 +3398,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "veq"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/udpp.git#65b31dfea9499e475c87912407772f1a8c4c3cc2"
+source = "git+https://github.com/nicolaschan/udpp.git#918ded136098bc4bde16f649da9bd4f4db486422"
 dependencies = [
  "async-std",
  "async-trait",

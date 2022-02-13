@@ -8,10 +8,10 @@ use cpal::Sample;
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
 
-use crate::{protocol::ProtocolMessage, realtime_buffer::RealTimeBuffer};
+use crate::realtime_buffer::RealTimeBuffer;
 
 pub const AUDIO_CHUNK_SIZE: usize = 480;
-pub const AUDIO_CHANNELS: u16 = 1;
+pub const AUDIO_CHANNELS: u16 = 2;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct AudioFormat {
@@ -53,10 +53,6 @@ impl AudioChunk {
             audio_data: self.audio_data.clone(),
             audio_format: format,
         }
-    }
-    pub async fn write_to_stream(&self, stream: &mut Vec<u8>) -> Result<(), std::io::Error> {
-        let protocol_message = ProtocolMessage::AudioChunk(self.clone());
-        protocol_message.write_to_stream(stream).await
     }
 }
 

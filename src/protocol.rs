@@ -2,7 +2,6 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryInto;
 use std::io::{Error, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
@@ -10,11 +9,11 @@ use stunclient::StunClient;
 
 use std::time::Duration;
 
-use crate::processor::AudioChunk;
+use crate::clerver::AudioFrame;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProtocolMessage {
-    AudioChunk(AudioChunk),
+    AudioFrame(AudioFrame),
     IdentityDeclaration(PeerIdentity),
     PeerDiscovery(Vec<PeerIdentity>),
 }

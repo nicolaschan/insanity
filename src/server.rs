@@ -1,24 +1,8 @@
-use std::convert::TryInto;
-use std::error::Error;
-use std::fs::File;
-
-use std::marker::Send;
-use std::net::UdpSocket;
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, SystemTime};
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Sample, SampleFormat, Stream};
+use cpal::{Device, Sample, SampleFormat, Stream, SampleRate};
 use crossbeam::channel::{unbounded, Receiver, Sender};
-use futures_util::StreamExt;
-use veq::veq::VeqSocket;
-use wav::BitDepth::Sixteen;
 
-use crate::clerver::start_clerver;
-use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
-use crate::protocol::ProtocolMessage;
-use crate::tui::{Peer, PeerStatus, TuiEvent, TuiMessage};
+use crate::processor::AUDIO_CHANNELS;
 use crate::InsanityConfig;
 
 fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
@@ -36,20 +20,22 @@ fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Send
         .unwrap()
 }
 
-fn setup_input_stream(device: Device, sender: Sender<f32>) -> Stream {
-    let supported_configs_range = device.supported_input_configs().unwrap();
-    let supported_config = find_stereo_input(supported_configs_range)
-        .unwrap()
-        .with_sample_rate(cpal::SampleRate(48000));
-    let sample_format = supported_config.sample_format();
-    let config = supported_config.into();
-    // println!("Input {:?}", config);
-
+fn setup_input_stream(sample_format: SampleFormat, config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
     match sample_format {
         SampleFormat::F32 => run_input::<f32>(config, device, sender),
         SampleFormat::I16 => run_input::<i16>(config, device, sender),
         SampleFormat::U16 => run_input::<u16>(config, device, sender),
     }
+}
+
+fn get_input_config(device: &Device) -> (SampleFormat, cpal::StreamConfig) {
+    let supported_configs_range = device.supported_input_configs().unwrap();
+    let supported_config_range = find_stereo_input(supported_configs_range)
+        .unwrap();
+    let max_sample_rate = supported_config_range.max_sample_rate();
+    let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
+    let sample_format = supported_config.sample_format();
+    (sample_format, supported_config.into())
 }
 
 fn find_stereo_input(
@@ -65,27 +51,6 @@ fn find_stereo_input(
     }
     something
 }
-
-// async fn make_quic_server(udp: UdpSocket) -> Result<Incoming, Box<dyn Error>> {
-//     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-//     let cert_der = cert.serialize_der().unwrap();
-//     let priv_key = cert.serialize_private_key_der();
-//     let priv_key = PrivateKey::from_der(&priv_key)?;
-
-//     let mut transport_config = TransportConfig::default();
-//     transport_config.max_concurrent_uni_streams(10000).unwrap();
-//     let mut server_config = ServerConfig::default();
-//     server_config.transport = Arc::new(transport_config);
-//     let mut cfg_builder = ServerConfigBuilder::new(server_config);
-//     let cert = Certificate::from_der(&cert_der)?;
-//     cfg_builder.certificate(CertificateChain::from_certs(vec![cert]), priv_key)?;
-//     let server_config = cfg_builder.build();
-
-//     let mut endpoint_builder = Endpoint::builder();
-//     endpoint_builder.listen(server_config);
-//     let (_endpoint, incoming) = endpoint_builder.with_socket(udp).unwrap();
-//     Ok(incoming)
-// }
 
 // async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
 //     mut conn: NewConnection,
@@ -146,23 +111,33 @@ pub struct CpalStreamReceiver {
     #[allow(dead_code)]
     input_stream: send_safe::SendWrapperThread<Stream>,
     input_receiver: Receiver<f32>,
+    sample_rate: u32,
+    channels: u16,
 }
 
 pub trait AudioReceiver {
     fn receiver(&mut self) -> &mut Receiver<f32>;
+    fn sample_rate(&self) -> u32;
+    fn channels(&self) -> u16;
 }
 
 impl AudioReceiver for CpalStreamReceiver {
     fn receiver(&mut self) -> &mut Receiver<f32> {
         &mut self.input_receiver
     }
-}
-
-impl AudioReceiver for Receiver<f32> {
-    fn receiver(&mut self) -> &mut Receiver<f32> {
-        self
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn channels(&self) -> u16 {
+        self.channels
     }
 }
+
+// impl AudioReceiver for Receiver<f32> {
+//     fn receiver(&mut self) -> &mut Receiver<f32> {
+//         self
+//     }
+// }
 
 pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
     let host = cpal::default_host();
@@ -172,8 +147,10 @@ pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
         .expect("No default input device");
     // If input_stream is dropped, then the input_receiver stops receiving data.
     // CpalStreamReceiver keeps input_stream alive along with input_receiver.
+    let (sample_format, config) = get_input_config(&input_device);
+    let config_clone = config.clone();
     let mut wrapper =
-        send_safe::SendWrapperThread::new(move || setup_input_stream(input_device, input_sender));
+        send_safe::SendWrapperThread::new(move || setup_input_stream(sample_format, config_clone, input_device, input_sender));
     wrapper
         .execute(|input_stream| {
             input_stream.play().unwrap();
@@ -182,6 +159,8 @@ pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
     CpalStreamReceiver {
         input_receiver,
         input_stream: wrapper,
+        sample_rate: config.sample_rate.0,
+        channels: config.channels
     }
 }
 

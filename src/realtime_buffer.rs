@@ -3,6 +3,7 @@ pub struct RealTimeBuffer<T> {
     current_size: usize,
     max_size: usize,
     buffer: Vec<Option<T>>,
+    prev: u128,
 }
 
 impl<T> RealTimeBuffer<T> {
@@ -14,6 +15,7 @@ impl<T> RealTimeBuffer<T> {
         RealTimeBuffer {
             head: 0,
             current_size: 0,
+            prev: 0,
             max_size,
             buffer,
         }
@@ -26,6 +28,10 @@ impl<T> RealTimeBuffer<T> {
         self.len() == 0
     }
     pub fn set(&mut self, index: u128, data: T) {
+        if self.prev + 1 != index {
+            println!("dropped packet");
+        }
+        self.prev = index;
         if index < self.head {
             return; // you got data you already skipped in the past
         }

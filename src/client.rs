@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use cpal::traits::DeviceTrait;
-use cpal::{Device, Sample, SampleFormat, Stream};
-use tokio::sync::futures;
+use cpal::{Device, Sample, SampleFormat, Stream, StreamConfig, SampleRate};
 
 use crate::processor::AudioProcessor;
 use crate::processor::AUDIO_CHANNELS;
@@ -36,20 +35,23 @@ fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStr
     something
 }
 
-pub fn setup_output_stream(device: Device, processor: Arc<AudioProcessor<'static>>) -> Stream {
-    let supported_configs_range = device.supported_output_configs().unwrap();
-    let supported_config = find_stereo(supported_configs_range)
-        .unwrap()
-        .with_sample_rate(cpal::SampleRate(48000));
-    let sample_format = supported_config.sample_format();
-    let config = supported_config.into();
-    // println!("Output {:?}", config);
-
+pub fn setup_output_stream(sample_format: SampleFormat, config: StreamConfig, device: Device, processor: Arc<AudioProcessor<'static>>) -> Stream {
     match sample_format {
         SampleFormat::F32 => run_output::<f32>(config, device, processor),
         SampleFormat::I16 => run_output::<i16>(config, device, processor),
         SampleFormat::U16 => run_output::<u16>(config, device, processor),
     }
+}
+
+pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
+    let supported_configs_range = device.supported_output_configs().unwrap();
+    let supported_config_range = find_stereo(supported_configs_range)
+        .unwrap();
+    let max_sample_rate = supported_config_range.max_sample_rate();
+    let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
+    let sample_format = supported_config.sample_format();
+    let config = supported_config.into();
+    (sample_format, config)
 }
 
 // async fn run_client(peer_socket_addr: SocketAddr) -> VeqSocket {
