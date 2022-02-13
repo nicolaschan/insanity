@@ -57,7 +57,7 @@ fn with_c(
     warp::any().map(move || connection_manager.clone())
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>) {
     let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
     let peers = warp::path!("peers")

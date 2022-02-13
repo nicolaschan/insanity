@@ -4,6 +4,7 @@ use cpal::traits::{HostTrait, StreamTrait};
 
 use opus::{Application, Channels, Encoder, Decoder};
 use serde::{Deserialize, Serialize};
+use tokio::join;
 use veq::veq::VeqSessionAlias;
 
 use crate::{
@@ -32,7 +33,11 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
     let mut sequence_number = 0;
 
     loop {
-        let samples: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
+        let mut samples = Vec::new();
+        for _ in 0..(AUDIO_CHUNK_SIZE * 2) {
+            samples.push(receiver.recv().await.unwrap());
+        }
+        // let samples: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
         let opus_frame = encoder.encode_vec_float(&samples[..], 65535).unwrap();
         // let opus_frame = bincode::serialize(&samples).unwrap();
         let frame = AudioFrame(sequence_number, opus_frame);
@@ -83,7 +88,8 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
             match message {
                 ProtocolMessage::AudioFrame(frame) => {
                     let packet = frame.1;
-                    let mut buf = vec![0f32; AUDIO_CHUNK_SIZE * 2];
+                    let len = decoder.get_nb_samples(&packet[..]).unwrap() * (config.channels as usize);
+                    let mut buf = vec![0f32; len];
                     decoder.decode_float(&packet[..], &mut buf[..], false).unwrap();
                     // let audio_data = bincode::deserialize(&packet).unwrap();
                     let audio_format = AudioFormat::new(config.channels, config.sample_rate.0);
@@ -98,7 +104,6 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
     }
 }
 
-#[tokio::main]
 async fn run_sender_sync<R: AudioReceiver + Send + 'static>(
     conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
@@ -112,7 +117,7 @@ pub async fn start_clerver<R: AudioReceiver + Send + 'static>(
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
     let conn_clone = conn.clone();
-    thread::spawn(move || run_sender_sync(conn_clone, make_receiver));
+    let sender = tokio::task::spawn(async move { run_sender(conn_clone, make_receiver).await });
     let receiver = run_receiver(conn, enable_denoise);
-    receiver.await;
+    join!(sender, receiver);
 }

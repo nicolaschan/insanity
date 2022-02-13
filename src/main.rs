@@ -58,7 +58,7 @@ struct Opts {
     dir: Option<String>,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     let opts: Opts = Opts::parse();
 

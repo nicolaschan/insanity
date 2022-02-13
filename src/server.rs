@@ -1,11 +1,12 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Sample, SampleFormat, Stream, SampleRate};
+use cpal::{Device, Sample, SampleFormat, Stream, SampleRate, StreamConfig, BufferSize};
 use crossbeam::channel::{unbounded, Receiver, Sender};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel, UnboundedSender};
 
 use crate::processor::AUDIO_CHANNELS;
 use crate::InsanityConfig;
 
-fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
+fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: UnboundedSender<f32>) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the input audio stream: {}", err);
     device
         .build_input_stream(
@@ -20,7 +21,7 @@ fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Send
         .unwrap()
 }
 
-fn setup_input_stream(sample_format: SampleFormat, config: cpal::StreamConfig, device: Device, sender: Sender<f32>) -> Stream {
+fn setup_input_stream(sample_format: SampleFormat, config: cpal::StreamConfig, device: Device, sender: UnboundedSender<f32>) -> Stream {
     match sample_format {
         SampleFormat::F32 => run_input::<f32>(config, device, sender),
         SampleFormat::I16 => run_input::<i16>(config, device, sender),
@@ -33,6 +34,7 @@ fn get_input_config(device: &Device) -> (SampleFormat, cpal::StreamConfig) {
     let supported_config_range = find_stereo_input(supported_configs_range)
         .unwrap();
     let max_sample_rate = supported_config_range.max_sample_rate();
+
     let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
     let sample_format = supported_config.sample_format();
     (sample_format, supported_config.into())
@@ -110,19 +112,19 @@ fn find_stereo_input(
 pub struct CpalStreamReceiver {
     #[allow(dead_code)]
     input_stream: send_safe::SendWrapperThread<Stream>,
-    input_receiver: Receiver<f32>,
+    input_receiver: UnboundedReceiver<f32>,
     sample_rate: u32,
     channels: u16,
 }
 
 pub trait AudioReceiver {
-    fn receiver(&mut self) -> &mut Receiver<f32>;
+    fn receiver(&mut self) -> &mut UnboundedReceiver<f32>;
     fn sample_rate(&self) -> u32;
     fn channels(&self) -> u16;
 }
 
 impl AudioReceiver for CpalStreamReceiver {
-    fn receiver(&mut self) -> &mut Receiver<f32> {
+    fn receiver(&mut self) -> &mut UnboundedReceiver<f32> {
         &mut self.input_receiver
     }
     fn sample_rate(&self) -> u32 {
@@ -141,7 +143,7 @@ impl AudioReceiver for CpalStreamReceiver {
 
 pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
     let host = cpal::default_host();
-    let (input_sender, input_receiver) = unbounded();
+    let (input_sender, input_receiver) = unbounded_channel();
     let input_device = host
         .default_input_device()
         .expect("No default input device");
