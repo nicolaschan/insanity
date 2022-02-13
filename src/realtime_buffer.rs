@@ -42,13 +42,14 @@ impl<T> RealTimeBuffer<T> {
         }
     }
     pub fn next_item(&mut self) -> Option<T> {
-        let head_index = (self.head % self.max_size as u128) as usize;
+        let mut head_index = (self.head % self.max_size as u128) as usize;
 
         let mut current = None;
         if self.current_size > 0 {
             while current.is_none() {
                 current = self.buffer[head_index].take();
                 self.head += 1;
+                head_index = (self.head % self.max_size as u128) as usize;
             }
             self.current_size -= 1;
             current

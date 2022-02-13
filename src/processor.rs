@@ -6,7 +6,6 @@ use std::sync::Mutex;
 
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
-use quinn::SendStream;
 use serde::{Deserialize, Serialize};
 
 use crate::{protocol::ProtocolMessage, realtime_buffer::RealTimeBuffer};
@@ -55,7 +54,7 @@ impl AudioChunk {
             audio_format: format,
         }
     }
-    pub async fn write_to_stream(&self, stream: &mut SendStream) -> Result<(), std::io::Error> {
+    pub async fn write_to_stream(&self, stream: &mut Vec<u8>) -> Result<(), std::io::Error> {
         let protocol_message = ProtocolMessage::AudioChunk(self.clone());
         protocol_message.write_to_stream(stream).await
     }
@@ -196,7 +195,7 @@ impl AudioProcessor<'_> {
         AudioProcessor {
             enable_denoise,
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
-            chunk_buffer: Mutex::new(RealTimeBuffer::new(50)),
+            chunk_buffer: Mutex::new(RealTimeBuffer::new(10)),
             audio_buffer: Mutex::new(VecDeque::new()),
         }
     }

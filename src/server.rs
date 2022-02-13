@@ -12,10 +12,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream};
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use futures_util::StreamExt;
-use quinn::{
-    Certificate, CertificateChain, Endpoint, Incoming, NewConnection, PrivateKey, ServerConfig,
-    ServerConfigBuilder, TransportConfig,
-};
+use veq::veq::VeqSocket;
 use wav::BitDepth::Sixteen;
 
 use crate::clerver::start_clerver;
@@ -69,81 +66,81 @@ fn find_stereo_input(
     something
 }
 
-async fn make_quic_server(udp: UdpSocket) -> Result<Incoming, Box<dyn Error>> {
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
-    let cert_der = cert.serialize_der().unwrap();
-    let priv_key = cert.serialize_private_key_der();
-    let priv_key = PrivateKey::from_der(&priv_key)?;
+// async fn make_quic_server(udp: UdpSocket) -> Result<Incoming, Box<dyn Error>> {
+//     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+//     let cert_der = cert.serialize_der().unwrap();
+//     let priv_key = cert.serialize_private_key_der();
+//     let priv_key = PrivateKey::from_der(&priv_key)?;
 
-    let mut transport_config = TransportConfig::default();
-    transport_config.max_concurrent_uni_streams(10000).unwrap();
-    let mut server_config = ServerConfig::default();
-    server_config.transport = Arc::new(transport_config);
-    let mut cfg_builder = ServerConfigBuilder::new(server_config);
-    let cert = Certificate::from_der(&cert_der)?;
-    cfg_builder.certificate(CertificateChain::from_certs(vec![cert]), priv_key)?;
-    let server_config = cfg_builder.build();
+//     let mut transport_config = TransportConfig::default();
+//     transport_config.max_concurrent_uni_streams(10000).unwrap();
+//     let mut server_config = ServerConfig::default();
+//     server_config.transport = Arc::new(transport_config);
+//     let mut cfg_builder = ServerConfigBuilder::new(server_config);
+//     let cert = Certificate::from_der(&cert_der)?;
+//     cfg_builder.certificate(CertificateChain::from_certs(vec![cert]), priv_key)?;
+//     let server_config = cfg_builder.build();
 
-    let mut endpoint_builder = Endpoint::builder();
-    endpoint_builder.listen(server_config);
-    let (_endpoint, incoming) = endpoint_builder.with_socket(udp).unwrap();
-    Ok(incoming)
-}
+//     let mut endpoint_builder = Endpoint::builder();
+//     endpoint_builder.listen(server_config);
+//     let (_endpoint, incoming) = endpoint_builder.with_socket(udp).unwrap();
+//     Ok(incoming)
+// }
 
-async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
-    mut conn: NewConnection,
-    denoise: bool,
-    make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
-    ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
-) {
-    let peer_address = conn.connection.remote_address();
-    if let Some(Ok(mut recv)) = conn.uni_streams.next().await {
-        let message = ProtocolMessage::read_from_stream(&mut recv).await.unwrap();
-        if let ProtocolMessage::IdentityDeclaration(identity) = message {
-            if ui_message_sender
-                .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-                    identity.canonical_name.clone(),
-                    Peer {
-                        name: identity.canonical_name,
-                        status: PeerStatus::Connected(peer_address),
-                    },
-                )))
-                .is_ok()
-            {}
-        }
-    }
-    start_clerver(conn, denoise, make_receiver).await;
-    if ui_message_sender
-        .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-            peer_address.to_string(),
-            Peer {
-                name: peer_address.to_string(),
-                status: PeerStatus::Disconnected,
-            },
-        )))
-        .is_ok()
-    {}
-}
+// async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
+//     mut conn: NewConnection,
+//     denoise: bool,
+//     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
+//     ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
+// ) {
+//     let peer_address = conn.connection.remote_address();
+//     if let Some(Ok(mut recv)) = conn.uni_streams.next().await {
+//         let message = ProtocolMessage::read_from_stream(&mut recv).await.unwrap();
+//         if let ProtocolMessage::IdentityDeclaration(identity) = message {
+//             if ui_message_sender
+//                 .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+//                     identity.canonical_name.clone(),
+//                     Peer {
+//                         name: identity.canonical_name,
+//                         status: PeerStatus::Connected(peer_address),
+//                     },
+//                 )))
+//                 .is_ok()
+//             {}
+//         }
+//     }
+//     start_clerver(conn, denoise, make_receiver).await;
+//     if ui_message_sender
+//         .send(TuiEvent::Message(TuiMessage::UpdatePeer(
+//             peer_address.to_string(),
+//             Peer {
+//                 name: peer_address.to_string(),
+//                 status: PeerStatus::Disconnected,
+//             },
+//         )))
+//         .is_ok()
+//     {}
+// }
 
-pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
-    udp: UdpSocket,
-    make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
-    config: InsanityConfig,
-) {
-    let mut incoming = make_quic_server(udp).await.unwrap();
-    loop {
-        let incoming_conn = incoming.next().await.expect("1");
-        let conn = incoming_conn.await.expect("2");
-        let make_receiver_clone = make_receiver.clone();
-        let ui_message_sender_clone = config.ui_message_sender.clone();
-        tokio::spawn(start_clerver_with_ui(
-            conn,
-            config.denoise,
-            make_receiver_clone,
-            ui_message_sender_clone,
-        ));
-    }
-}
+// pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
+//     socket: VeqSocket,
+//     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
+//     config: InsanityConfig,
+// ) {
+//     loop {
+//         var incoming
+//         let incoming_conn = incoming.next().await.expect("1");
+//         let conn = incoming_conn.await.expect("2");
+//         let make_receiver_clone = make_receiver.clone();
+//         let ui_message_sender_clone = config.ui_message_sender.clone();
+//         tokio::spawn(start_clerver_with_ui(
+//             conn,
+//             config.denoise,
+//             make_receiver_clone,
+//             ui_message_sender_clone,
+//         ));
+//     }
+// }
 
 pub struct CpalStreamReceiver {
     #[allow(dead_code)]
@@ -188,37 +185,37 @@ pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
     }
 }
 
-fn make_music_receiver(path: String) -> Receiver<f32> {
-    let (input_sender, input_receiver) = unbounded();
-    thread::spawn(move || {
-        let mut file = File::open(path).expect("Could not open sound file");
-        let (_, data) = wav::read(&mut file).expect("Could not read sound (wav file)");
-        // println!("Music: {:?}", header);
-        if let Sixteen(vec) = data {
-            let mut now = SystemTime::now();
-            for chunk in vec.chunks_exact(AUDIO_CHUNK_SIZE * (AUDIO_CHANNELS as usize)) {
-                for val in chunk {
-                    let s: i16 = Sample::from(val);
-                    if input_sender.send(s.to_f32()).is_ok() {}
-                }
-                while now.elapsed().unwrap()
-                    < Duration::from_millis(((AUDIO_CHUNK_SIZE * 1000) / 48000).try_into().unwrap())
-                {
-                    std::hint::spin_loop();
-                }
-                now = SystemTime::now()
-            }
-        }
-    });
-    input_receiver
-}
+// fn make_music_receiver(path: String) -> Receiver<f32> {
+//     let (input_sender, input_receiver) = unbounded();
+//     thread::spawn(move || {
+//         let mut file = File::open(path).expect("Could not open sound file");
+//         let (_, data) = wav::read(&mut file).expect("Could not read sound (wav file)");
+//         // println!("Music: {:?}", header);
+//         if let Sixteen(vec) = data {
+//             let mut now = SystemTime::now();
+//             for chunk in vec.chunks_exact(AUDIO_CHUNK_SIZE * (AUDIO_CHANNELS as usize)) {
+//                 for val in chunk {
+//                     let s: i16 = Sample::from(val);
+//                     if input_sender.send(s.to_f32()).is_ok() {}
+//                 }
+//                 while now.elapsed().unwrap()
+//                     < Duration::from_millis(((AUDIO_CHUNK_SIZE * 1000) / 48000).try_into().unwrap())
+//                 {
+//                     std::hint::spin_loop();
+//                 }
+//                 now = SystemTime::now()
+//             }
+//         }
+//     });
+//     input_receiver
+// }
 
-#[tokio::main]
-pub async fn start_server(udp: UdpSocket, config: InsanityConfig) {
-    if let Some(path) = config.music.clone() {
-        start_server_with_receiver(udp, move || make_music_receiver(path), config).await;
-    } else {
-        let config_clone = config.clone();
-        start_server_with_receiver(udp, move || make_audio_receiver(config_clone), config).await;
-    }
-}
+// #[tokio::main]
+// pub async fn start_server(socket: VeqSocket, config: InsanityConfig) {
+//     if let Some(path) = config.music.clone() {
+//         start_server_with_receiver(socket, move || make_music_receiver(path), config).await;
+//     } else {
+//         let config_clone = config.clone();
+//         start_server_with_receiver(socket, move || make_audio_receiver(config_clone), config).await;
+//     }
+// }

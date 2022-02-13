@@ -2,8 +2,7 @@ use std::{sync::Arc, thread};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
-use futures_util::StreamExt;
-use quinn::{Connection, IncomingUniStreams, NewConnection};
+use veq::veq::VeqSessionAlias;
 
 use crate::{
     client::setup_output_stream,
@@ -15,33 +14,30 @@ use crate::{
 // A clerver is a CLient + sERVER.
 
 pub async fn run_sender<R: AudioReceiver + Send + 'static>(
-    conn: Connection,
+    mut conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
     let mut audio_receiver = make_receiver();
     let receiver = audio_receiver.receiver();
     let mut sequence_number = 0;
 
-    // println!("{:?}", audio_receiver);
-    while let Ok(mut send) = conn.open_uni().await {
-        loop {
-            let data: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
-            let format = AudioFormat::new(2, 48000);
-            let audio_chunk = AudioChunk::new(sequence_number, format, data);
-            let write_result = audio_chunk.write_to_stream(&mut send).await;
-            // if send.finish().await.is_ok() {}
-            sequence_number = match write_result {
-                Ok(_) => sequence_number + 1,
-                Err(_) => {
-                    break;
-                }
+    loop {
+        let data: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
+        let format = AudioFormat::new(2, 48000);
+        let audio_chunk = AudioChunk::new(sequence_number, format, data);
+        let mut buf = Vec::new();
+        let write_result = audio_chunk.write_to_stream(&mut buf).await;
+        conn.send(buf).await.unwrap();
+        sequence_number = match write_result {
+            Ok(_) => sequence_number + 1,
+            Err(_) => {
+                break;
             }
         }
-        if send.finish().await.is_ok() {}
     }
 }
 
-pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: bool) {
+pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
     let processor = Arc::new(AudioProcessor::new(enable_denoise));
@@ -55,8 +51,8 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
         })
         .unwrap();
 
-    while let Ok(mut recv) = uni_streams.next().await.unwrap() {
-        while let Ok(message) = ProtocolMessage::read_from_stream(&mut recv).await {
+    while let Ok(mut packet) = conn.recv().await {
+        if let Ok(message) = ProtocolMessage::read_from_stream(&mut packet).await {
             match message {
                 ProtocolMessage::AudioChunk(chunk) => {
                     processor.handle_incoming(chunk);
@@ -70,19 +66,19 @@ pub async fn run_receiver(mut uni_streams: IncomingUniStreams, enable_denoise: b
 
 #[tokio::main]
 async fn run_sender_sync<R: AudioReceiver + Send + 'static>(
-    conn: Connection,
+    conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
     run_sender(conn, make_receiver).await;
 }
 
 pub async fn start_clerver<R: AudioReceiver + Send + 'static>(
-    conn: NewConnection,
+    conn: VeqSessionAlias,
     enable_denoise: bool,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
-    let connection = conn.connection.clone();
-    thread::spawn(|| run_sender_sync(connection, make_receiver));
-    let receiver = run_receiver(conn.uni_streams, enable_denoise);
+    let conn_clone = conn.clone();
+    thread::spawn(move || run_sender_sync(conn_clone, make_receiver));
+    let receiver = run_receiver(conn, enable_denoise);
     receiver.await;
 }

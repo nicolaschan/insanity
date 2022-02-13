@@ -1,10 +1,9 @@
 use itertools::Itertools;
-use quinn::{ReadExactError, RecvStream, SendStream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
-use std::io::Error;
+use std::io::{Error, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::sync::{Arc, Mutex};
 use stunclient::StunClient;
@@ -43,27 +42,17 @@ pub struct PeerState {
 }
 
 impl ProtocolMessage {
-    pub async fn write_to_stream(&self, stream: &mut SendStream) -> Result<(), Error> {
+    pub async fn write_to_stream<W>(&self, mut stream: &mut W) -> Result<(), Error>
+    where
+        W: Write,
+    {
         let serialized = bincode::serialize(self).unwrap();
-        let mut compressed: Vec<u8> = Vec::new();
-        if zstd::stream::copy_encode(&serialized[..], &mut compressed, 1).is_ok() {}
-        let encoded_length: u64 = compressed.len().try_into().unwrap();
-        stream.write_all(&encoded_length.to_le_bytes()).await?;
-        stream.write_all(&compressed).await?;
+        if zstd::stream::copy_encode(&serialized[..], &mut stream, 1).is_ok() {}
         Ok(())
     }
-    pub async fn read_from_stream(
-        stream: &mut RecvStream,
-    ) -> Result<ProtocolMessage, ReadExactError> {
-        let mut length_buffer = [0; 8];
-        stream.read_exact(&mut length_buffer).await?;
-        let length = u64::from_le_bytes(length_buffer);
-        let mut compressed_data_buffer = vec![0; length as usize];
-        stream
-            .read_exact(&mut compressed_data_buffer)
-            .await?;
+    pub async fn read_from_stream(stream: &mut Vec<u8>) -> Result<ProtocolMessage, Vec<u8>> {
         let mut data_buffer = Vec::new();
-        if zstd::stream::copy_decode(&compressed_data_buffer[..], &mut data_buffer).is_ok() {}
+        if zstd::stream::copy_decode(&stream[..], &mut data_buffer).is_ok() {}
         let protocol_message = bincode::deserialize(&data_buffer[..]).expect("Protocol violation");
         Ok(protocol_message)
     }
