@@ -9,10 +9,11 @@ use std::{
 
 use clap::Parser;
 use crossbeam::channel::unbounded;
+use futures_util::stream::FuturesUnordered;
 use insanity::{
     clerver::start_clerver,
     coordinator::{start_coordinator, start_tor},
-    protocol::ConnectionManager,
+    protocol::{ConnectionManager, OnionAddress},
     server::make_audio_receiver,
     tui::{TuiEvent, TuiMessage},
     InsanityConfig,
@@ -20,6 +21,7 @@ use insanity::{
 use std::iter::Iterator;
 use uuid::Uuid;
 use veq::veq::{ConnectionInfo, VeqSocket};
+use futures_util::StreamExt;
 
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -82,57 +84,75 @@ async fn main() {
     let onion_address = start_tor(&tor_dir, socks_port, coordinator_port);
 
     let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{}", socks_port)).unwrap();
-    let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).proxy(proxy).build().unwrap();
 
-    let connection_manager = ConnectionManager::new(&onion_address, client);
     let mut socket = VeqSocket::bind(format!("0.0.0.0:{}", opts.listen_port))
         .await
         .unwrap();
+    let mut connection_manager = ConnectionManager::new(socket.connection_info(), client, onion_address.clone());
+    println!("Own address: {:?}", onion_address);
+    let connection_manager_arc = Arc::new(connection_manager);
 
-    let encoded_conn_info = base64::encode(bincode::serialize(&socket.connection_info()).unwrap());
+    let connection_manager_arc_clone = connection_manager_arc.clone();
+    tokio::spawn(async move { start_coordinator(coordinator_port, connection_manager_arc_clone).await });
+
+    // opts.peer
+    // .iter()
+    // .map(|addr| OnionAddress::new(addr.clone()).unwrap())
+    // .zip(std::iter::repeat((socket, opts.deez_nuts, connection_manager_arc)))
+    // .map(|(peer, (mut socket, denoise, conn_manager))| async move {
+    //     println!("hi from {:?}", peer);
+    //     if let Some(session) = conn_manager.session(&mut socket, &peer).await {
+    //         println!("got a session! {:?}", peer);
+    //         start_clerver(session, denoise).await;
+    //     }
+    //     return ();
+    // })
+    // .collect::<FuturesUnordered<_>>()
+    // .collect::<Vec<_>>()
+    // .await;
+
+    let mut compressed = Vec::new();
+    zstd::stream::copy_encode(&bincode::serialize(&socket.connection_info()).unwrap()[..], &mut compressed, 10).unwrap();
+    let encoded_conn_info = base65536::encode(&compressed, None);
     println!("ConnectionInfo: {}", encoded_conn_info);
     let stdin = std::io::stdin();
     let mut remote_conn_info = String::new();
     stdin.lock().read_line(&mut remote_conn_info).unwrap();
     let remote_conn_info = remote_conn_info.replace("\n", "").replace(" ", "");
+    let remote_conn_info_compressed = &base65536::decode(&remote_conn_info, true).unwrap();
+    let mut remote_conn_info_bytes = Vec::new();
+    zstd::stream::copy_decode(&remote_conn_info_compressed[..], &mut remote_conn_info_bytes).unwrap();
     let peer_data: ConnectionInfo =
-        bincode::deserialize(&base64::decode(remote_conn_info).unwrap()).unwrap();
+        bincode::deserialize(&remote_conn_info_bytes).unwrap();
     let conn = socket.connect(Uuid::from_u128(0), peer_data).await;
     println!("connected");
 
-    let connection_manager_arc = Arc::new(connection_manager);
-    let connection_manager_arc_clone = connection_manager_arc.clone();
-    thread::spawn(move || start_coordinator(coordinator_port, connection_manager_arc_clone));
+    start_clerver(conn, opts.deez_nuts).await;
 
-    let (ui_message_sender, ui_message_receiver) = unbounded();
+    // let (ui_message_sender, ui_message_receiver) = unbounded();
 
-    let config = InsanityConfig {
-        denoise: opts.deez_nuts,
-        ui_message_sender: ui_message_sender.clone(),
-        music: opts.music,
-        sample_rate: opts.sample_rate,
-        channels: opts.channels,
-    };
+    // let config = InsanityConfig {
+    //     denoise: opts.deez_nuts,
+    //     ui_message_sender: ui_message_sender.clone(),
+    //     music: opts.music,
+    //     sample_rate: opts.sample_rate,
+    //     channels: opts.channels,
+    // };
 
-    let mut tui_join_handle: Option<JoinHandle<()>> = None;
-    if !opts.no_tui {
-        let ui_message_sender_clone = ui_message_sender.clone();
-        let ui_message_receiver_clone = ui_message_receiver.clone();
-        tui_join_handle = Some(thread::spawn(move || {
-            insanity::tui::start(ui_message_sender_clone, ui_message_receiver_clone)
-        }));
-        ui_message_sender
-            .send(TuiEvent::Message(TuiMessage::SetOwnAddress(Some(
-                onion_address.clone(),
-            ))))
-            .unwrap();
-    }
-
-    let config_clone = config.clone();
-    start_clerver(conn, config.denoise, move || {
-        make_audio_receiver(config_clone)
-    })
-    .await;
+    // let mut tui_join_handle: Option<JoinHandle<()>> = None;
+    // if !opts.no_tui {
+    //     let ui_message_sender_clone = ui_message_sender.clone();
+    //     let ui_message_receiver_clone = ui_message_receiver.clone();
+    //     tui_join_handle = Some(thread::spawn(move || {
+    //         insanity::tui::start(ui_message_sender_clone, ui_message_receiver_clone)
+    //     }));
+    //     ui_message_sender
+    //         .send(TuiEvent::Message(TuiMessage::SetOwnAddress(Some(
+    //             onion_address.0.clone(),
+    //         ))))
+    //         .unwrap();
+    // }
 
     // let config_clone = config.clone();
 
@@ -178,12 +198,7 @@ async fn main() {
     //     });
     // }
 
-    match tui_join_handle {
-        Some(handle) => {
-            handle.join().unwrap();
-        }
-        None => loop {
-            std::thread::sleep(Duration::from_millis(1000));
-        },
+    loop {
+        tokio::time::sleep(Duration::from_millis(1000)).await;
     }
 }

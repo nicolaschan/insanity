@@ -1,12 +1,13 @@
-use std::{fs::File, io::Read, path::Path, sync::Arc, thread, time::Duration};
+use std::{convert::Infallible, fs::File, io::Read, path::Path, sync::Arc, thread, time::Duration};
 
+use tokio::sync::Mutex;
 use warp::Filter;
 
 use libtor::{HiddenServiceVersion, LogDestination, LogLevel, Tor, TorAddress, TorFlag};
 
-use crate::protocol::ConnectionManager;
+use crate::protocol::{ConnectionManager, OnionAddress};
 
-pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> String {
+pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> OnionAddress{
     let tor_data_dir = config_dir.join("tor-data");
     let tor_hs_dir = config_dir.join("tor-hs");
     let tor_hs_dir_clone = tor_hs_dir.clone();
@@ -30,6 +31,7 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> S
                 LogDestination::File(tor_log_path.to_string_lossy().to_string()),
             ))
             .flag(TorFlag::Quiet())
+            // .flag(TorFlag::Log(LogLevel::Debug))
             .start()
             .unwrap();
     });
@@ -41,7 +43,7 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> S
                 tor_hostname_file
                     .read_to_string(&mut hostname_contents)
                     .unwrap();
-                return format!("{}:{}", hostname_contents.trim(), coordinator_port);
+                return OnionAddress::new(format!("{}:{}", hostname_contents.trim(), coordinator_port)).unwrap();
             }
             Err(_) => {
                 println!("Waiting for tor to start...");
@@ -53,29 +55,41 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> S
 
 fn with_c(
     connection_manager: Arc<ConnectionManager>,
-) -> impl Filter<Extract = (Arc<ConnectionManager>,), Error = std::convert::Infallible> + Clone {
+) -> impl Filter<Extract = (Arc<ConnectionManager>,), Error = std::convert::Infallible> + Clone
+{
     warp::any().map(move || connection_manager.clone())
 }
 
-#[tokio::main(flavor = "current_thread")]
-pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>) {
+pub async fn start_coordinator(
+    coordinator_port: u16,
+    connection_manager: Arc<ConnectionManager>,
+) {
     let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
-    let peers = warp::path!("peers")
-        .and(with_c(connection_manager.clone()))
-        .map(|c: Arc<ConnectionManager>| {
-            let peers = c.peer_list();
-            warp::reply::json(&peers)
-        });
-    let addresses = warp::path!("addresses")
-        .and(with_c(connection_manager.clone()))
-        .map(|c: Arc<ConnectionManager>| warp::reply::json(&c.addresses));
     // let peers_post = warp::post()
     //     .and(warp::path("peers"))
     //     .and(warp::body::json())
     //     .map(|peer: String| {
     //         warp::reply::json(&peer)
     //     });
-    let routes = hello.or(peers).or(addresses);
+    let info = warp::path("info")
+        .and(with_c(connection_manager.clone()))
+        .and_then(|c: Arc<ConnectionManager>| async move {
+            println!("warp: info");
+            Ok::<_, Infallible>(warp::reply::json(&c.conn_info))
+        });
+    let id = warp::post()
+        .and(warp::path!("id" / OnionAddress))
+        .and(with_c(connection_manager.clone()))
+        .and_then(
+            |peer: OnionAddress, c: Arc<ConnectionManager>| async move {
+                println!("warp: id");
+                match c.id_or_new(peer).await {
+                    Some(id) => Ok(warp::reply::json(&id)),
+                    None => Err(warp::reject::reject()),
+                }
+            },
+        );
+    let routes = hello.or(info).or(id);
     warp::serve(routes)
         .run(([127, 0, 0, 1], coordinator_port))
         .await;

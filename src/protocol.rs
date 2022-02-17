@@ -1,13 +1,15 @@
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use tokio::join;
+use tokio::sync::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
 use std::io::{Error, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::sync::{Arc, Mutex};
-use stunclient::StunClient;
-
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
+use uuid::Uuid;
+use veq::veq::{ConnectionInfo, VeqSession, VeqSocket, VeqSessionAlias};
 
 use crate::clerver::AudioFrame;
 
@@ -63,11 +65,79 @@ pub enum ConnectMessage {
     Pong(String),
 }
 
+#[derive(PartialEq, Eq, Hash, Clone, Serialize, Deserialize, Debug)]
+pub struct OnionAddress(String);
+impl OnionAddress {
+    pub fn new(str: String) -> Option<OnionAddress> {
+        Some(OnionAddress(str))
+    }
+}
+impl FromStr for OnionAddress {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(OnionAddress(s.to_string()))
+    }
+}
+
+pub struct OnionSidechannel {
+    client: reqwest::Client,
+    own: OnionAddress,
+    peer: OnionAddress,
+    session_id: Arc<Mutex<Option<Uuid>>>,
+}
+
+impl OnionSidechannel {
+    pub fn new(client: reqwest::Client, own: OnionAddress, peer: OnionAddress) -> OnionSidechannel {
+        OnionSidechannel { client, own, peer, session_id: Arc::new(Mutex::new(None)) }
+    }
+    async fn update_id(&mut self, id: Uuid) {
+        let mut guard = self.session_id.lock().await;
+        if guard.is_none() {
+            *guard = Some(id);
+        }
+    }
+    pub async fn id(&mut self) -> Result<Uuid, reqwest::Error> {
+        let id = {
+            let guard = self.session_id.lock().await;
+            *guard
+        };
+        match id {
+            Some(id) => Ok(id),
+            None => {
+                let url = format!("http://{}/id/{}", self.peer.0, self.own.0);
+                let response = self.client.post(&url).send().await?;
+                let id: Uuid = response.json().await?;
+                self.update_id(id).await;
+                Ok(id)
+            }
+        }
+    }
+    pub async fn id_or_new(&mut self) -> Uuid {
+        let mut guard = self.session_id.lock().await;
+        match *guard {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4();
+                *guard = Some(id);
+                return id;
+            }
+        }
+    }
+    pub async fn peer_info(&self) -> Result<ConnectionInfo, reqwest::Error> {
+        let url = format!("http://{}/info", self.peer.0);
+        let response = self.client.get(&url).send().await?;
+        response.json().await
+    }
+}
+
 pub struct ConnectionManager {
-    pub identity: String,
-    pub peers: Arc<Mutex<HashMap<String, PeerState>>>,
+    pub conn_info: ConnectionInfo,
+    pub peers: Arc<Mutex<HashMap<OnionAddress, ConnectionInfo>>>,
+    pub sidechannels: Arc<Mutex<HashMap<OnionAddress, Arc<Mutex<OnionSidechannel>>>>>,
     pub addresses: HashSet<SocketAddr>,
     pub client: reqwest::Client,
+    pub own_address: OnionAddress,
 }
 
 pub fn socket_addr(string: String) -> SocketAddr {
@@ -81,84 +151,86 @@ pub fn socket_addr(string: String) -> SocketAddr {
 }
 
 impl ConnectionManager {
-    pub fn new(own_name: &str, client: reqwest::Client) -> ConnectionManager {
+    pub fn new(conn_info: ConnectionInfo, client: reqwest::Client, own_address: OnionAddress) -> ConnectionManager {
         let peers = Arc::new(Mutex::new(HashMap::new()));
-
-        // manager.add_peer(own_name);
+        // tokio::spawn(async move {
+        //     loop {
+        //         println!("hi");
+        //         tokio::time::sleep(Duration::from_millis(1000)).await;
+        //     }
+        // });
         ConnectionManager {
-            identity: own_name.to_string(),
+            conn_info,
             peers,
+            sidechannels: Arc::new(Mutex::new(HashMap::new())),
             addresses: HashSet::new(),
             client,
+            own_address,
         }
     }
-    pub fn peer_list(&self) -> Vec<String> {
-        let peers_guard = self.peers.lock().unwrap();
-        peers_guard.keys().into_iter().cloned().collect_vec()
+    pub async fn id_or_new(&self, peer: OnionAddress) -> Option<Uuid> {
+        let sidechannel = {
+            let mut sc_guard = self.sidechannels.lock().await;
+            sc_guard.get_mut(&peer)?.clone()
+        };
+        let mut guard = sidechannel.lock().await;
+        Some(guard.id_or_new().await)
     }
-    pub async fn add_peer(&self, canonical_name: &str) -> Vec<String> {
-        let identity = PeerIdentity::new(canonical_name);
-        {
-            let mut peers_guard = self.peers.lock().unwrap();
-            peers_guard.insert(
-                canonical_name.to_string(),
-                PeerState {
-                    _identity: identity.clone(),
-                    _sockets: HashMap::new(),
-                },
-            );
-        }
-        let url = format!("http://{}/addresses", canonical_name);
-        loop {
-            match self.client.get(&url).send().await {
-                Ok(response) => {
-                    let response: Result<Value, reqwest::Error> = response.json().await;
-                    match response {
-                        Ok(addresses_json) => {
-                            let addresses: Vec<String> = addresses_json
-                                .as_array()
-                                .unwrap()
-                                .iter()
-                                .map(|x| x.as_str().unwrap().to_string())
-                                .collect_vec();
-                            return addresses;
-                        }
-                        Err(_e) => {}
-                    }
-                }
-                Err(_e) => {}
+    pub async fn get_sidechannel(&self, peer: &OnionAddress) -> Arc<Mutex<OnionSidechannel>> {
+        let sidechannel = {
+            let mut sc_guard = self.sidechannels.lock().await;
+            sc_guard.get_mut(&peer).map(|x| x.clone())
+        };
+        println!("sc {:?}", peer);
+        match sidechannel {
+            Some(sc) => sc,
+            None => {
+                let sidechannel = Arc::new(Mutex::new(OnionSidechannel::new(self.client.clone(), self.own_address.clone(), peer.clone())));
+                let mut sc_guard = self.sidechannels.lock().await;
+                sc_guard.insert(peer.clone(), sidechannel.clone());
+                sidechannel
             }
-            tokio::time::sleep(Duration::from_millis(1000)).await;
         }
     }
-    pub fn create_server_socket(&mut self, port: u16) -> UdpSocket {
-        let local_addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
-        let udp = UdpSocket::bind(local_addr).unwrap();
-        let stun_client = StunClient::with_google_stun_server();
-        let external_addr = stun_client.query_external_address(&udp).unwrap();
-        self.addresses.insert(external_addr);
-        udp
+    pub async fn session(&self, socket: &mut VeqSocket, peer: &OnionAddress) -> Option<VeqSessionAlias> {
+        let sc = self.get_sidechannel(peer).await;
+        println!("wat {:?}", peer);
+        let (id, info) = {
+            let id = {
+                let mut inner_id = None;
+                loop {
+                    println!("id {:?}", peer);
+                    let mut guard = sc.lock().await;
+                    match guard.id().await {
+                        Ok(got_id) => {
+                            inner_id = Some(got_id);
+                            break;
+                        },
+                        Err(e) => { println!("e {:?}", e); }
+                    };
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
+                }
+                inner_id.unwrap()
+            };
+            let info = {
+                let mut inner_peer_info = None;
+                loop {
+                    println!("info {:?}", peer);
+                    let mut guard = sc.lock().await;
+                    match guard.peer_info().await {
+                        Ok(got_peer_info) => {
+                            inner_peer_info = Some(got_peer_info);
+                            break;
+                        },
+                        Err(e) => { println!("e {:?}", e); }
+                    }
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
+                }
+                inner_peer_info.unwrap()
+            };
+            (id, info) 
+        };
+        println!("connecting to {:?} with id {:?}", peer, id);
+        Some(socket.connect(id, info).await)
     }
-    fn _establish_socket(&mut self, address: SocketAddr) -> Result<UdpSocket, Error> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.set_read_timeout(Some(Duration::from_millis(1000)))?;
-        let ping_message = ConnectMessage::Ping(self.identity.clone());
-        let serialized_ping_message = bincode::serialize(&ping_message).unwrap();
-        socket.send_to(&serialized_ping_message[..], address)?;
-        let mut buf = Vec::new();
-        match socket.recv_from(&mut buf) {
-            Ok((_len, _src)) => Ok(socket),
-            Err(e) => Err(e),
-        }
-    }
-    // pub fn peer_socket(&mut self, peer_name: String) -> Option<UdpSocket> {
-    //     let peer = self.peers.get(&peer_name).unwrap();
-    //     for address in peer.identity.addresses.clone() {
-    //         match self.establish_socket(socket_addr(address)) {
-    //             Ok(socket) => { return Some(socket) },
-    //             Err(_) => {},
-    //         }
-    //     }
-    //     None
-    // }
 }

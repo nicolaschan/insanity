@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cpal::traits::DeviceTrait;
-use cpal::{Device, Sample, SampleFormat, Stream, StreamConfig, SampleRate, BufferSize};
+use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
 
 use crate::processor::AudioProcessor;
 use crate::processor::AUDIO_CHANNELS;
@@ -35,7 +35,12 @@ fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStr
     something
 }
 
-pub fn setup_output_stream(sample_format: SampleFormat, config: StreamConfig, device: Device, processor: Arc<AudioProcessor<'static>>) -> Stream {
+pub fn setup_output_stream(
+    sample_format: SampleFormat,
+    config: StreamConfig,
+    device: Device,
+    processor: Arc<AudioProcessor<'static>>,
+) -> Stream {
     match sample_format {
         SampleFormat::F32 => run_output::<f32>(config, device, processor),
         SampleFormat::I16 => run_output::<i16>(config, device, processor),
@@ -45,18 +50,21 @@ pub fn setup_output_stream(sample_format: SampleFormat, config: StreamConfig, de
 
 pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
     let supported_configs_range = device.supported_output_configs().unwrap();
-    let supported_config_range = find_stereo(supported_configs_range)
-        .unwrap();
+    let supported_config_range = find_stereo(supported_configs_range).unwrap();
     let max_sample_rate = supported_config_range.max_sample_rate();
 
     let channels = supported_config_range.channels();
     let sample_rate = std::cmp::min(SampleRate(48000), max_sample_rate);
     let buffer_size = match supported_config_range.buffer_size() {
-        cpal::SupportedBufferSize::Range { min, max } => BufferSize::Default,
+        cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
     };
     println!("buffer size: {:?}", buffer_size);
-    let supported_config = StreamConfig { channels, sample_rate, buffer_size };
+    let supported_config = StreamConfig {
+        channels,
+        sample_rate,
+        buffer_size,
+    };
 
     // let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
     let sample_format = supported_config_range.sample_format();

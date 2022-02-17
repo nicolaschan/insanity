@@ -1,12 +1,15 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Sample, SampleFormat, Stream, SampleRate, StreamConfig, BufferSize};
-use crossbeam::channel::{unbounded, Receiver, Sender};
-use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel, UnboundedSender};
+use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::processor::AUDIO_CHANNELS;
 use crate::InsanityConfig;
 
-fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: UnboundedSender<f32>) -> Stream {
+fn run_input<T: Sample>(
+    config: cpal::StreamConfig,
+    device: Device,
+    sender: UnboundedSender<f32>,
+) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the input audio stream: {}", err);
     device
         .build_input_stream(
@@ -21,7 +24,12 @@ fn run_input<T: Sample>(config: cpal::StreamConfig, device: Device, sender: Unbo
         .unwrap()
 }
 
-fn setup_input_stream(sample_format: SampleFormat, config: cpal::StreamConfig, device: Device, sender: UnboundedSender<f32>) -> Stream {
+fn setup_input_stream(
+    sample_format: SampleFormat,
+    config: cpal::StreamConfig,
+    device: Device,
+    sender: UnboundedSender<f32>,
+) -> Stream {
     match sample_format {
         SampleFormat::F32 => run_input::<f32>(config, device, sender),
         SampleFormat::I16 => run_input::<i16>(config, device, sender),
@@ -31,12 +39,24 @@ fn setup_input_stream(sample_format: SampleFormat, config: cpal::StreamConfig, d
 
 fn get_input_config(device: &Device) -> (SampleFormat, cpal::StreamConfig) {
     let supported_configs_range = device.supported_input_configs().unwrap();
-    let supported_config_range = find_stereo_input(supported_configs_range)
-        .unwrap();
+    let supported_config_range = find_stereo_input(supported_configs_range).unwrap();
     let max_sample_rate = supported_config_range.max_sample_rate();
 
-    let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
-    let sample_format = supported_config.sample_format();
+    let channels = supported_config_range.channels();
+    let sample_rate = std::cmp::min(SampleRate(48000), max_sample_rate);
+    let buffer_size = match supported_config_range.buffer_size() {
+        cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
+        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
+    };
+    println!("buffer size: {:?}", buffer_size);
+    let supported_config = StreamConfig {
+        channels,
+        sample_rate,
+        buffer_size,
+    };
+
+    // let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
+    let sample_format = supported_config_range.sample_format();
     (sample_format, supported_config.into())
 }
 
@@ -141,7 +161,7 @@ impl AudioReceiver for CpalStreamReceiver {
 //     }
 // }
 
-pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
+pub fn make_audio_receiver() -> CpalStreamReceiver {
     let host = cpal::default_host();
     let (input_sender, input_receiver) = unbounded_channel();
     let input_device = host
@@ -151,8 +171,9 @@ pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
     // CpalStreamReceiver keeps input_stream alive along with input_receiver.
     let (sample_format, config) = get_input_config(&input_device);
     let config_clone = config.clone();
-    let mut wrapper =
-        send_safe::SendWrapperThread::new(move || setup_input_stream(sample_format, config_clone, input_device, input_sender));
+    let mut wrapper = send_safe::SendWrapperThread::new(move || {
+        setup_input_stream(sample_format, config_clone, input_device, input_sender)
+    });
     wrapper
         .execute(|input_stream| {
             input_stream.play().unwrap();
@@ -162,7 +183,7 @@ pub fn make_audio_receiver(_config: InsanityConfig) -> CpalStreamReceiver {
         input_receiver,
         input_stream: wrapper,
         sample_rate: config.sample_rate.0,
-        channels: config.channels
+        channels: config.channels,
     }
 }
 
