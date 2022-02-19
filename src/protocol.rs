@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use tokio::join;
 use tokio::sync::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
@@ -9,7 +8,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
-use veq::veq::{ConnectionInfo, VeqSession, VeqSocket, VeqSessionAlias};
+use veq::veq::{ConnectionInfo, VeqSocket, VeqSessionAlias};
 
 use crate::clerver::AudioFrame;
 
@@ -51,7 +50,7 @@ impl ProtocolMessage {
         if zstd::stream::copy_encode(&serialized[..], &mut stream, 1).is_ok() {}
         Ok(())
     }
-    pub async fn read_from_stream(stream: &mut Vec<u8>) -> Result<ProtocolMessage, Vec<u8>> {
+    pub async fn read_from_stream(stream: &mut [u8]) -> Result<ProtocolMessage, Vec<u8>> {
         let mut data_buffer = Vec::new();
         if zstd::stream::copy_decode(&stream[..], &mut data_buffer).is_ok() {}
         let protocol_message = bincode::deserialize(&data_buffer[..]).expect("Protocol violation");
@@ -120,7 +119,7 @@ impl OnionSidechannel {
             None => {
                 let id = Uuid::new_v4();
                 *guard = Some(id);
-                return id;
+                id
             }
         }
     }
@@ -179,7 +178,7 @@ impl ConnectionManager {
     pub async fn get_sidechannel(&self, peer: &OnionAddress) -> Arc<Mutex<OnionSidechannel>> {
         let sidechannel = {
             let mut sc_guard = self.sidechannels.lock().await;
-            sc_guard.get_mut(&peer).map(|x| x.clone())
+            sc_guard.get_mut(peer).map(|x| x.clone())
         };
         println!("sc {:?}", peer);
         match sidechannel {
@@ -216,7 +215,7 @@ impl ConnectionManager {
                 let mut inner_peer_info = None;
                 loop {
                     println!("info {:?}", peer);
-                    let mut guard = sc.lock().await;
+                    let guard = sc.lock().await;
                     match guard.peer_info().await {
                         Ok(got_peer_info) => {
                             inner_peer_info = Some(got_peer_info);

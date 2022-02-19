@@ -3,31 +3,24 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::Arc,
-    thread::{self, JoinHandle},
     time::Duration,
 };
 
 use clap::Parser;
-use crossbeam::channel::unbounded;
-use futures_util::stream::FuturesUnordered;
 use insanity::{
     clerver::start_clerver,
     coordinator::{start_coordinator, start_tor},
-    protocol::{ConnectionManager, OnionAddress},
-    server::make_audio_receiver,
-    tui::{TuiEvent, TuiMessage},
-    InsanityConfig,
+    protocol::{ConnectionManager},
 };
 use std::iter::Iterator;
 use uuid::Uuid;
 use veq::veq::{ConnectionInfo, VeqSocket};
-use futures_util::StreamExt;
 
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Opts {
     #[clap(short, long)]
-    deez_nuts: bool,
+    denoise: bool,
 
     #[clap(long)]
     music: Option<String>,
@@ -89,7 +82,7 @@ async fn main() {
     let mut socket = VeqSocket::bind(format!("0.0.0.0:{}", opts.listen_port))
         .await
         .unwrap();
-    let mut connection_manager = ConnectionManager::new(socket.connection_info(), client, onion_address.clone());
+    let connection_manager = ConnectionManager::new(socket.connection_info(), client, onion_address.clone());
     println!("Own address: {:?}", onion_address);
     let connection_manager_arc = Arc::new(connection_manager);
 
@@ -119,7 +112,7 @@ async fn main() {
     let stdin = std::io::stdin();
     let mut remote_conn_info = String::new();
     stdin.lock().read_line(&mut remote_conn_info).unwrap();
-    let remote_conn_info = remote_conn_info.replace("\n", "").replace(" ", "");
+    let remote_conn_info = remote_conn_info.replace('\n', "").replace(' ', "");
     let remote_conn_info_compressed = &base65536::decode(&remote_conn_info, true).unwrap();
     let mut remote_conn_info_bytes = Vec::new();
     zstd::stream::copy_decode(&remote_conn_info_compressed[..], &mut remote_conn_info_bytes).unwrap();
@@ -128,7 +121,7 @@ async fn main() {
     let conn = socket.connect(Uuid::from_u128(0), peer_data).await;
     println!("connected");
 
-    start_clerver(conn, opts.deez_nuts).await;
+    start_clerver(conn, opts.denoise).await;
 
     // let (ui_message_sender, ui_message_receiver) = unbounded();
 

@@ -68,8 +68,7 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
 
     // let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
     let sample_format = supported_config_range.sample_format();
-    let config = supported_config.into();
-    (sample_format, config)
+    (sample_format, supported_config)
 }
 
 // async fn run_client(peer_socket_addr: SocketAddr) -> VeqSocket {

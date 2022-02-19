@@ -119,7 +119,7 @@ pub async fn start_clerver(
 ) {
     let conn_clone = conn.clone();
     let sender = tokio::task::spawn(async move {
-        run_sender(conn_clone, move || make_audio_receiver()).await;
+        run_sender(conn_clone, make_audio_receiver).await;
     });
     let receiver = run_receiver(conn, enable_denoise);
     let (r, _) = join!(sender, receiver);

@@ -1,6 +1,5 @@
 use std::{convert::Infallible, fs::File, io::Read, path::Path, sync::Arc, thread, time::Duration};
 
-use tokio::sync::Mutex;
 use warp::Filter;
 
 use libtor::{HiddenServiceVersion, LogDestination, LogLevel, Tor, TorAddress, TorFlag};

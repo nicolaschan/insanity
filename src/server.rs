@@ -3,7 +3,6 @@ use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamC
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::processor::AUDIO_CHANNELS;
-use crate::InsanityConfig;
 
 fn run_input<T: Sample>(
     config: cpal::StreamConfig,
@@ -57,7 +56,7 @@ fn get_input_config(device: &Device) -> (SampleFormat, cpal::StreamConfig) {
 
     // let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
     let sample_format = supported_config_range.sample_format();
-    (sample_format, supported_config.into())
+    (sample_format, supported_config)
 }
 
 fn find_stereo_input(
