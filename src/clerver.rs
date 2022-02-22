@@ -11,7 +11,7 @@ use crate::{
     client::{get_output_config, setup_output_stream},
     processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
     protocol::ProtocolMessage,
-    server::{AudioReceiver, make_audio_receiver},
+    server::{make_audio_receiver, AudioReceiver}, resampler::ResampledAudioReceiver,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,23 +23,26 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
     mut conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
-    let mut audio_receiver = make_receiver();
+    let audio_receiver = make_receiver();
     let sample_rate = audio_receiver.sample_rate();
-    let channels = u16_to_channels(audio_receiver.channels());
+    let channels_count = audio_receiver.channels();
+    let channels = u16_to_channels(channels_count);
 
     println!(
         "sending sample_rate: {:?}, channels: {:?}",
         sample_rate, channels
     );
-    let mut encoder = Encoder::new(sample_rate, channels, Application::Audio).unwrap();
-    let receiver = audio_receiver.receiver();
+    let mut audio_receiver = ResampledAudioReceiver::new(audio_receiver, 48000);
+    let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
     let mut sequence_number = 0;
 
-    loop {
+      loop {
         let mut samples = Vec::new();
-        for _ in 0..(AUDIO_CHUNK_SIZE * 2) {
-            samples.push(receiver.recv().await.unwrap());
+        let sample_count = AUDIO_CHUNK_SIZE * channels_count as usize;
+        for _ in 0..sample_count {
+            samples.push(audio_receiver.next().await);
         }
+
         // let samples: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
         let opus_frame = encoder.encode_vec_float(&samples[..], 65535).unwrap();
         // let opus_frame = bincode::serialize(&samples).unwrap();
@@ -113,10 +116,7 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
     }
 }
 
-pub async fn start_clerver(
-    conn: VeqSessionAlias,
-    enable_denoise: bool,
-) {
+pub async fn start_clerver(conn: VeqSessionAlias, enable_denoise: bool) {
     let conn_clone = conn.clone();
     let sender = tokio::task::spawn(async move {
         run_sender(conn_clone, make_audio_receiver).await;

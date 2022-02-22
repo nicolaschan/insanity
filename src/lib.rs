@@ -11,6 +11,7 @@ pub mod protocol;
 pub mod realtime_buffer;
 pub mod server;
 pub mod tui;
+pub mod resampler;
 
 #[derive(Clone)]
 pub struct InsanityConfig {

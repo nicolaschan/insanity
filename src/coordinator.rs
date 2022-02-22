@@ -6,7 +6,7 @@ use libtor::{HiddenServiceVersion, LogDestination, LogLevel, Tor, TorAddress, To
 
 use crate::protocol::{ConnectionManager, OnionAddress};
 
-pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> OnionAddress{
+pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> OnionAddress {
     let tor_data_dir = config_dir.join("tor-data");
     let tor_hs_dir = config_dir.join("tor-hs");
     let tor_hs_dir_clone = tor_hs_dir.clone();
@@ -42,7 +42,12 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> O
                 tor_hostname_file
                     .read_to_string(&mut hostname_contents)
                     .unwrap();
-                return OnionAddress::new(format!("{}:{}", hostname_contents.trim(), coordinator_port)).unwrap();
+                return OnionAddress::new(format!(
+                    "{}:{}",
+                    hostname_contents.trim(),
+                    coordinator_port
+                ))
+                .unwrap();
             }
             Err(_) => {
                 println!("Waiting for tor to start...");
@@ -54,15 +59,11 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> O
 
 fn with_c(
     connection_manager: Arc<ConnectionManager>,
-) -> impl Filter<Extract = (Arc<ConnectionManager>,), Error = std::convert::Infallible> + Clone
-{
+) -> impl Filter<Extract = (Arc<ConnectionManager>,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || connection_manager.clone())
 }
 
-pub async fn start_coordinator(
-    coordinator_port: u16,
-    connection_manager: Arc<ConnectionManager>,
-) {
+pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>) {
     let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
     // let peers_post = warp::post()
     //     .and(warp::path("peers"))
@@ -79,15 +80,13 @@ pub async fn start_coordinator(
     let id = warp::post()
         .and(warp::path!("id" / OnionAddress))
         .and(with_c(connection_manager.clone()))
-        .and_then(
-            |peer: OnionAddress, c: Arc<ConnectionManager>| async move {
-                println!("warp: id");
-                match c.id_or_new(peer).await {
-                    Some(id) => Ok(warp::reply::json(&id)),
-                    None => Err(warp::reject::reject()),
-                }
-            },
-        );
+        .and_then(|peer: OnionAddress, c: Arc<ConnectionManager>| async move {
+            println!("warp: id");
+            match c.id_or_new(peer).await {
+                Some(id) => Ok(warp::reply::json(&id)),
+                None => Err(warp::reject::reject()),
+            }
+        });
     let routes = hello.or(info).or(id);
     warp::serve(routes)
         .run(([127, 0, 0, 1], coordinator_port))

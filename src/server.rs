@@ -2,6 +2,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+use async_trait::async_trait;
+
 use crate::processor::AUDIO_CHANNELS;
 
 fn run_input<T: Sample>(
@@ -136,15 +138,17 @@ pub struct CpalStreamReceiver {
     channels: u16,
 }
 
+#[async_trait]
 pub trait AudioReceiver {
-    fn receiver(&mut self) -> &mut UnboundedReceiver<f32>;
+    async fn next(&mut self) -> f32;
     fn sample_rate(&self) -> u32;
     fn channels(&self) -> u16;
 }
 
+#[async_trait]
 impl AudioReceiver for CpalStreamReceiver {
-    fn receiver(&mut self) -> &mut UnboundedReceiver<f32> {
-        &mut self.input_receiver
+    async fn next(&mut self) -> f32 {
+        self.input_receiver.recv().await.unwrap()
     }
     fn sample_rate(&self) -> u32 {
         self.sample_rate

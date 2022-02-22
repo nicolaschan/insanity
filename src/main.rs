@@ -1,20 +1,16 @@
-use std::{
-    io::BufRead,
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{io::BufRead, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 
 use clap::Parser;
+use futures_util::stream::FuturesUnordered;
 use insanity::{
     clerver::start_clerver,
     coordinator::{start_coordinator, start_tor},
-    protocol::{ConnectionManager},
+    protocol::{ConnectionManager, OnionAddress},
 };
 use std::iter::Iterator;
 use uuid::Uuid;
 use veq::veq::{ConnectionInfo, VeqSocket};
+use futures_util::StreamExt;
 
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -77,36 +73,48 @@ async fn main() {
     let onion_address = start_tor(&tor_dir, socks_port, coordinator_port);
 
     let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{}", socks_port)).unwrap();
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).proxy(proxy).build().unwrap();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .proxy(proxy)
+        .build()
+        .unwrap();
 
     let mut socket = VeqSocket::bind(format!("0.0.0.0:{}", opts.listen_port))
         .await
         .unwrap();
-    let connection_manager = ConnectionManager::new(socket.connection_info(), client, onion_address.clone());
+    let connection_manager =
+        ConnectionManager::new(socket.connection_info(), client, onion_address.clone());
     println!("Own address: {:?}", onion_address);
     let connection_manager_arc = Arc::new(connection_manager);
 
     let connection_manager_arc_clone = connection_manager_arc.clone();
-    tokio::spawn(async move { start_coordinator(coordinator_port, connection_manager_arc_clone).await });
+    tokio::spawn(
+        async move { start_coordinator(coordinator_port, connection_manager_arc_clone).await },
+    );
 
-    // opts.peer
-    // .iter()
-    // .map(|addr| OnionAddress::new(addr.clone()).unwrap())
-    // .zip(std::iter::repeat((socket, opts.deez_nuts, connection_manager_arc)))
-    // .map(|(peer, (mut socket, denoise, conn_manager))| async move {
-    //     println!("hi from {:?}", peer);
-    //     if let Some(session) = conn_manager.session(&mut socket, &peer).await {
-    //         println!("got a session! {:?}", peer);
-    //         start_clerver(session, denoise).await;
-    //     }
-    //     return ();
-    // })
-    // .collect::<FuturesUnordered<_>>()
-    // .collect::<Vec<_>>()
-    // .await;
+    opts.peer
+    .iter()
+    .map(|addr| OnionAddress::new(addr.clone()).unwrap())
+    .zip(std::iter::repeat((socket.clone(), opts.denoise, connection_manager_arc)))
+    .map(|(peer, (mut socket, denoise, conn_manager))| async move {
+        println!("hi from {:?}", peer);
+        if let Some(session) = conn_manager.session(&mut socket, &peer).await {
+            println!("got a session! {:?}", peer);
+            start_clerver(session, denoise).await;
+        }
+        return ();
+    })
+    .collect::<FuturesUnordered<_>>()
+    .collect::<Vec<_>>()
+    .await;
 
     let mut compressed = Vec::new();
-    zstd::stream::copy_encode(&bincode::serialize(&socket.connection_info()).unwrap()[..], &mut compressed, 10).unwrap();
+    zstd::stream::copy_encode(
+        &bincode::serialize(&socket.connection_info()).unwrap()[..],
+        &mut compressed,
+        10,
+    )
+    .unwrap();
     let encoded_conn_info = base65536::encode(&compressed, None);
     println!("ConnectionInfo: {}", encoded_conn_info);
     let stdin = std::io::stdin();
@@ -115,9 +123,12 @@ async fn main() {
     let remote_conn_info = remote_conn_info.replace('\n', "").replace(' ', "");
     let remote_conn_info_compressed = &base65536::decode(&remote_conn_info, true).unwrap();
     let mut remote_conn_info_bytes = Vec::new();
-    zstd::stream::copy_decode(&remote_conn_info_compressed[..], &mut remote_conn_info_bytes).unwrap();
-    let peer_data: ConnectionInfo =
-        bincode::deserialize(&remote_conn_info_bytes).unwrap();
+    zstd::stream::copy_decode(
+        &remote_conn_info_compressed[..],
+        &mut remote_conn_info_bytes,
+    )
+    .unwrap();
+    let peer_data: ConnectionInfo = bincode::deserialize(&remote_conn_info_bytes).unwrap();
     let conn = socket.connect(Uuid::from_u128(0), peer_data).await;
     println!("connected");
 

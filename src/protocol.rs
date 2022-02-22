@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::join;
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::io::{Error, Write};
@@ -7,8 +7,9 @@ use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use uuid::Uuid;
-use veq::veq::{ConnectionInfo, VeqSocket, VeqSessionAlias};
+use veq::veq::{ConnectionInfo, VeqSessionAlias, VeqSocket};
 
 use crate::clerver::AudioFrame;
 
@@ -79,6 +80,7 @@ impl FromStr for OnionAddress {
     }
 }
 
+#[derive(Clone)]
 pub struct OnionSidechannel {
     client: reqwest::Client,
     own: OnionAddress,
@@ -88,7 +90,12 @@ pub struct OnionSidechannel {
 
 impl OnionSidechannel {
     pub fn new(client: reqwest::Client, own: OnionAddress, peer: OnionAddress) -> OnionSidechannel {
-        OnionSidechannel { client, own, peer, session_id: Arc::new(Mutex::new(None)) }
+        OnionSidechannel {
+            client,
+            own,
+            peer,
+            session_id: Arc::new(Mutex::new(None)),
+        }
     }
     async fn update_id(&mut self, id: Uuid) {
         let mut guard = self.session_id.lock().await;
@@ -133,7 +140,7 @@ impl OnionSidechannel {
 pub struct ConnectionManager {
     pub conn_info: ConnectionInfo,
     pub peers: Arc<Mutex<HashMap<OnionAddress, ConnectionInfo>>>,
-    pub sidechannels: Arc<Mutex<HashMap<OnionAddress, Arc<Mutex<OnionSidechannel>>>>>,
+    pub sidechannels: Arc<Mutex<HashMap<OnionAddress, OnionSidechannel>>>,
     pub addresses: HashSet<SocketAddr>,
     pub client: reqwest::Client,
     pub own_address: OnionAddress,
@@ -150,7 +157,11 @@ pub fn socket_addr(string: String) -> SocketAddr {
 }
 
 impl ConnectionManager {
-    pub fn new(conn_info: ConnectionInfo, client: reqwest::Client, own_address: OnionAddress) -> ConnectionManager {
+    pub fn new(
+        conn_info: ConnectionInfo,
+        client: reqwest::Client,
+        own_address: OnionAddress,
+    ) -> ConnectionManager {
         let peers = Arc::new(Mutex::new(HashMap::new()));
         // tokio::spawn(async move {
         //     loop {
@@ -168,14 +179,13 @@ impl ConnectionManager {
         }
     }
     pub async fn id_or_new(&self, peer: OnionAddress) -> Option<Uuid> {
-        let sidechannel = {
+        let mut sidechannel = {
             let mut sc_guard = self.sidechannels.lock().await;
             sc_guard.get_mut(&peer)?.clone()
         };
-        let mut guard = sidechannel.lock().await;
-        Some(guard.id_or_new().await)
+        Some(sidechannel.id_or_new().await)
     }
-    pub async fn get_sidechannel(&self, peer: &OnionAddress) -> Arc<Mutex<OnionSidechannel>> {
+    pub async fn get_sidechannel(&self, peer: &OnionAddress) -> OnionSidechannel {
         let sidechannel = {
             let mut sc_guard = self.sidechannels.lock().await;
             sc_guard.get_mut(peer).map(|x| x.clone())
@@ -184,52 +194,51 @@ impl ConnectionManager {
         match sidechannel {
             Some(sc) => sc,
             None => {
-                let sidechannel = Arc::new(Mutex::new(OnionSidechannel::new(self.client.clone(), self.own_address.clone(), peer.clone())));
+                let sidechannel = OnionSidechannel::new(
+                    self.client.clone(),
+                    self.own_address.clone(),
+                    peer.clone(),
+                );
                 let mut sc_guard = self.sidechannels.lock().await;
                 sc_guard.insert(peer.clone(), sidechannel.clone());
                 sidechannel
             }
         }
     }
-    pub async fn session(&self, socket: &mut VeqSocket, peer: &OnionAddress) -> Option<VeqSessionAlias> {
-        let sc = self.get_sidechannel(peer).await;
+    pub async fn session(
+        &self,
+        socket: &mut VeqSocket,
+        peer: &OnionAddress,
+    ) -> Option<VeqSessionAlias> {
+        let mut sc = self.get_sidechannel(peer).await;
+        let mut sc_clone = sc.clone();
         println!("wat {:?}", peer);
-        let (id, info) = {
-            let id = {
-                let mut inner_id = None;
-                loop {
-                    println!("id {:?}", peer);
-                    let mut guard = sc.lock().await;
-                    match guard.id().await {
-                        Ok(got_id) => {
-                            inner_id = Some(got_id);
-                            break;
-                        },
-                        Err(e) => { println!("e {:?}", e); }
-                    };
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-                }
-                inner_id.unwrap()
-            };
-            let info = {
-                let mut inner_peer_info = None;
-                loop {
-                    println!("info {:?}", peer);
-                    let guard = sc.lock().await;
-                    match guard.peer_info().await {
-                        Ok(got_peer_info) => {
-                            inner_peer_info = Some(got_peer_info);
-                            break;
-                        },
-                        Err(e) => { println!("e {:?}", e); }
-                    }
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-                }
-                inner_peer_info.unwrap()
-            };
-            (id, info) 
-        };
+        let (id, info) = join!(wait_for_id(&mut sc), wait_for_peer_info(&mut sc_clone));
         println!("connecting to {:?} with id {:?}", peer, id);
         Some(socket.connect(id, info).await)
+    }
+}
+
+async fn wait_for_id(sidechannel: &mut OnionSidechannel) -> Uuid {
+    loop {
+        match sidechannel.id().await {
+            Ok(id) => return id,
+            Err(e) => {
+                println!("e {:?}", e);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+    }
+}
+
+async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> ConnectionInfo {
+    loop {
+        match sidechannel.peer_info().await {
+            Ok(info) => return info,
+            Err(e) => {
+                println!("e {:?}", e);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(1000)).await;
     }
 }
