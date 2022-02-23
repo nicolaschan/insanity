@@ -1275,7 +1275,6 @@ dependencies = [
  "libtor",
  "nanoid",
  "nnnoiseless",
- "openssl",
  "opus",
  "rand",
  "reqwest",
