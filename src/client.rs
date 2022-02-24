@@ -59,7 +59,7 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
     };
-    println!("buffer size: {:?}", buffer_size);
+    // println!("buffer size: {:?}", buffer_size);
     let supported_config = StreamConfig {
         channels,
         sample_rate,

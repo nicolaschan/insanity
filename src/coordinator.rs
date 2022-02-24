@@ -74,14 +74,12 @@ pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<Co
     let info = warp::path("info")
         .and(with_c(connection_manager.clone()))
         .and_then(|c: Arc<ConnectionManager>| async move {
-            println!("warp: info");
             Ok::<_, Infallible>(warp::reply::json(&c.conn_info))
         });
     let id = warp::post()
         .and(warp::path!("id" / OnionAddress))
         .and(with_c(connection_manager.clone()))
         .and_then(|peer: OnionAddress, c: Arc<ConnectionManager>| async move {
-            println!("warp: id");
             match c.id_or_new(peer).await {
                 Some(id) => Ok(warp::reply::json(&id)),
                 None => Err(warp::reject::reject()),

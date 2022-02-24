@@ -29,7 +29,7 @@ impl<T> RealTimeBuffer<T> {
     }
     pub fn set(&mut self, index: u128, data: T) {
         if self.prev + 1 != index {
-            println!("dropped packet");
+            // println!("dropped packet");
         }
         self.prev = index;
         if index < self.head {

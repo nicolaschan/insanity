@@ -49,7 +49,7 @@ fn get_input_config(device: &Device) -> (SampleFormat, cpal::StreamConfig) {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
     };
-    println!("buffer size: {:?}", buffer_size);
+    // println!("buffer size: {:?}", buffer_size);
     let supported_config = StreamConfig {
         channels,
         sample_rate,

@@ -35,3 +35,5 @@ reqwest = { version = "0.11", features = ["socks", "json"] }
 serde_json = "1.0.67"
 veq = { git = "https://github.com/nicolaschan/udpp.git" }
 rubato = "0.10.1"
+insanity-tui = { path = "insanity-tui" }
+sha2 = "0.10.2"

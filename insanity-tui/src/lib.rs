@@ -1,11 +1,14 @@
-use std::{cmp::min, collections::HashMap, io};
-
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::{
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use std::{cmp::min, collections::HashMap, error::Error, io, io::Stdout};
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
 };
-use tui::{backend::Backend, Terminal};
+use tui::{backend::Backend, backend::CrosstermBackend, Terminal};
 
 mod render;
 
@@ -69,14 +72,14 @@ impl Editor {
     pub fn backspace(&mut self) {
         if let Some(val) = self.cursor.checked_sub(1) {
             let mut chars: Vec<char> = self.buffer.chars().collect();
-            chars.remove(self.cursor.checked_sub(1).unwrap_or(0));
+            chars.remove(self.cursor.saturating_sub(1));
             self.buffer = chars.iter().collect();
             self.cursor = val;
         }
     }
 
     pub fn left(&mut self) {
-        self.cursor = self.cursor.checked_sub(1).unwrap_or(0);
+        self.cursor = self.cursor.saturating_sub(1);
     }
 
     pub fn right(&mut self) {
@@ -92,7 +95,9 @@ impl Editor {
     }
 
     pub fn delete_word(&mut self) {
-        for _ in 0..(self.cursor.checked_sub(self.previous_word_index()).unwrap_or(0)) {
+        for _ in 0..self
+            .cursor.saturating_sub(self.previous_word_index())
+        {
             self.backspace();
         }
     }
@@ -105,12 +110,10 @@ impl Editor {
                 if let Some(' ') = chars.get(i) {
                     self.cursor = i;
                     return;
-                } 
-            } else {
-                if let Some(c) = chars.get(i) {
-                    if c != &' ' {
-                        found = true;
-                    }
+                }
+            } else if let Some(c) = chars.get(i) {
+                if c != &' ' {
+                    found = true;
                 }
             }
         }
@@ -120,20 +123,18 @@ impl Editor {
     fn previous_word_index(&mut self) -> usize {
         let chars: Vec<char> = self.buffer.chars().collect();
         let mut found = false;
-        for i in (0..self.cursor.checked_sub(1).unwrap_or(0)).rev() {
+        for i in (0..self.cursor.saturating_sub(1)).rev() {
             if found {
                 if let Some(' ') = chars.get(i) {
                     return i + 1;
-                } 
-            } else {
-                if let Some(c) = chars.get(i) {
-                    if c != &' ' {
-                        found = true;
-                    }
+                }
+            } else if let Some(c) = chars.get(i) {
+                if c != &' ' {
+                    found = true;
                 }
             }
         }
-        return 0;
+        0
     }
 
     pub fn previous_word(&mut self) {
@@ -306,4 +307,34 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
             _ => {}
         }
     })
+}
+
+pub async fn start_tui() -> Result<
+    (
+        UnboundedSender<AppEvent>,
+        JoinHandle<Terminal<CrosstermBackend<Stdout>>>,
+    ),
+    Box<dyn Error>,
+> {
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    let app = App::new();
+    let (sender, handle) = get_sender(app, terminal).await;
+    handle_input(sender.clone()).await;
+    Ok((sender, handle))
+}
+
+pub async fn stop_tui(
+    handle: JoinHandle<Terminal<CrosstermBackend<Stdout>>>,
+) -> Result<(), Box<dyn Error>> {
+    let mut terminal = handle.await.unwrap();
+    disable_raw_mode().unwrap();
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
+    terminal.show_cursor().unwrap();
+    Ok(())
 }

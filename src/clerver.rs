@@ -24,14 +24,14 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
     let audio_receiver = make_receiver();
-    let sample_rate = audio_receiver.sample_rate();
+    let _sample_rate = audio_receiver.sample_rate();
     let channels_count = audio_receiver.channels();
     let channels = u16_to_channels(channels_count);
 
-    println!(
-        "sending sample_rate: {:?}, channels: {:?}",
-        sample_rate, channels
-    );
+    // println!(
+    //     "sending sample_rate: {:?}, channels: {:?}",
+    //     sample_rate, channels
+    // );
     let mut audio_receiver = ResampledAudioReceiver::new(audio_receiver, 48000);
     let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
     let mut sequence_number = 0;
@@ -51,7 +51,9 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
         let mut buf = Vec::new();
         let protocol_message = ProtocolMessage::AudioFrame(frame);
         let write_result = protocol_message.write_to_stream(&mut buf).await;
-        conn.send(buf).await.unwrap();
+        if conn.send(buf).await.is_err() {
+            break;
+        }
         sequence_number = match write_result {
             Ok(_) => sequence_number + 1,
             Err(_) => {
@@ -85,11 +87,11 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
         })
         .unwrap();
 
-    println!(
-        "receiving sample_rate: {:?}, channels: {:?}",
-        config.sample_rate.0,
-        u16_to_channels(config.channels)
-    );
+    // println!(
+    //     "receiving sample_rate: {:?}, channels: {:?}",
+    //     config.sample_rate.0,
+    //     u16_to_channels(config.channels)
+    // );
     let mut decoder = Decoder::new(config.sample_rate.0, u16_to_channels(config.channels)).unwrap();
 
     while let Ok(mut packet) = conn.recv().await {

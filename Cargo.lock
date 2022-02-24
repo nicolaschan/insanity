@@ -476,9 +476,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "3.1.1"
+version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d76c22c9b9b215eeb8d016ad3a90417bd13cb24cf8142756e6472445876cab7"
+checksum = "5177fac1ab67102d8989464efd043c6ff44191b1557ec1ddd489b4f7e1447e77"
 dependencies = [
  "atty",
  "bitflags",
@@ -493,9 +493,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "3.1.0"
+version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fd1122e63869df2cb309f449da1ad54a7c6dfeb7c7e6ccd8e0825d9eb93bb72"
+checksum = "01d42c94ce7c2252681b5fed4d3627cc807b13dfc033246bd05d5b252399000e"
 dependencies = [
  "heck",
  "proc-macro-error",
@@ -1265,12 +1265,13 @@ dependencies = [
  "base64",
  "base65536",
  "bincode",
- "clap 3.1.1",
+ "clap 3.1.2",
  "cpal",
  "crossbeam",
  "crossterm 0.23.0",
  "dirs",
  "futures-util",
+ "insanity-tui",
  "itertools",
  "libtor",
  "nanoid",
@@ -1282,6 +1283,7 @@ dependencies = [
  "send_safe",
  "serde",
  "serde_json",
+ "sha2",
  "stunclient",
  "tokio",
  "tui",
@@ -1289,6 +1291,15 @@ dependencies = [
  "veq",
  "warp",
  "zstd",
+]
+
+[[package]]
+name = "insanity-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm 0.23.0",
+ "tokio",
+ "tui",
 ]
 
 [[package]]
@@ -2130,9 +2141,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-crate"
-version = "1.1.2"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dada8c9981fcf32929c3c0f0cd796a9284aca335565227ed88c83babb1d43dc"
+checksum = "e17d47ce914bf4de440332250b0edd23ce48c005f59fab39d3335866b114f11a"
 dependencies = [
  "thiserror",
  "toml",
@@ -3069,13 +3080,13 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "veq"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/udpp.git#0731aed2cbc6fb9a89a7c1b227ee8f035fa57628"
+source = "git+https://github.com/nicolaschan/udpp.git#96bf587e1165e8a9ce3cbe95f7e71aff15a5ffec"
 dependencies = [
  "async-std",
  "async-trait",
  "base64",
  "bincode",
- "clap 3.1.1",
+ "clap 3.1.2",
  "crossbeam",
  "pnet",
  "rand",

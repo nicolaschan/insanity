@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
-use tokio::join;
+
 use std::collections::{HashMap, HashSet};
-use std::convert::Infallible;
+use std::convert::{Infallible};
+use std::fmt::Display;
 use std::io::{Error, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::str::FromStr;
@@ -10,6 +11,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use veq::veq::{ConnectionInfo, VeqSessionAlias, VeqSocket};
+use sha2::{Digest, Sha256};
 
 use crate::clerver::AudioFrame;
 
@@ -70,6 +72,11 @@ pub struct OnionAddress(String);
 impl OnionAddress {
     pub fn new(str: String) -> Option<OnionAddress> {
         Some(OnionAddress(str))
+    }
+}
+impl Display for OnionAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 impl FromStr for OnionAddress {
@@ -190,7 +197,6 @@ impl ConnectionManager {
             let mut sc_guard = self.sidechannels.lock().await;
             sc_guard.get_mut(peer).map(|x| x.clone())
         };
-        println!("sc {:?}", peer);
         match sidechannel {
             Some(sc) => sc,
             None => {
@@ -211,32 +217,31 @@ impl ConnectionManager {
         peer: &OnionAddress,
     ) -> Option<VeqSessionAlias> {
         let mut sc = self.get_sidechannel(peer).await;
-        let mut sc_clone = sc.clone();
-        println!("wat {:?}", peer);
-        let (id, info) = join!(wait_for_id(&mut sc), wait_for_peer_info(&mut sc_clone));
-        println!("connecting to {:?} with id {:?}", peer, id);
+        let id = onion_addresses_to_uuid(&self.own_address, peer);
+        let info = wait_for_peer_info(&mut sc).await;
         Some(socket.connect(id, info).await)
     }
 }
 
-async fn wait_for_id(sidechannel: &mut OnionSidechannel) -> Uuid {
-    loop {
-        match sidechannel.id().await {
-            Ok(id) => return id,
-            Err(e) => {
-                println!("e {:?}", e);
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(1000)).await;
-    }
+fn onion_addresses_to_uuid(addr1: &OnionAddress, addr2: &OnionAddress) -> Uuid {
+    let lower_str = std::cmp::min(addr1.to_string(), addr2.to_string());
+    let higher_str = std::cmp::max(addr1.to_string(), addr2.to_string());
+
+    let mut hasher = Sha256::new();
+    hasher.update(lower_str.as_bytes());
+    hasher.update(higher_str.as_bytes());
+    let result = hasher.finalize();
+    let mut dest = [0u8; 16];
+    dest.clone_from_slice(&result[0..16]);
+    Uuid::from_bytes(dest)
 }
 
 async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> ConnectionInfo {
     loop {
         match sidechannel.peer_info().await {
             Ok(info) => return info,
-            Err(e) => {
-                println!("e {:?}", e);
+            Err(_e) => {
+                // println!("e {:?}", e);
             }
         }
         tokio::time::sleep(Duration::from_millis(1000)).await;

@@ -1,12 +1,10 @@
 use tui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout, Rect, Alignment},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     symbols::DOT,
     text::{Span, Spans},
-    widgets::{
-        Block, BorderType, Borders, Cell, List, ListItem, Paragraph, Row, Table, Tabs, Widget,
-    },
+    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Tabs, Widget},
     Frame,
 };
 
@@ -34,7 +32,7 @@ pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     }
     // f.render_widget(Paragraph::new("insanity v2")
     //     .alignment(Alignment::Center)
-    //     .style(Style::default().fg(BG_GRAY)), 
+    //     .style(Style::default().fg(BG_GRAY)),
     //     chunks[2]);
 }
 
@@ -62,10 +60,10 @@ fn peer_row<'a>(peer: &Peer) -> Row<'a> {
 }
 
 fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
-    let rows: Vec<Row> = app.peers.values().map(|peer| peer_row(peer)).collect();
+    let rows: Vec<Row> = app.peers.values().map(peer_row).collect();
     let widget = Table::new(rows)
         .style(Style::default().fg(Color::White))
-        .widths(&[Constraint::Length(1), Constraint::Min(10)])
+        .widths(&[Constraint::Length(1), Constraint::Min(70)])
         .column_spacing(1)
         .block(default_block());
     f.render_widget(widget, area);
@@ -75,9 +73,7 @@ fn render_editor<'a>(editor: &'a Editor) -> Paragraph<'a> {
     let before_cursor: String = editor.buffer.chars().take(editor.cursor).collect();
     let at_cursor: String = editor
         .buffer
-        .chars()
-        .skip(editor.cursor)
-        .next()
+        .chars().nth(editor.cursor)
         .unwrap_or(' ')
         .to_string();
     let after_cursor: String = editor.buffer.chars().skip(editor.cursor + 1).collect();
