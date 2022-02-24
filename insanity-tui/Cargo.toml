@@ -1,0 +1,19 @@
+[package]
+name = "insanity-tui"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "insanity_tui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "insanity-tui"
+path = "src/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+crossterm = "0.23"
+tokio = { version = "1.16.1", features = ["sync", "rt", "rt-multi-thread", "macros"] }
+tui = "0.17.0"
