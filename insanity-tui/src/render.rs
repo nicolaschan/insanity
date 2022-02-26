@@ -28,7 +28,7 @@ pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     match app.tab_index {
         0 => render_peer_list(f, app, chunks[1]),
         1 => render_chat(f, app, chunks[1]),
-        _ => {}
+        _ => render_settings(f, app, chunks[1]),
     }
     // f.render_widget(Paragraph::new("insanity v2")
     //     .alignment(Alignment::Center)
@@ -47,13 +47,22 @@ fn tab_list(app: &App) -> impl Widget {
 }
 
 fn peer_row<'a>(peer: &Peer) -> Row<'a> {
-    match peer.state {
-        crate::PeerState::Connected(_) => {
-            Row::new(vec![Cell::from("✔"), Cell::from(peer.id.clone())])
+    match peer.state.clone() {
+        crate::PeerState::Connected(address) => {
+            Row::new(vec![
+                Cell::from("✔"), 
+                Cell::from(match peer.display_name.as_ref() {
+                    Some(name) => name.clone(),
+                    None => peer.id.clone(),
+                }),
+                Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
+                ])
                 .style(Style::default().fg(Color::LightGreen))
         }
         crate::PeerState::Disconnected => {
-            Row::new(vec![Cell::from("✗"), Cell::from(peer.id.clone())])
+            Row::new(vec![
+                Cell::from("✗"), 
+                Cell::from(peer.id.clone())])
                 .style(Style::default().fg(Color::DarkGray))
         }
     }
@@ -63,7 +72,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let rows: Vec<Row> = app.peers.values().map(peer_row).collect();
     let widget = Table::new(rows)
         .style(Style::default().fg(Color::White))
-        .widths(&[Constraint::Length(1), Constraint::Min(70)])
+        .widths(&[Constraint::Length(1), Constraint::Min(70), Constraint::Min(16)])
         .column_spacing(1)
         .block(default_block());
     f.render_widget(widget, area);
@@ -94,5 +103,24 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(area);
     let widget = render_editor(&app.editor).block(default_block());
+    f.render_widget(widget, chunks[0]);
+}
+
+fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+        .split(area);
+    let widget = Paragraph::new(vec![Spans::from(
+        match app.own_address.as_ref() {
+            Some(addr) => Spans::from(vec![
+                Span::styled("Your address: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(addr.to_string(), Style::default().fg(Color::LightBlue)),
+            ]),
+            None => Spans::from(vec![Span::styled("Waiting for tor...".to_string(), Style::default().fg(Color::DarkGray))]),
+        }
+    )])
+        .block(default_block())
+        .style(Style::default().fg(Color::White));
     f.render_widget(widget, chunks[0]);
 }

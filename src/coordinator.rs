@@ -1,5 +1,7 @@
 use std::{convert::Infallible, fs::File, io::Read, path::Path, sync::Arc, thread, time::Duration};
 
+use serde::{Serialize, Deserialize};
+use veq::veq::ConnectionInfo;
 use warp::Filter;
 
 use libtor::{HiddenServiceVersion, LogDestination, LogLevel, Tor, TorAddress, TorFlag};
@@ -63,6 +65,12 @@ fn with_c(
     warp::any().map(move || connection_manager.clone())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AugmentedInfo {
+    pub conn_info: ConnectionInfo,
+    pub display_name: String,
+}
+
 pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>) {
     let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
     // let peers_post = warp::post()
@@ -74,7 +82,11 @@ pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<Co
     let info = warp::path("info")
         .and(with_c(connection_manager.clone()))
         .and_then(|c: Arc<ConnectionManager>| async move {
-            Ok::<_, Infallible>(warp::reply::json(&c.conn_info))
+            let display_name = format!("{}@{}", whoami::username(), whoami::hostname());
+            Ok::<_, Infallible>(warp::reply::json(&AugmentedInfo {
+                conn_info: c.conn_info.clone(),
+                display_name,
+            }))
         });
     let id = warp::post()
         .and(warp::path!("id" / OnionAddress))

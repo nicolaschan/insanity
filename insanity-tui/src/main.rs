@@ -8,12 +8,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     sender
         .send(AppEvent::AddPeer(Peer::new(
             "francis".to_string(),
+            None,
             PeerState::Disconnected,
         )))
         .unwrap();
     sender
         .send(AppEvent::AddPeer(Peer::new(
             "nicolas".to_string(),
+            Some("nicolas".to_string()),
             PeerState::Connected("hi".to_string()),
         )))
         .unwrap();

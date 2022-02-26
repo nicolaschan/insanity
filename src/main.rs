@@ -10,7 +10,7 @@ use insanity::{
 use insanity_tui::{AppEvent, Peer, PeerState};
 use std::iter::Iterator;
 
-use veq::veq::{VeqSocket};
+use veq::{veq::{VeqSocket}, snow_types::{SnowPrivateKey, SnowKeypair}};
 use futures_util::StreamExt;
 
 #[derive(Parser, Debug)]
@@ -80,11 +80,22 @@ async fn main() {
         .build()
         .unwrap();
 
-    let socket = VeqSocket::bind(format!("0.0.0.0:{}", opts.listen_port))
+    let sled_path = insanity_dir.join("data.sled");
+    let db = sled::open(sled_path).unwrap();
+    let private_key: SnowPrivateKey = match db.get("private_key").unwrap() {
+        Some(key) => bincode::deserialize(&key).unwrap(),
+        None => {
+            let key = SnowKeypair::new().private();
+            db.insert("private_key", bincode::serialize(&key).unwrap()).unwrap();
+            key
+        }
+    };
+
+    let socket = VeqSocket::bind_with_key(format!("0.0.0.0:{}", opts.listen_port), private_key)
         .await
         .unwrap();
     let connection_manager =
-        ConnectionManager::new(socket.connection_info(), client, onion_address.clone());
+        ConnectionManager::new(socket.connection_info(), client, onion_address.clone(), db);
     println!("Own address: {:?}", onion_address);
     let connection_manager_arc = Arc::new(connection_manager);
 
@@ -95,6 +106,7 @@ async fn main() {
 
     let (sender, handle) = if !opts.no_tui {
         let (x, y) = insanity_tui::start_tui().await.unwrap();
+        x.send(AppEvent::SetOwnAddress(onion_address.to_string())).unwrap();
         (Some(x), Some(y))
     } else {
         (None, None)
@@ -112,14 +124,16 @@ async fn main() {
                 if let Some(sender) = sender.clone() { sender
                         .send(AppEvent::AddPeer(Peer::new(
                             peer.to_string(),
+                            None,
                             PeerState::Disconnected,
                         )))
                         .unwrap(); }
-                if let Some(session) = conn_manager.session(&mut socket, &peer).await {
+                if let Some((session, info)) = conn_manager.session(&mut socket, &peer).await {
                     if let Some(sender) = sender.clone() { sender
                             .send(AppEvent::AddPeer(Peer::new(
                                 peer.to_string(),
-                                PeerState::Connected("hi".to_string()),
+                                Some(info.display_name),
+                                PeerState::Connected(session.remote_addr().await.to_string()),
                             )))
                             .unwrap(); }
                     start_clerver(session, denoise).await;

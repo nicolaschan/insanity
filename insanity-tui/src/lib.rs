@@ -12,7 +12,7 @@ use tui::{backend::Backend, backend::CrosstermBackend, Terminal};
 
 mod render;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PeerState {
     Connected(String),
     Disconnected,
@@ -21,12 +21,13 @@ pub enum PeerState {
 #[derive(Debug)]
 pub struct Peer {
     id: String,
+    display_name: Option<String>,
     state: PeerState,
 }
 
 impl Peer {
-    pub fn new(id: String, state: PeerState) -> Peer {
-        Peer { id, state }
+    pub fn new(id: String, display_name: Option<String>, state: PeerState) -> Peer {
+        Peer { id, display_name, state }
     }
 }
 
@@ -47,6 +48,7 @@ pub enum AppEvent {
     PreviousWord,
     NextWord,
     DeleteWord,
+    SetOwnAddress(String),
 }
 
 pub struct Editor {
@@ -147,6 +149,7 @@ pub struct App {
     pub tab_index: usize,
     pub killed: bool,
     pub peers: HashMap<String, Peer>,
+    pub own_address: Option<String>,
     pub editor: Editor,
 }
 
@@ -160,6 +163,7 @@ impl App {
             tab_index: 0,
             killed: false,
             peers: HashMap::new(),
+            own_address: None,
             editor: Editor::new(),
         }
     }
@@ -207,6 +211,9 @@ impl App {
             }
             AppEvent::DeleteWord => {
                 self.editor.delete_word();
+            }
+            AppEvent::SetOwnAddress(address) => {
+                self.own_address = Some(address);
             }
             _ => {}
         }

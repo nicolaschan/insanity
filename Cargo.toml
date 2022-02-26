@@ -37,3 +37,5 @@ veq = { git = "https://github.com/nicolaschan/udpp.git" }
 rubato = "0.10.1"
 insanity-tui = { path = "insanity-tui" }
 sha2 = "0.10.2"
+whoami = "1.2.1"
+sled = "0.34.7"

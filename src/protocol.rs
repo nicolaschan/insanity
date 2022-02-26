@@ -1,4 +1,7 @@
+use futures_util::{FutureExt, pin_mut};
 use serde::{Deserialize, Serialize};
+use tokio::select;
+use tokio::task::JoinHandle;
 
 use std::collections::{HashMap, HashSet};
 use std::convert::{Infallible};
@@ -14,6 +17,7 @@ use veq::veq::{ConnectionInfo, VeqSessionAlias, VeqSocket};
 use sha2::{Digest, Sha256};
 
 use crate::clerver::AudioFrame;
+use crate::coordinator::AugmentedInfo;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProtocolMessage {
@@ -137,7 +141,7 @@ impl OnionSidechannel {
             }
         }
     }
-    pub async fn peer_info(&self) -> Result<ConnectionInfo, reqwest::Error> {
+    pub async fn peer_info(&self) -> Result<AugmentedInfo, reqwest::Error> {
         let url = format!("http://{}/info", self.peer.0);
         let response = self.client.get(&url).send().await?;
         response.json().await
@@ -151,6 +155,7 @@ pub struct ConnectionManager {
     pub addresses: HashSet<SocketAddr>,
     pub client: reqwest::Client,
     pub own_address: OnionAddress,
+    pub db: sled::Db,
 }
 
 pub fn socket_addr(string: String) -> SocketAddr {
@@ -168,6 +173,7 @@ impl ConnectionManager {
         conn_info: ConnectionInfo,
         client: reqwest::Client,
         own_address: OnionAddress,
+        db: sled::Db,
     ) -> ConnectionManager {
         let peers = Arc::new(Mutex::new(HashMap::new()));
         // tokio::spawn(async move {
@@ -183,6 +189,7 @@ impl ConnectionManager {
             addresses: HashSet::new(),
             client,
             own_address,
+            db,
         }
     }
     pub async fn id_or_new(&self, peer: OnionAddress) -> Option<Uuid> {
@@ -215,11 +222,54 @@ impl ConnectionManager {
         &self,
         socket: &mut VeqSocket,
         peer: &OnionAddress,
-    ) -> Option<VeqSessionAlias> {
+    ) -> Option<(VeqSessionAlias, AugmentedInfo)> {
         let mut sc = self.get_sidechannel(peer).await;
         let id = onion_addresses_to_uuid(&self.own_address, peer);
-        let info = wait_for_peer_info(&mut sc).await;
-        Some(socket.connect(id, info).await)
+
+        // let mut socket_clone = socket.clone();
+        // let peer_clone = peer.clone();
+        // let cached_socket_handle: Option<JoinHandle<(VeqSessionAlias, AugmentedInfo)>> = {
+        //     let cached_info = self.db.get(format!("peer-{}", peer_clone)).unwrap();
+        //     // println!("cached_info {:?}", cached_info);
+        //     if let Some(cached_info) = cached_info {
+        //         let augmented_info: AugmentedInfo = bincode::deserialize(&cached_info).unwrap();
+        //         Some(tokio::spawn(async move {
+        //             (socket_clone.connect(id, augmented_info.conn_info.clone()).await, augmented_info)
+        //         }))
+        //     } else {
+        //         None
+        //     }
+        // };
+        let db_clone = self.db.clone();
+        let mut socket_clone = socket.clone();
+        let peer_clone = peer.clone();
+        let info_handle = tokio::spawn(async move {
+            let info = wait_for_peer_info(&mut sc).await;
+            db_clone.insert(format!("peer-{}", peer_clone), bincode::serialize(&info).unwrap()).unwrap();
+            (socket_clone.connect(id, info.conn_info.clone()).await, info)
+        });
+
+        info_handle.await.ok()
+        // match cached_socket_handle {
+        //     Some(handle) => {
+        //         let handle_fused = handle.fuse();
+        //         let info_fused = info_handle.fuse();
+        //         pin_mut!(handle_fused, info_fused);
+        //         select! {
+        //             x = handle_fused => {
+        //                 let (session, info) = x.unwrap();
+        //                 Some((session, info))
+        //             },
+        //             y = info_fused => {
+        //                 let (socket, info) = y.unwrap();
+        //                 Some((socket, info))
+        //             }
+        //         }
+        //     }
+        //     None => {
+        //         info_handle.await.ok()
+        //     }
+        // }
     }
 }
 
@@ -236,7 +286,7 @@ fn onion_addresses_to_uuid(addr1: &OnionAddress, addr2: &OnionAddress) -> Uuid {
     Uuid::from_bytes(dest)
 }
 
-async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> ConnectionInfo {
+async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> AugmentedInfo {
     loop {
         match sidechannel.peer_info().await {
             Ok(info) => return info,
