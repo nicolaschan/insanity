@@ -1717,9 +1717,9 @@ dependencies = [
 
 [[package]]
 name = "nnnoiseless"
-version = "0.4.0"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "168f9cde4ec195e5675840580252617d59a1f77f0f70b7e9f70ec005948d0fdf"
+checksum = "34162a3e3ad53fd9a9ff071a0545f08c97d0378446fe1414edf6def086a918d3"
 dependencies = [
  "anyhow",
  "clap 2.34.0",
