@@ -294,6 +294,6 @@ async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> AugmentedInfo
                 // println!("e {:?}", e);
             }
         }
-        tokio::time::sleep(Duration::from_millis(1000)).await;
+        // tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }

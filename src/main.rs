@@ -75,7 +75,7 @@ async fn main() {
 
     let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{}", socks_port)).unwrap();
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(10))
         .proxy(proxy)
         .build()
         .unwrap();
