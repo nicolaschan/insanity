@@ -104,28 +104,6 @@ impl OnionSidechannel {
             session_id: Arc::new(Mutex::new(None)),
         }
     }
-    async fn update_id(&mut self, id: Uuid) {
-        let mut guard = self.session_id.lock().await;
-        if guard.is_none() {
-            *guard = Some(id);
-        }
-    }
-    pub async fn id(&mut self) -> Result<Uuid, reqwest::Error> {
-        let id = {
-            let guard = self.session_id.lock().await;
-            *guard
-        };
-        match id {
-            Some(id) => Ok(id),
-            None => {
-                let url = format!("http://{}/id/{}", self.peer.0, self.own.0);
-                let response = self.client.post(&url).send().await?;
-                let id: Uuid = response.json().await?;
-                self.update_id(id).await;
-                Ok(id)
-            }
-        }
-    }
     pub async fn id_or_new(&mut self) -> Uuid {
         let mut guard = self.session_id.lock().await;
         match *guard {
