@@ -67,6 +67,23 @@ async fn main() {
     };
     std::fs::create_dir_all(&insanity_dir).expect("could not create insanity data directory");
 
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{}[{}][{}] {}",
+                chrono::Local::now().format("[%Y-%m-%d %H:%M:%S]"),
+                record.level(),
+                record.target(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Trace)
+        .chain(fern::log_file(insanity_dir.join("insanity.log"))
+            .expect("could not create insanity log file"))
+        .apply()
+        .expect("could not setup logging");
+    log::info!("Starting insanity");
+
     let tor_dir = insanity_dir.join("tor");
     std::fs::create_dir_all(&tor_dir).expect("could not create tor data directory");
     let socks_port = opts.socks_port;

@@ -44,6 +44,7 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> O
                 tor_hostname_file
                     .read_to_string(&mut hostname_contents)
                     .unwrap();
+                log::info!("Tor hostname: {}", hostname_contents);
                 return OnionAddress::new(format!(
                     "{}:{}",
                     hostname_contents.trim(),

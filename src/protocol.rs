@@ -90,16 +90,14 @@ impl FromStr for OnionAddress {
 #[derive(Clone)]
 pub struct OnionSidechannel {
     client: reqwest::Client,
-    own: OnionAddress,
     peer: OnionAddress,
     session_id: Arc<Mutex<Option<Uuid>>>,
 }
 
 impl OnionSidechannel {
-    pub fn new(client: reqwest::Client, own: OnionAddress, peer: OnionAddress) -> OnionSidechannel {
+    pub fn new(client: reqwest::Client, peer: OnionAddress) -> OnionSidechannel {
         OnionSidechannel {
             client,
-            own,
             peer,
             session_id: Arc::new(Mutex::new(None)),
         }
@@ -183,7 +181,6 @@ impl ConnectionManager {
             None => {
                 let sidechannel = OnionSidechannel::new(
                     self.client.clone(),
-                    self.own_address.clone(),
                     peer.clone(),
                 );
                 let mut sc_guard = self.sidechannels.lock().await;

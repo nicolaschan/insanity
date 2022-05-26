@@ -39,3 +39,6 @@ insanity-tui = { path = "insanity-tui" }
 sha2 = "0.10.2"
 whoami = "1.2.1"
 sled = "0.34.7"
+log = "0.4"
+fern = "0.6.1"
+chrono = "0.4"
