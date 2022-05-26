@@ -138,6 +138,7 @@ async fn main() {
         .zip(std::iter::repeat((socket.clone(), denoise, connection_manager_arc, sender.clone())))
         .map(|(peer, (mut socket, denoise, conn_manager, sender))| async move {
             loop {
+                log::info!("Connecting to {:?}", peer);
                 if let Some(sender) = sender.clone() { sender
                         .send(AppEvent::AddPeer(Peer::new(
                             peer.to_string(),
@@ -146,6 +147,7 @@ async fn main() {
                         )))
                         .unwrap(); }
                 if let Some((session, info)) = conn_manager.session(&mut socket, &peer).await {
+                    log::info!("Connection established with {}", peer);
                     if let Some(sender) = sender.clone() { sender
                             .send(AppEvent::AddPeer(Peer::new(
                                 peer.to_string(),
@@ -154,6 +156,7 @@ async fn main() {
                             )))
                             .unwrap(); }
                     start_clerver(session, denoise).await;
+                    log::info!("Connection closed with {}", peer);
                 }
             }
         })
