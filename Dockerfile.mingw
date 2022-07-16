@@ -1,0 +1,12 @@
+FROM rust:latest
+
+RUN apt-get update && apt-get install -y libasound2-dev mingw-w64
+
+WORKDIR /usr/src/insanity
+COPY . .
+
+ENV PKG_CONFIG_SYSROOT_DIR=/usr/x86_64-w64-mingw32/
+
+RUN rustup target add x86_64-pc-windows-gnu \
+  && rustup toolchain install --force-non-host nightly-x86_64-pc-windows-gnu
+RUN cargo build --target x86_64-pc-windows-gnu
