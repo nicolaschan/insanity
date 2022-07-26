@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{path::PathBuf, str::FromStr, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration, collections::HashMap};
 
 use clap::Parser;
 use futures_util::stream::FuturesUnordered;
@@ -7,7 +7,8 @@ use insanity::{
     coordinator::{start_coordinator, start_tor},
     protocol::{ConnectionManager, OnionAddress},
 };
-use insanity_tui::{AppEvent, Peer, PeerState};
+use insanity_tui::{AppEvent, Peer, PeerState, UserAction};
+use tokio::sync::Mutex;
 use std::iter::Iterator;
 
 use veq::{veq::{VeqSocket}, snow_types::{SnowPrivateKey, SnowKeypair}};
@@ -121,29 +122,76 @@ async fn main() {
         async move { start_coordinator(coordinator_port, connection_manager_arc_clone).await },
     );
 
-    let (sender, handle) = if !opts.no_tui {
-        let (x, y) = insanity_tui::start_tui().await.unwrap();
+    let (sender, user_action_receiver, handle) = if !opts.no_tui {
+        let (x, y, z) = insanity_tui::start_tui().await.unwrap();
         x.send(AppEvent::SetOwnAddress(onion_address.to_string())).unwrap();
-        (Some(x), Some(y))
+        (Some(x), Some(y), Some(z))
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     let peer_list = opts.peer.clone();
     let denoise = opts.denoise;
+
+    let denoises = Arc::new(Mutex::new(HashMap::new()));
+    {
+        let mut guard = denoises.lock().await;
+        for peer in opts.peer.clone() {
+            let denoise = Arc::new(AtomicBool::from(denoise));
+            guard.insert(peer, denoise);
+        }
+    }
+
+    let sender_clone = sender.clone();
+    let denoises_clone = denoises.clone();
+    if let Some(mut receiver) = user_action_receiver {
+        tokio::spawn(async move {
+            while let Some(action) = receiver.recv().await {
+                match action {
+                    UserAction::DisableDenoise(id) => {
+                        let mut guard = denoises_clone.lock().await;
+                        let denoise = guard.get_mut(&id);
+                        if let Some(denoise) = denoise {
+                            denoise.store(false, Ordering::Relaxed);
+                            if let Some(sender) = &sender_clone {
+                                sender.send(AppEvent::SetPeerDenoise(id, false)).unwrap();
+                            }
+                        }
+                    }
+                    UserAction::EnableDenoise(id) => {
+                        let mut guard = denoises_clone.lock().await;
+                        let denoise = guard.get_mut(&id);
+                        if let Some(denoise) = denoise {
+                            denoise.store(true, Ordering::Relaxed);
+                            if let Some(sender) = &sender_clone {
+                                sender.send(AppEvent::SetPeerDenoise(id, true)).unwrap();
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    let denoises_clone = denoises.clone();
     tokio::spawn(async move {
         peer_list
         .iter()
         .map(|addr| OnionAddress::new(addr.clone()).unwrap())
-        .zip(std::iter::repeat((socket.clone(), denoise, connection_manager_arc, sender.clone())))
-        .map(|(peer, (mut socket, denoise, conn_manager, sender))| async move {
+        .zip(std::iter::repeat((socket.clone(), connection_manager_arc, sender.clone(), denoises_clone)))
+        .map(|(peer, (mut socket, conn_manager, sender, denoises))| async move {
             loop {
-                log::info!("Connecting to {:?}", peer);
+                let denoise = {
+                    let guard = denoises.lock().await;
+                    guard.get(&peer.to_string()).unwrap().clone()
+                };
+                log::info!("Connecting to {:?} with denoise value {:?}", peer, denoise.load(Ordering::Relaxed));
                 if let Some(sender) = sender.clone() { sender
                         .send(AppEvent::AddPeer(Peer::new(
                             peer.to_string(),
                             None,
                             PeerState::Disconnected,
+                            denoise.load(Ordering::Relaxed),
                         )))
                         .unwrap(); }
                 if let Some((session, info)) = conn_manager.session(&mut socket, &peer).await {
@@ -153,6 +201,7 @@ async fn main() {
                                 peer.to_string(),
                                 Some(info.display_name),
                                 PeerState::Connected(session.remote_addr().await.to_string()),
+                                denoise.load(Ordering::Relaxed),
                             )))
                             .unwrap(); }
                     start_clerver(session, denoise).await;

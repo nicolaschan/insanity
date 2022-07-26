@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicBool};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
@@ -71,7 +71,7 @@ fn u16_to_channels(n: u16) -> Channels {
     }
 }
 
-pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
+pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: Arc<AtomicBool>) {
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
     let processor = Arc::new(AudioProcessor::new(enable_denoise));
@@ -94,8 +94,8 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
     // );
     let mut decoder = Decoder::new(config.sample_rate.0, u16_to_channels(config.channels)).unwrap();
 
-    while let Ok(mut packet) = conn.recv().await {
-        if let Ok(message) = ProtocolMessage::read_from_stream(&mut packet).await {
+    while let Ok(packet) = conn.recv().await {
+        if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
                 ProtocolMessage::AudioFrame(frame) => {
                     let packet = frame.1;
@@ -118,7 +118,7 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: bool) {
     }
 }
 
-pub async fn start_clerver(conn: VeqSessionAlias, enable_denoise: bool) {
+pub async fn start_clerver(conn: VeqSessionAlias, enable_denoise: Arc<AtomicBool>) {
     let conn_clone = conn.clone();
     let sender = tokio::task::spawn(async move {
         run_sender(conn_clone, make_audio_receiver).await;

@@ -1,8 +1,9 @@
 // extern crate test;
 
-use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
+use std::{collections::VecDeque, sync::atomic::AtomicBool};
 
-use std::sync::Mutex;
+use std::sync::{Mutex, Arc};
 
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
@@ -180,14 +181,14 @@ impl MultiChannelDenoiser<'_> {
 }
 
 pub struct AudioProcessor<'a> {
-    enable_denoise: bool,
+    enable_denoise: Arc<AtomicBool>,
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
     audio_buffer: Mutex<VecDeque<f32>>,
     chunk_buffer: Mutex<RealTimeBuffer<AudioChunk>>,
 }
 
 impl AudioProcessor<'_> {
-    pub fn new(enable_denoise: bool) -> Self {
+    pub fn new(enable_denoise: Arc<AtomicBool>) -> Self {
         AudioProcessor {
             enable_denoise,
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
@@ -198,7 +199,7 @@ impl AudioProcessor<'_> {
 
     pub fn handle_incoming(&self, mut chunk: AudioChunk) {
         let mut guard = self.chunk_buffer.lock().unwrap();
-        if self.enable_denoise {
+        if self.enable_denoise.load(Ordering::Relaxed) {
             let mut denoiser_guard = self.denoiser.lock().unwrap();
             chunk = denoiser_guard.denoise_chunk(chunk);
         }

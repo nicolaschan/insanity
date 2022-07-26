@@ -3,7 +3,8 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::{cmp::min, collections::HashMap, error::Error, io, io::Stdout};
+use std::collections::BTreeMap;
+use std::{cmp::min, error::Error, io, io::Stdout};
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
@@ -11,23 +12,36 @@ use tokio::{
 use tui::{backend::Backend, backend::CrosstermBackend, Terminal};
 
 mod render;
+// mod main;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerState {
     Connected(String),
     Disconnected,
+    Disabled,
+    Connecting(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Peer {
     id: String,
     display_name: Option<String>,
     state: PeerState,
+    denoised: bool,
+    volume: usize,
 }
 
 impl Peer {
-    pub fn new(id: String, display_name: Option<String>, state: PeerState) -> Peer {
-        Peer { id, display_name, state }
+    pub fn new(id: String, display_name: Option<String>, state: PeerState, denoised: bool) -> Peer {
+        Peer { id, display_name, state, denoised, volume: 42 }
+    }
+
+    pub fn with_denoised(&self, denoised: bool) -> Peer {
+        Peer { denoised, ..self.clone() }
+    }
+
+    pub fn with_state(&self, state: PeerState) -> Peer {
+        Peer { state, ..self.clone() }
     }
 }
 
@@ -49,6 +63,19 @@ pub enum AppEvent {
     NextWord,
     DeleteWord,
     SetOwnAddress(String),
+    Down,
+    Up,
+    TogglePeer,
+    ToggleDenoise,
+    SetPeerDenoise(String, bool),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum UserAction {
+    DisablePeer(String),
+    EnablePeer(String),
+    DisableDenoise(String),
+    EnableDenoise(String),
 }
 
 pub struct Editor {
@@ -145,26 +172,30 @@ impl Editor {
 }
 
 pub struct App {
+    pub user_action_sender: UnboundedSender<UserAction>,
     pub tabs: Vec<String>,
     pub tab_index: usize,
     pub killed: bool,
-    pub peers: HashMap<String, Peer>,
+    pub peers: BTreeMap<String, Peer>,
     pub own_address: Option<String>,
     pub editor: Editor,
+    pub peer_index: usize,
 }
 
 impl App {
-    pub fn new() -> App {
+    pub fn new(sender: UnboundedSender<UserAction>) -> App {
         App {
+            user_action_sender: sender,
             tabs: ["Peers", "Chat", "Settings"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
             tab_index: 0,
             killed: false,
-            peers: HashMap::new(),
+            peers: BTreeMap::new(),
             own_address: None,
             editor: Editor::new(),
+            peer_index: 0,
         }
     }
 
@@ -215,8 +246,51 @@ impl App {
             AppEvent::SetOwnAddress(address) => {
                 self.own_address = Some(address);
             }
+            AppEvent::Down => {
+                self.peer_index = std::cmp::min(self.peer_index.checked_add(1).unwrap_or(0), self.peers.len() - 1);
+            }
+            AppEvent::Up => {
+                self.peer_index = self.peer_index.checked_sub(1).unwrap_or(0);
+            }
+            AppEvent::TogglePeer => {
+                self.toggle_peer();
+            }
+            AppEvent::ToggleDenoise => {
+                self.toggle_denoise();
+            }
+            AppEvent::SetPeerDenoise(peer_id, denoised) => {
+                if let Some(peer) = self.peers.get_mut(&peer_id) {
+                    *peer = peer.with_denoised(denoised);
+                }
+            }
             _ => {}
         }
+    }
+
+    fn selected_peer(&self) -> Option<&Peer> {
+        self.peers.values().nth(self.peer_index)
+    }
+
+    fn toggle_peer(&mut self) {
+        self.selected_peer()
+            .map(|peer| {
+                if peer.state == PeerState::Disabled {
+                    self.user_action_sender.send(UserAction::EnablePeer(peer.id.clone())).unwrap();
+                } else {
+                    self.user_action_sender.send(UserAction::DisablePeer(peer.id.clone())).unwrap();
+                }
+            });
+    }
+
+    fn toggle_denoise(&mut self) {
+        self.selected_peer()
+            .map(|peer| {
+                if peer.denoised {
+                    self.user_action_sender.send(UserAction::DisableDenoise(peer.id.clone())).unwrap();
+                } else {
+                    self.user_action_sender.send(UserAction::EnableDenoise(peer.id.clone())).unwrap();
+                }
+            });
     }
 
     fn move_tabs(&mut self, adjustment: isize) {
@@ -274,6 +348,12 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
                         KeyCode::Right => {
                             sender.send(AppEvent::Right).unwrap();
                         }
+                        KeyCode::Down => {
+                            sender.send(AppEvent::Down).unwrap();
+                        }
+                        KeyCode::Up => {
+                            sender.send(AppEvent::Up).unwrap();
+                        }
                         _ => {}
                     }
                 } else {
@@ -303,6 +383,12 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
                             KeyCode::Char('e') => {
                                 sender.send(AppEvent::CursorEnd).unwrap();
                             }
+                            KeyCode::Char('d') => {
+                                sender.send(AppEvent::TogglePeer).unwrap();
+                            }
+                            KeyCode::Char('n') => {
+                                sender.send(AppEvent::ToggleDenoise).unwrap();
+                            }
                             _ => {}
                         }
                     }
@@ -319,6 +405,7 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
 pub async fn start_tui() -> Result<
     (
         UnboundedSender<AppEvent>,
+        UnboundedReceiver<UserAction>,
         JoinHandle<Terminal<CrosstermBackend<Stdout>>>,
     ),
     Box<dyn Error>,
@@ -330,10 +417,12 @@ pub async fn start_tui() -> Result<
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let app = App::new();
+    let (sender, receiver) = unbounded_channel();
+
+    let app = App::new(sender);
     let (sender, handle) = get_sender(app, terminal).await;
     handle_input(sender.clone()).await;
-    Ok((sender, handle))
+    Ok((sender, receiver, handle))
 }
 
 pub async fn stop_tui(

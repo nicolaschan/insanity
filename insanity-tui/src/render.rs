@@ -1,7 +1,7 @@
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Style, Modifier},
     symbols::DOT,
     text::{Span, Spans},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Tabs, Widget},
@@ -9,6 +9,9 @@ use tui::{
 };
 
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
+const SELECTED: Color = Color::Rgb(80, 80, 80);
+const CONNECTED: Color = Color::Rgb(0, 255, 0);
+const CONNECTING: Color = Color::Rgb(0, 255, 255);
 
 fn default_block<'a>() -> Block<'a> {
     Block::default()
@@ -46,33 +49,65 @@ fn tab_list(app: &App) -> impl Widget {
         .divider(Span::styled(DOT, Style::default().fg(BG_GRAY)))
 }
 
-fn peer_row<'a>(peer: &Peer) -> Row<'a> {
+fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
+    let mut style = Style::default();
+    if selected {
+        style = style.bg(SELECTED);
+    }
+    let attributes = Cell::from(Spans::from(vec![
+        Span::styled(format!("{}", peer.volume.to_string()), 
+            Style::default().fg(if peer.denoised { Color::White } else { Color::DarkGray })),
+    ]));
     match peer.state.clone() {
         crate::PeerState::Connected(address) => {
             Row::new(vec![
-                Cell::from("✔"), 
+                Cell::from("✓"), 
+                attributes,
                 Cell::from(match peer.display_name.as_ref() {
                     Some(name) => name.clone(),
                     None => peer.id.clone(),
-                }),
+                }).style(style),
                 Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
                 ])
-                .style(Style::default().fg(Color::LightGreen))
+                .style(Style::default().fg(CONNECTED))
         }
         crate::PeerState::Disconnected => {
             Row::new(vec![
+                Cell::from(" "), 
+                attributes,
+                Cell::from(peer.id.clone()).style(style)
+            ]).style(Style::default().fg(Color::DarkGray))
+        }
+        crate::PeerState::Disabled => {
+            Row::new(vec![
                 Cell::from("✗"), 
-                Cell::from(peer.id.clone())])
-                .style(Style::default().fg(Color::DarkGray))
+                attributes,
+                Cell::from(Span::styled(peer.id.clone(), Style::default().add_modifier(Modifier::CROSSED_OUT))).style(style),
+            ]).style(Style::default().fg(Color::DarkGray))
+        }
+        crate::PeerState::Connecting(address) => {
+            Row::new(vec![
+                Cell::from(DOT), 
+                attributes,
+                Cell::from(match peer.display_name.as_ref() {
+                    Some(name) => name.clone(),
+                    None => peer.id.clone(),
+                }).style(style),
+                Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
+            ]).style(Style::default().fg(CONNECTING))
         }
     }
 }
 
 fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
-    let rows: Vec<Row> = app.peers.values().map(peer_row).collect();
+    let rows: Vec<Row> = app.peers
+        .values()
+        .enumerate()
+        .map(|(i, peer)| peer_row(peer, i == app.peer_index))
+        .collect();
     let widget = Table::new(rows)
         .style(Style::default().fg(Color::White))
-        .widths(&[Constraint::Length(1), Constraint::Min(70), Constraint::Min(16)])
+        .widths(&[Constraint::Length(1), Constraint::Length(2), Constraint::Min(70), Constraint::Min(24)])
         .column_spacing(1)
         .block(default_block());
     f.render_widget(widget, area);
