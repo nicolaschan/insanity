@@ -1,17 +1,23 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{atomic::AtomicBool, Arc};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
-use tokio::join;
+use tokio::{
+    join,
+    sync::{
+        broadcast::{self, Receiver},
+    },
+};
 use veq::veq::VeqSessionAlias;
 
 use crate::{
     client::{get_output_config, setup_output_stream},
     processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
     protocol::ProtocolMessage,
-    server::{make_audio_receiver, AudioReceiver}, resampler::ResampledAudioReceiver,
+    resampler::ResampledAudioReceiver,
+    server::{make_audio_receiver, AudioReceiver},
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -22,6 +28,7 @@ pub struct AudioFrame(u128, Vec<u8>);
 pub async fn run_sender<R: AudioReceiver + Send + 'static>(
     mut conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
+    mut shutdown: Receiver<()>,
 ) {
     let audio_receiver = make_receiver();
     let _sample_rate = audio_receiver.sample_rate();
@@ -36,7 +43,11 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
     let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
     let mut sequence_number = 0;
 
-      loop {
+    loop {
+        if shutdown.try_recv().is_ok() {
+            log::debug!("Shutdown received in run_sender");
+            return;
+        }
         let mut samples = Vec::new();
         let sample_count = AUDIO_CHUNK_SIZE * channels_count as usize;
         for _ in 0..sample_count {
@@ -71,7 +82,11 @@ fn u16_to_channels(n: u16) -> Channels {
     }
 }
 
-pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: Arc<AtomicBool>) {
+pub async fn run_receiver(
+    mut conn: VeqSessionAlias,
+    enable_denoise: Arc<AtomicBool>,
+    mut shutdown: Receiver<()>,
+) {
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
     let processor = Arc::new(AudioProcessor::new(enable_denoise));
@@ -94,7 +109,13 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: Arc<AtomicB
     // );
     let mut decoder = Decoder::new(config.sample_rate.0, u16_to_channels(config.channels)).unwrap();
 
-    while let Ok(packet) = conn.recv().await {
+    while let Ok(packet) = tokio::select! {
+        res = conn.recv() => res,
+        _ = shutdown.recv() => {
+            log::debug!("Shutdown received in run_receiver");
+            return;
+        },
+    } {
         if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
                 ProtocolMessage::AudioFrame(frame) => {
@@ -118,12 +139,31 @@ pub async fn run_receiver(mut conn: VeqSessionAlias, enable_denoise: Arc<AtomicB
     }
 }
 
-pub async fn start_clerver(conn: VeqSessionAlias, enable_denoise: Arc<AtomicBool>) {
+pub async fn start_clerver(
+    conn: VeqSessionAlias,
+    enable_denoise: Arc<AtomicBool>,
+    mut shutdown: Receiver<()>,
+) {
     let conn_clone = conn.clone();
-    let sender = tokio::task::spawn(async move {
-        run_sender(conn_clone, make_audio_receiver).await;
+
+    let (tx, rx) = broadcast::channel(10);
+    let rx2 = tx.subscribe();
+
+    let sender = tokio::spawn(async move {
+        run_sender(conn_clone, make_audio_receiver, rx).await;
     });
-    let receiver = run_receiver(conn, enable_denoise);
-    let (r, _) = join!(sender, receiver);
+
+    let receiver = tokio::task::spawn(async move {
+        run_receiver(conn, enable_denoise, rx2).await;
+    });
+
+    shutdown.recv().await.unwrap();
+    if tx.send(()).is_ok() {
+        log::debug!("Shutdown sent to broadcast channel");
+    } else {
+        log::debug!("Failed to send shutdown to broadcast channel");
+    }
+    let (s, r) = join!(sender, receiver);
+    s.unwrap();
     r.unwrap();
 }

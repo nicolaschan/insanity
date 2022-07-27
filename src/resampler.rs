@@ -4,7 +4,7 @@ use rubato::{Resampler, SincFixedIn};
 
 use async_trait::async_trait;
 
-use crate::{server::AudioReceiver, processor::AUDIO_CHUNK_SIZE};
+use crate::{processor::AUDIO_CHUNK_SIZE, server::AudioReceiver};
 
 pub struct ResampledAudioReceiver<R: AudioReceiver> {
     resampler: SincFixedIn<f32>,

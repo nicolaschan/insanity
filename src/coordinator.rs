@@ -1,6 +1,6 @@
 use std::{convert::Infallible, fs::File, io::Read, path::Path, sync::Arc, thread, time::Duration};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use veq::veq::ConnectionInfo;
 use warp::Filter;
 

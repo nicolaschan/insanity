@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::convert::{Infallible};
+use std::convert::Infallible;
 use std::fmt::Display;
 use std::io::{Error, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -10,7 +11,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use veq::veq::{ConnectionInfo, VeqSessionAlias, VeqSocket};
-use sha2::{Digest, Sha256};
 
 use crate::clerver::AudioFrame;
 use crate::coordinator::AugmentedInfo;
@@ -179,10 +179,7 @@ impl ConnectionManager {
         match sidechannel {
             Some(sc) => sc,
             None => {
-                let sidechannel = OnionSidechannel::new(
-                    self.client.clone(),
-                    peer.clone(),
-                );
+                let sidechannel = OnionSidechannel::new(self.client.clone(), peer.clone());
                 let mut sc_guard = self.sidechannels.lock().await;
                 sc_guard.insert(peer.clone(), sidechannel.clone());
                 sidechannel
@@ -216,7 +213,13 @@ impl ConnectionManager {
         let peer_clone = peer.clone();
         let info_handle = tokio::spawn(async move {
             let info = wait_for_peer_info(&mut sc).await;
-            db_clone.insert(format!("peer-{}", peer_clone), bincode::serialize(&info).unwrap()).unwrap();
+            log::debug!("Got peer info {:?}", info);
+            db_clone
+                .insert(
+                    format!("peer-{}", peer_clone),
+                    bincode::serialize(&info).unwrap(),
+                )
+                .unwrap();
             (socket_clone.connect(id, info.conn_info.clone()).await, info)
         });
 

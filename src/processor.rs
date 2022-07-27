@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::{collections::VecDeque, sync::atomic::AtomicBool};
 
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc, Mutex};
 
 use cpal::Sample;
 use nnnoiseless::DenoiseState;
@@ -217,13 +217,13 @@ impl AudioProcessor<'_> {
             i += 1;
         }
         for val in to_fill.iter_mut() {
-            let sample = match audio_buffer_guard.pop_front() {
+            let sample = audio_buffer_guard.pop_front();
+            *val = match sample {
                 None => {
                     Sample::from(&0.0) // cry b/c there's no packets
-                }
+                },
                 Some(sample) => Sample::from(&sample),
             };
-            *val = sample;
         }
     }
 }
