@@ -23,7 +23,6 @@ crossterm = "0.23.0"
 tokio = { version = "1", features = ["full"] }
 opus = "0.2.1"
 tui = { version = "0.17", default-features = false, features = ["crossterm"] }
-nanoid = "0.4.0"
 futures-util = "0.3.17"
 send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
 libtor = { version = "46.6.0", features = ["vendored-openssl"] }

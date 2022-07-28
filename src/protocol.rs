@@ -14,6 +14,7 @@ use veq::veq::{ConnectionInfo, VeqSessionAlias, VeqSocket};
 
 use crate::clerver::AudioFrame;
 use crate::coordinator::AugmentedInfo;
+use crate::session::UpdatablePendingSession;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ProtocolMessage {
@@ -194,56 +195,26 @@ impl ConnectionManager {
         let mut sc = self.get_sidechannel(peer).await;
         let id = onion_addresses_to_uuid(&self.own_address, peer);
 
-        // let mut socket_clone = socket.clone();
-        // let peer_clone = peer.clone();
-        // let cached_socket_handle: Option<JoinHandle<(VeqSessionAlias, AugmentedInfo)>> = {
-        //     let cached_info = self.db.get(format!("peer-{}", peer_clone)).unwrap();
-        //     // println!("cached_info {:?}", cached_info);
-        //     if let Some(cached_info) = cached_info {
-        //         let augmented_info: AugmentedInfo = bincode::deserialize(&cached_info).unwrap();
-        //         Some(tokio::spawn(async move {
-        //             (socket_clone.connect(id, augmented_info.conn_info.clone()).await, augmented_info)
-        //         }))
-        //     } else {
-        //         None
-        //     }
-        // };
-        let db_clone = self.db.clone();
-        let mut socket_clone = socket.clone();
-        let peer_clone = peer.clone();
-        let info_handle = tokio::spawn(async move {
-            let info = wait_for_peer_info(&mut sc).await;
-            log::debug!("Got peer info {:?}", info);
-            db_clone
-                .insert(
-                    format!("peer-{}", peer_clone),
-                    bincode::serialize(&info).unwrap(),
-                )
-                .unwrap();
-            (socket_clone.connect(id, info.conn_info.clone()).await, info)
-        });
+        let pending_session = UpdatablePendingSession::new(socket.clone());
 
-        info_handle.await.ok()
-        // match cached_socket_handle {
-        //     Some(handle) => {
-        //         let handle_fused = handle.fuse();
-        //         let info_fused = info_handle.fuse();
-        //         pin_mut!(handle_fused, info_fused);
-        //         select! {
-        //             x = handle_fused => {
-        //                 let (session, info) = x.unwrap();
-        //                 Some((session, info))
-        //             },
-        //             y = info_fused => {
-        //                 let (socket, info) = y.unwrap();
-        //                 Some((socket, info))
-        //             }
-        //         }
-        //     }
-        //     None => {
-        //         info_handle.await.ok()
-        //     }
-        // }
+        if let Ok(Some(cached_info_serialized)) = self.db.get(format!("peer-{}", peer)) {
+            let cached_info: AugmentedInfo = bincode::deserialize(&cached_info_serialized[..]).unwrap();
+            pending_session.update(id, cached_info).await;
+        }
+
+        loop {
+            tokio::select! {
+                tor_info = wait_for_peer_info(&mut sc) => {
+                    pending_session.update(id, tor_info).await;
+                }
+                (session, info) = pending_session.session() => {
+                    if let Err(e) = self.db.insert(format!("peer-{}", peer), bincode::serialize(&info).unwrap()) {
+                        log::error!("Failed to cache peer info: {}", e);
+                    }
+                    return Some((session, info));
+                }
+            }
+        }
     }
 }
 

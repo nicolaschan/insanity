@@ -66,7 +66,7 @@ fn with_c(
     warp::any().map(move || connection_manager.clone())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AugmentedInfo {
     pub conn_info: ConnectionInfo,
     pub display_name: String,

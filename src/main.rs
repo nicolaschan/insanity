@@ -21,7 +21,7 @@ use std::iter::Iterator;
 
 use futures_util::StreamExt;
 use veq::{
-    snow_types::{SnowKeypair, SnowPrivateKey},
+    snow_types::{SnowKeypair},
     veq::VeqSocket,
 };
 
@@ -66,11 +66,6 @@ struct Opts {
 async fn main() {
     let opts: Opts = Opts::parse();
 
-    let _id: String = match opts.id {
-        Some(id) => id,
-        None => nanoid::nanoid!(),
-    };
-
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
         None => dirs::data_local_dir()
@@ -113,19 +108,27 @@ async fn main() {
 
     let sled_path = insanity_dir.join("data.sled");
     let db = sled::open(sled_path).unwrap();
-    let private_key: SnowPrivateKey = match db.get("private_key").unwrap() {
-        Some(key) => bincode::deserialize(&key).unwrap(),
+
+    let keypair: SnowKeypair = match db.get("private_key")
+        .unwrap()
+        .and_then(|v| bincode::deserialize::<SnowKeypair>(&v).ok()) {
+        Some(keypair) => {
+            log::debug!("Found keypair in database. Public Key: {:?}", keypair.public());
+            keypair
+        },
         None => {
-            let key = SnowKeypair::new().private();
-            db.insert("private_key", bincode::serialize(&key).unwrap())
+            log::debug!("No keypair found in db, generating one");
+            let keypair = SnowKeypair::new();
+            db.insert("private_key", bincode::serialize(&keypair).unwrap())
                 .unwrap();
-            key
+            keypair
         }
     };
 
-    let socket = VeqSocket::bind_with_key(format!("0.0.0.0:{}", opts.listen_port), private_key)
+    let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair)
         .await
         .unwrap();
+    log::debug!("Connection info: {:?}", socket.connection_info());
     let connection_manager =
         ConnectionManager::new(socket.connection_info(), client, onion_address.clone(), db);
     println!("Own address: {:?}", onion_address);

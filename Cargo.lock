@@ -1327,7 +1327,6 @@ dependencies = [
  "itertools",
  "libtor",
  "log",
- "nanoid",
  "nnnoiseless",
  "opus",
  "rand",
@@ -1648,15 +1647,6 @@ dependencies = [
  "safemem",
  "tempfile",
  "twoway",
-]
-
-[[package]]
-name = "nanoid"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ffa00dec017b5b1a8b7cf5e2c008bfda1aa7e0697ac1508b491fdf2622fb4d8"
-dependencies = [
- "rand",
 ]
 
 [[package]]
@@ -3198,7 +3188,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "veq"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/udpp.git#8c689300c9135ccc4751f10f9e8a472d7521d07f"
+source = "git+https://github.com/nicolaschan/udpp.git#39efe6fe7eff9538c86667027281e57d8f1e5240"
 dependencies = [
  "async-std",
  "async-trait",
