@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     join,
     sync::{
-        broadcast::{self, Receiver},
+        broadcast::{self, Receiver}, mpsc,
     },
 };
 use veq::veq::VeqSessionAlias;
@@ -29,6 +29,7 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
     mut conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
     mut shutdown: Receiver<()>,
+    _termination_sender: mpsc::Sender<()>,
 ) {
     let audio_receiver = make_receiver();
     let _sample_rate = audio_receiver.sample_rate();
@@ -86,6 +87,7 @@ pub async fn run_receiver(
     mut conn: VeqSessionAlias,
     enable_denoise: Arc<AtomicBool>,
     mut shutdown: Receiver<()>,
+    _termination_sender: mpsc::Sender<()>,
 ) {
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
@@ -149,15 +151,27 @@ pub async fn start_clerver(
     let (tx, rx) = broadcast::channel(10);
     let rx2 = tx.subscribe();
 
+    let (sender_termination_tx, mut sender_termination_rx) = mpsc::channel(10);
     let sender = tokio::spawn(async move {
-        run_sender(conn_clone, make_audio_receiver, rx).await;
+        run_sender(conn_clone, make_audio_receiver, rx, sender_termination_tx).await;
     });
 
+    let (receiver_termination_tx, mut receiver_termination_rx) = mpsc::channel(10);
     let receiver = tokio::task::spawn(async move {
-        run_receiver(conn, enable_denoise, rx2).await;
+        run_receiver(conn, enable_denoise, rx2, receiver_termination_tx).await;
     });
 
-    shutdown.recv().await.unwrap();
+    tokio::select! {
+        _ = sender_termination_rx.recv() => {
+            log::debug!("Sender termination received");
+        },
+        _ = receiver_termination_rx.recv() => {
+            log::debug!("Receiver termination received");
+        },
+        _ = shutdown.recv() => {
+            log::debug!("Shutdown received in start_clerver");
+        }
+    }
     if tx.send(()).is_ok() {
         log::debug!("Shutdown sent to broadcast channel");
     } else {
