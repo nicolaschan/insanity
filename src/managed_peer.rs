@@ -78,6 +78,7 @@ impl ManagedPeer {
         tokio::spawn(async move {
             let (inner_tx, _inner_rx) = broadcast::channel(10);
             loop {
+                log::info!("Beginning connect loop to peer {}", address);
                 tokio::select! {
                     _ = tokio::spawn(connect(address.clone(), conn_manager.clone(), ui_sender.clone(), denoise.clone(), socket.clone(), inner_tx.subscribe())) => {},
                     _ = rx.recv() => {
@@ -85,6 +86,7 @@ impl ManagedPeer {
                         break;
                     }
                 }
+                log::info!("Lost connection to peer {}", address);
                 if let Some(sender) = &ui_sender {
                     sender
                         .send(AppEvent::AddPeer(Peer::new(
