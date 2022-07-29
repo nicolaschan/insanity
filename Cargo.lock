@@ -1344,7 +1344,6 @@ dependencies = [
  "veq",
  "warp",
  "whoami",
- "zstd",
 ]
 
 [[package]]
