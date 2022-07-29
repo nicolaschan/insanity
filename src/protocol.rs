@@ -1,3 +1,4 @@
+use bincode::ErrorKind;
 use serde::{Deserialize, Serialize};
 
 use sha2::{Digest, Sha256};
@@ -54,11 +55,17 @@ impl ProtocolMessage {
         if zstd::stream::copy_encode(&serialized[..], &mut stream, 1).is_ok() {}
         Ok(())
     }
-    pub async fn read_from_stream(stream: &mut &[u8]) -> Result<ProtocolMessage, Vec<u8>> {
+    pub async fn read_from_stream(stream: &mut &[u8]) -> Result<ProtocolMessage, Box<ErrorKind>> {
         let mut data_buffer = Vec::new();
         if zstd::stream::copy_decode(stream, &mut data_buffer).is_ok() {}
-        let protocol_message = bincode::deserialize(&data_buffer[..]).expect("Protocol violation");
-        Ok(protocol_message)
+        let protocol_message = bincode::deserialize(&data_buffer[..]);
+        match protocol_message {
+            Ok(protocol_message) => Ok(protocol_message),
+            Err(e) => {
+                log::error!("Error deserializing protocol message: {:?}", e);
+                Err(e)
+            }
+        }
     }
 }
 
