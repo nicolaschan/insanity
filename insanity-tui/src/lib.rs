@@ -33,7 +33,7 @@ pub struct Peer {
 
 impl Peer {
     pub fn new(id: String, display_name: Option<String>, state: PeerState, denoised: bool) -> Peer {
-        Peer { id, display_name, state, denoised, volume: 42 }
+        Peer { id, display_name, state, denoised, volume: 100 }
     }
 
     pub fn with_denoised(&self, denoised: bool) -> Peer {
@@ -68,9 +68,10 @@ pub enum AppEvent {
     TogglePeer,
     ToggleDenoise,
     SetPeerDenoise(String, bool),
+    SetPeerVolume(String, bool),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum UserAction {
     DisablePeer(String),
     EnablePeer(String),
@@ -81,6 +82,12 @@ pub enum UserAction {
 pub struct Editor {
     pub buffer: String,
     pub cursor: usize,
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Editor {
@@ -134,7 +141,7 @@ impl Editor {
     pub fn next_word(&mut self) {
         let chars: Vec<char> = self.buffer.chars().collect();
         let mut found = false;
-        for i in (self.cursor + 1)..self.buffer.chars().collect::<Vec<char>>().len() {
+        for i in (self.cursor + 1)..self.buffer.chars().count() {
             if found {
                 if let Some(' ') = chars.get(i) {
                     self.cursor = i;
@@ -146,7 +153,7 @@ impl Editor {
                 }
             }
         }
-        self.cursor = self.buffer.chars().collect::<Vec<char>>().len();
+        self.cursor = self.buffer.chars().count();
     }
 
     fn previous_word_index(&mut self) -> usize {
@@ -217,7 +224,23 @@ impl App {
                 self.peers.remove(&id);
             }
             AppEvent::Character(c) => {
-                self.editor.append(c);
+                match self.tab_index {
+                    0 => {
+                        match c {
+                            ' ' => {
+                                self.toggle_peer();
+                            }
+                            'd' => {
+                                self.toggle_denoise();
+                            }
+                            _ => {}
+                        }
+                    }
+                    1 => {
+                        self.editor.append(c);
+                    }
+                    _ => {}
+                }
             }
             AppEvent::Backspace => {
                 self.editor.backspace();
@@ -250,7 +273,7 @@ impl App {
                 self.peer_index = std::cmp::min(self.peer_index.checked_add(1).unwrap_or(0), self.peers.len() - 1);
             }
             AppEvent::Up => {
-                self.peer_index = self.peer_index.checked_sub(1).unwrap_or(0);
+                self.peer_index = self.peer_index.saturating_sub(1);
             }
             AppEvent::TogglePeer => {
                 self.toggle_peer();
@@ -272,25 +295,23 @@ impl App {
     }
 
     fn toggle_peer(&mut self) {
-        self.selected_peer()
-            .map(|peer| {
-                if peer.state == PeerState::Disabled {
-                    self.user_action_sender.send(UserAction::EnablePeer(peer.id.clone())).unwrap();
-                } else {
-                    self.user_action_sender.send(UserAction::DisablePeer(peer.id.clone())).unwrap();
-                }
-            });
+        if let Some(peer) = self.selected_peer() {
+            if peer.state == PeerState::Disabled {
+                self.user_action_sender.send(UserAction::EnablePeer(peer.id.clone())).unwrap();
+            } else {
+                self.user_action_sender.send(UserAction::DisablePeer(peer.id.clone())).unwrap();
+            }
+        }
     }
 
     fn toggle_denoise(&mut self) {
-        self.selected_peer()
-            .map(|peer| {
-                if peer.denoised {
-                    self.user_action_sender.send(UserAction::DisableDenoise(peer.id.clone())).unwrap();
-                } else {
-                    self.user_action_sender.send(UserAction::EnableDenoise(peer.id.clone())).unwrap();
-                }
-            });
+        if let Some(peer) = self.selected_peer() {
+            if peer.denoised {
+                self.user_action_sender.send(UserAction::DisableDenoise(peer.id.clone())).unwrap();
+            } else {
+                self.user_action_sender.send(UserAction::EnableDenoise(peer.id.clone())).unwrap();
+            }
+        }
     }
 
     fn move_tabs(&mut self, adjustment: isize) {
@@ -382,12 +403,6 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
                             }
                             KeyCode::Char('e') => {
                                 sender.send(AppEvent::CursorEnd).unwrap();
-                            }
-                            KeyCode::Char('d') => {
-                                sender.send(AppEvent::TogglePeer).unwrap();
-                            }
-                            KeyCode::Char('n') => {
-                                sender.send(AppEvent::ToggleDenoise).unwrap();
                             }
                             _ => {}
                         }

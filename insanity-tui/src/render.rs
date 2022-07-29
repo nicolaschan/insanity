@@ -55,7 +55,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         style = style.bg(SELECTED);
     }
     let attributes = Cell::from(Spans::from(vec![
-        Span::styled(format!("{}", peer.volume.to_string()), 
+        Span::styled(format!("{}", peer.volume), 
             Style::default().fg(if peer.denoised { Color::White } else { Color::DarkGray })),
     ]));
     match peer.state.clone() {
@@ -107,13 +107,13 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .collect();
     let widget = Table::new(rows)
         .style(Style::default().fg(Color::White))
-        .widths(&[Constraint::Length(1), Constraint::Length(2), Constraint::Min(70), Constraint::Min(24)])
+        .widths(&[Constraint::Length(1), Constraint::Length(3), Constraint::Min(70), Constraint::Min(24)])
         .column_spacing(1)
         .block(default_block());
     f.render_widget(widget, area);
 }
 
-fn render_editor<'a>(editor: &'a Editor) -> Paragraph<'a> {
+fn render_editor(editor: &Editor) -> Paragraph {
     let before_cursor: String = editor.buffer.chars().take(editor.cursor).collect();
     let at_cursor: String = editor
         .buffer
@@ -146,15 +146,13 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(area);
-    let widget = Paragraph::new(vec![Spans::from(
-        match app.own_address.as_ref() {
+    let widget = Paragraph::new(vec![(match app.own_address.as_ref() {
             Some(addr) => Spans::from(vec![
                 Span::styled("Your address: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(addr.to_string(), Style::default().fg(Color::LightBlue)),
             ]),
             None => Spans::from(vec![Span::styled("Waiting for tor...".to_string(), Style::default().fg(Color::DarkGray))]),
-        }
-    )])
+        })])
         .block(default_block())
         .style(Style::default().fg(Color::White));
     f.render_widget(widget, chunks[0]);

@@ -1,5 +1,5 @@
 use insanity_tui::{start_tui, stop_tui, AppEvent, UserAction, Peer, PeerState};
-use std::{error::Error, collections::{HashMap, BTreeMap}};
+use std::{error::Error, collections::{BTreeMap}};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -37,7 +37,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .send(AppEvent::AddPeer(peers.get(&peer_id.as_str()).unwrap().with_state(PeerState::Disconnected)))
                         .unwrap();
                 }
-                _ => {}
             }
         }
     });
