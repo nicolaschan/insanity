@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt::Display;
-use std::io::{Error, Write, copy};
+use std::io::{Error, Write};
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -51,13 +51,14 @@ impl ProtocolMessage {
         W: Write,
     {
         let serialized = bincode::serialize(self).unwrap();
-        if let Err(e) = copy(&mut &serialized[..], &mut stream) {
-            log::error!("Failed to write to stream {}", e);
-        }
+        if zstd::stream::copy_encode(&serialized[..], &mut stream, 1).is_ok() {}
         Ok(())
     }
     pub async fn read_from_stream(stream: &mut &[u8]) -> Result<ProtocolMessage, Vec<u8>> {
-        bincode::deserialize(stream).expect("Failed to deserialize")
+        let mut data_buffer = Vec::new();
+        if zstd::stream::copy_decode(stream, &mut data_buffer).is_ok() {}
+        let protocol_message = bincode::deserialize(&data_buffer[..]).expect("Protocol violation");
+        Ok(protocol_message)
     }
 }
 
