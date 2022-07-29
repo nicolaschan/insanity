@@ -52,14 +52,14 @@ impl ProtocolMessage {
         W: Write,
     {
         let serialized = bincode::serialize(self).unwrap();
-        if zstd::stream::copy_encode(&serialized[..], &mut stream, 1).is_ok() {}
+        if let Err(e) = std::io::copy(&mut &serialized[..], &mut stream) {
+            log::error!("Error writing to stream: {:?}", e);
+            return Err(e);
+        }
         Ok(())
     }
     pub async fn read_from_stream(stream: &mut &[u8]) -> Result<ProtocolMessage, Box<ErrorKind>> {
-        let mut data_buffer = Vec::new();
-        if zstd::stream::copy_decode(stream, &mut data_buffer).is_ok() {}
-        let protocol_message = bincode::deserialize(&data_buffer[..]);
-        match protocol_message {
+        match bincode::deserialize(stream) {
             Ok(protocol_message) => Ok(protocol_message),
             Err(e) => {
                 log::error!("Error deserializing protocol message: {:?}", e);
