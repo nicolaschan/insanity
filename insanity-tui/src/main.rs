@@ -5,10 +5,10 @@ use std::{error::Error, collections::{BTreeMap}};
 async fn main() -> Result<(), Box<dyn Error>> {
     let (sender, mut user_action_receiver, handle) = start_tui().await?;
     let mut peers = BTreeMap::new();
-    peers.insert("francis", Peer::new("francis".to_string(), None, PeerState::Disconnected, true));
-    peers.insert("nicolas", Peer::new("nicolas".to_string(), None, PeerState::Connected("hi".to_string()), false));
-    peers.insert("randall", Peer::new("randall".to_string(), None, PeerState::Disabled, true));
-    peers.insert("neelay", Peer::new("neelay".to_string(), None, PeerState::Connecting("bruh".to_string()), true));
+    peers.insert("francis", Peer::new("francis".to_string(), None, PeerState::Disconnected, true, 100));
+    peers.insert("nicolas", Peer::new("nicolas".to_string(), None, PeerState::Connected("hi".to_string()), false, 100));
+    peers.insert("randall", Peer::new("randall".to_string(), None, PeerState::Disabled, true, 100));
+    peers.insert("neelay", Peer::new("neelay".to_string(), None, PeerState::Connecting("bruh".to_string()), true, 100));
 
     for peer in peers.values() {
         sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
@@ -35,6 +35,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 UserAction::EnablePeer(peer_id) => {
                     sender
                         .send(AppEvent::AddPeer(peers.get(&peer_id.as_str()).unwrap().with_state(PeerState::Disconnected)))
+                        .unwrap();
+                }
+                UserAction::SetVolume(peer_id, volume) => {
+                    sender
+                        .send(AppEvent::SetPeerVolume(peer_id, volume))
                         .unwrap();
                 }
             }

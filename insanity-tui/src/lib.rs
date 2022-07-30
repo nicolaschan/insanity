@@ -32,8 +32,8 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(id: String, display_name: Option<String>, state: PeerState, denoised: bool) -> Peer {
-        Peer { id, display_name, state, denoised, volume: 100 }
+    pub fn new(id: String, display_name: Option<String>, state: PeerState, denoised: bool, volume: usize) -> Peer {
+        Peer { id, display_name, state, denoised, volume }
     }
 
     pub fn with_denoised(&self, denoised: bool) -> Peer {
@@ -42,6 +42,10 @@ impl Peer {
 
     pub fn with_state(&self, state: PeerState) -> Peer {
         Peer { state, ..self.clone() }
+    }
+
+    pub fn with_volume(&self, volume: usize) -> Peer {
+        Peer { volume, ..self.clone() }
     }
 }
 
@@ -68,7 +72,7 @@ pub enum AppEvent {
     TogglePeer,
     ToggleDenoise,
     SetPeerDenoise(String, bool),
-    SetPeerVolume(String, bool),
+    SetPeerVolume(String, usize),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -77,6 +81,7 @@ pub enum UserAction {
     EnablePeer(String),
     DisableDenoise(String),
     EnableDenoise(String),
+    SetVolume(String, usize),
 }
 
 pub struct Editor {
@@ -233,6 +238,24 @@ impl App {
                             'd' => {
                                 self.toggle_denoise();
                             }
+                            '+' => {
+                                self.adjust_volume(1);
+                            }
+                            '-' => {
+                                self.adjust_volume(-1);
+                            }
+                            'j' => {
+                                self.move_peer(1);
+                            }
+                            'k' => {
+                                self.move_peer(-1);
+                            }
+                            'g' => {
+                                self.peer_index = 0;
+                            }
+                            'G' => {
+                                self.peer_index = self.peers.len() - 1;
+                            }
                             _ => {}
                         }
                     }
@@ -286,8 +309,17 @@ impl App {
                     *peer = peer.with_denoised(denoised);
                 }
             }
+            AppEvent::SetPeerVolume(peer_id, volume) => {
+                if let Some(peer) = self.peers.get_mut(&peer_id) {
+                    *peer = peer.with_volume(volume);
+                }
+            }
             _ => {}
         }
+    }
+
+    fn move_peer(&mut self, delta: isize) {
+        self.peer_index = add_in_bounds(self.peer_index, 0, self.peers.len() - 1, delta);
     }
 
     fn selected_peer(&self) -> Option<&Peer> {
@@ -311,6 +343,14 @@ impl App {
             } else {
                 self.user_action_sender.send(UserAction::EnableDenoise(peer.id.clone())).unwrap();
             }
+        }
+    }
+
+    fn adjust_volume(&mut self, delta: isize) {
+        if let Some(peer) = self.selected_peer() {
+            self.user_action_sender.send(
+                UserAction::SetVolume(peer.id.clone(), add_in_bounds(peer.volume, 0, 999, delta)))
+                .unwrap();
         }
     }
 
@@ -448,4 +488,15 @@ pub async fn stop_tui(
     execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
     terminal.show_cursor().unwrap();
     Ok(())
+}
+
+fn add_in_bounds(value: usize, min: usize, max: usize, delta: isize) -> usize {
+    let new_value = value as isize + delta;
+    if new_value < min as isize {
+        min
+    } else if new_value > max as isize {
+        max
+    } else {
+        new_value as usize
+    }
 }

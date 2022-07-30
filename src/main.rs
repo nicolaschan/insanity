@@ -163,7 +163,7 @@ async fn main() {
             .map(|(peer, (socket, conn_manager, sender))| async move {
                 (
                     peer.clone().to_string(),
-                    ManagedPeer::new(peer, denoise, socket, conn_manager, sender).await,
+                    ManagedPeer::new(peer, denoise, 100, socket, conn_manager, sender).await,
                 )
             })
             .collect::<FuturesUnordered<_>>()
@@ -194,6 +194,11 @@ async fn main() {
                     UserAction::EnablePeer(id) => {
                         if let Some(peer) = managed_peers_clone.get(&id) {
                             peer.enable().await;
+                        }
+                    }
+                    UserAction::SetVolume(id, volume) => {
+                        if let Some(peer) = managed_peers_clone.get(&id) {
+                            peer.set_volume(volume).await;
                         }
                     }
                 }

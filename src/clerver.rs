@@ -2,6 +2,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
+use desync::Desync;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -86,12 +87,13 @@ fn u16_to_channels(n: u16) -> Channels {
 pub async fn run_receiver(
     mut conn: VeqSessionAlias,
     enable_denoise: Arc<AtomicBool>,
+    volume: Arc<Desync<usize>>,
     mut shutdown: Receiver<()>,
     _termination_sender: mpsc::Sender<()>,
 ) {
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
-    let processor = Arc::new(AudioProcessor::new(enable_denoise));
+    let processor = Arc::new(AudioProcessor::new(enable_denoise, volume));
     let processor_clone = processor.clone();
     let (sample_format, config) = get_output_config(&output_device);
     let config_clone = config.clone();
@@ -132,7 +134,8 @@ pub async fn run_receiver(
                     let audio_format = AudioFormat::new(config.channels, config.sample_rate.0);
                     let chunk = AudioChunk::new(frame.0, audio_format, buf);
                     // let chunk = AudioChunk::new(frame.0, audio_format, audio_data);
-                    processor.handle_incoming(chunk);
+                    let processor_clone = processor.clone();
+                    processor_clone.handle_incoming(chunk);
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
@@ -144,6 +147,7 @@ pub async fn run_receiver(
 pub async fn start_clerver(
     conn: VeqSessionAlias,
     enable_denoise: Arc<AtomicBool>,
+    volume: Arc<Desync<usize>>,
     mut shutdown: Receiver<()>,
 ) {
     let conn_clone = conn.clone();
@@ -158,7 +162,7 @@ pub async fn start_clerver(
 
     let (receiver_termination_tx, mut receiver_termination_rx) = mpsc::channel(10);
     let receiver = tokio::task::spawn(async move {
-        run_receiver(conn, enable_denoise, rx2, receiver_termination_tx).await;
+        run_receiver(conn, enable_denoise, volume, rx2, receiver_termination_tx).await;
     });
 
     tokio::select! {

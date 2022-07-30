@@ -3,6 +3,7 @@ use std::sync::{
     Arc,
 };
 
+use desync::Desync;
 use insanity_tui::{AppEvent, Peer, PeerState};
 use tokio::{
     sync::{
@@ -20,6 +21,7 @@ use crate::{
 pub struct ManagedPeer {
     address: OnionAddress,
     denoise: Arc<AtomicBool>,
+    volume: Arc<Desync<usize>>,
     socket: VeqSocket,
     conn_manager: Arc<ConnectionManager>,
     ui_sender: Option<UnboundedSender<AppEvent>>,
@@ -31,6 +33,7 @@ impl ManagedPeer {
     pub async fn new(
         address: OnionAddress,
         denoise: bool,
+        volume: usize,
         socket: VeqSocket,
         conn_manager: Arc<ConnectionManager>,
         ui_sender: Option<UnboundedSender<AppEvent>>,
@@ -39,6 +42,7 @@ impl ManagedPeer {
         Self {
             address,
             denoise: Arc::new(AtomicBool::new(denoise)),
+            volume: Arc::new(Desync::new(volume)),
             socket,
             conn_manager,
             ui_sender,
@@ -56,6 +60,19 @@ impl ManagedPeer {
         }
     }
 
+    pub async fn set_volume(&self, volume: usize) {
+        let ui_sender = self.ui_sender.clone();
+        let address = self.address.to_string();
+        self.volume.desync(move |v| {
+            *v = volume;
+            if let Some(sender) = ui_sender {
+                sender
+                    .send(AppEvent::SetPeerVolume(address, volume))
+                    .unwrap();
+            }
+        });
+    }
+
     pub async fn enable(&self) {
         if let Some(sender) = &self.ui_sender {
             sender
@@ -64,6 +81,7 @@ impl ManagedPeer {
                     None,
                     PeerState::Disconnected,
                     self.denoise.load(Ordering::Relaxed),
+                    self.volume.sync(|v| *v),
                 )))
                 .unwrap();
         }
@@ -72,6 +90,7 @@ impl ManagedPeer {
         let conn_manager = self.conn_manager.clone();
         let ui_sender = self.ui_sender.clone();
         let denoise = self.denoise.clone();
+        let volume = self.volume.clone();
         let socket = self.socket.clone();
 
         let mut rx = self.shutdown_tx.subscribe();
@@ -80,7 +99,7 @@ impl ManagedPeer {
             loop {
                 log::info!("Beginning connect loop to peer {}", address);
                 tokio::select! {
-                    _ = tokio::spawn(connect(address.clone(), conn_manager.clone(), ui_sender.clone(), denoise.clone(), socket.clone(), inner_tx.subscribe())) => {},
+                    _ = tokio::spawn(connect(address.clone(), conn_manager.clone(), ui_sender.clone(), denoise.clone(), volume.clone(), socket.clone(), inner_tx.subscribe())) => {},
                     _ = rx.recv() => {
                         inner_tx.send(()).unwrap();
                         break;
@@ -94,6 +113,7 @@ impl ManagedPeer {
                             None,
                             PeerState::Disconnected,
                             denoise.load(Ordering::Relaxed),
+                            volume.sync(|v| *v),
                         )))
                         .unwrap();
                 }
@@ -119,6 +139,7 @@ impl ManagedPeer {
                     None,
                     PeerState::Disabled,
                     self.denoise.load(Ordering::Relaxed),
+                    self.volume.sync(|v| *v),
                 )))
                 .unwrap();
         }
@@ -130,6 +151,7 @@ async fn connect(
     conn_manager: Arc<ConnectionManager>,
     ui_sender: Option<UnboundedSender<AppEvent>>,
     denoise: Arc<AtomicBool>,
+    volume: Arc<Desync<usize>>,
     mut socket: VeqSocket,
     mut rx: Receiver<()>,
 ) {
@@ -146,10 +168,11 @@ async fn connect(
                     Some(info.display_name),
                     PeerState::Connected(session.remote_addr().await.to_string()),
                     denoise.load(Ordering::Relaxed),
+                    volume.sync(|v| *v),
                 )))
                 .unwrap();
         }
-        start_clerver(session, denoise.clone(), rx).await;
+        start_clerver(session, denoise.clone(), volume, rx).await;
         log::info!("Connection closed with {}", address);
     }
 }

@@ -6,6 +6,7 @@ use std::{collections::VecDeque, sync::atomic::AtomicBool};
 use std::sync::{Arc, Mutex};
 
 use cpal::Sample;
+use desync::Desync;
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
 
@@ -182,15 +183,17 @@ impl MultiChannelDenoiser<'_> {
 
 pub struct AudioProcessor<'a> {
     enable_denoise: Arc<AtomicBool>,
+    volume: Arc<Desync<usize>>,
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
     audio_buffer: Mutex<VecDeque<f32>>,
     chunk_buffer: Mutex<RealTimeBuffer<AudioChunk>>,
 }
 
 impl AudioProcessor<'_> {
-    pub fn new(enable_denoise: Arc<AtomicBool>) -> Self {
+    pub fn new(enable_denoise: Arc<AtomicBool>, volume: Arc<Desync<usize>>) -> Self {
         AudioProcessor {
             enable_denoise,
+            volume,
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
             chunk_buffer: Mutex::new(RealTimeBuffer::new(10)),
             audio_buffer: Mutex::new(VecDeque::new()),
@@ -198,11 +201,22 @@ impl AudioProcessor<'_> {
     }
 
     pub fn handle_incoming(&self, mut chunk: AudioChunk) {
-        let mut guard = self.chunk_buffer.lock().unwrap();
         if self.enable_denoise.load(Ordering::Relaxed) {
             let mut denoiser_guard = self.denoiser.lock().unwrap();
             chunk = denoiser_guard.denoise_chunk(chunk);
         }
+        
+        // Adjust volume if necessary
+        let volume = self.volume.sync(|v| *v);
+        if volume != 100 {
+            let mut audio_data = chunk.audio_data;
+            for sample in audio_data.iter_mut() {
+                *sample *= volume as f32 / 100.0;
+            }
+            chunk.audio_data = audio_data;
+        }
+
+        let mut guard = self.chunk_buffer.lock().unwrap();
         guard.set(chunk.sequence_number, chunk);
     }
 
