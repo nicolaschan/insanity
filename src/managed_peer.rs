@@ -78,7 +78,9 @@ impl ManagedPeer {
 
     pub fn send_message(&self, message: String) {
         let protocol_message = ProtocolMessage::ChatMessage(message);
-        self.peer_message_sender.send(protocol_message).unwrap();
+        if self.peer_message_sender.receiver_count() > 0 {
+            self.peer_message_sender.send(protocol_message).unwrap();
+        }
     }
 
     pub async fn enable(&self) {
