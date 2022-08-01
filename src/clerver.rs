@@ -3,6 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use cpal::traits::{HostTrait, StreamTrait};
 
 use desync::Desync;
+use insanity_tui::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -21,12 +22,12 @@ use crate::{
     server::{make_audio_receiver, AudioReceiver},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AudioFrame(u128, Vec<u8>);
 
 // A clerver is a CLient + sERVER.
 
-pub async fn run_sender<R: AudioReceiver + Send + 'static>(
+async fn run_audio_sender<R: AudioReceiver + Send + 'static>(
     mut conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
     mut shutdown: Receiver<()>,
@@ -37,10 +38,6 @@ pub async fn run_sender<R: AudioReceiver + Send + 'static>(
     let channels_count = audio_receiver.channels();
     let channels = u16_to_channels(channels_count);
 
-    // println!(
-    //     "sending sample_rate: {:?}, channels: {:?}",
-    //     sample_rate, channels
-    // );
     let mut audio_receiver = ResampledAudioReceiver::new(audio_receiver, 48000);
     let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
     let mut sequence_number = 0;
@@ -84,10 +81,34 @@ fn u16_to_channels(n: u16) -> Channels {
     }
 }
 
-pub async fn run_receiver(
+async fn run_peer_message_sender(
     mut conn: VeqSessionAlias,
+    mut peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
+    mut shutdown: Receiver<()>,
+    _termination_sender: mpsc::Sender<()>,
+) {
+    while let Ok(message) = tokio::select! {
+        message = peer_message_receiver.recv() => message,
+        _ = shutdown.recv() => {
+            log::debug!("Shutdown received in run_peer_message_sender");
+            return;
+        },
+    } {
+        let mut buf = Vec::new();
+        if message.write_to_stream(&mut buf).await.is_ok() {
+            if conn.send(buf).await.is_err() {
+                break;
+            }
+        }
+    }
+}
+
+async fn run_receiver(
+    mut conn: VeqSessionAlias,
+    app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Desync<usize>>,
+    display_name: String,
     mut shutdown: Receiver<()>,
     _termination_sender: mpsc::Sender<()>,
 ) {
@@ -139,6 +160,11 @@ pub async fn run_receiver(
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
+                ProtocolMessage::ChatMessage(chat_message) => {
+                    if let Some(ref app_event_sender) = app_event_sender {
+                        app_event_sender.send(AppEvent::NewMessage(display_name.clone(), chat_message)).unwrap();
+                    }
+                }
             }
         }
     }
@@ -146,28 +172,41 @@ pub async fn run_receiver(
 
 pub async fn start_clerver(
     conn: VeqSessionAlias,
+    app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
+    peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Desync<usize>>,
+    display_name: String,
     mut shutdown: Receiver<()>,
 ) {
-    let conn_clone = conn.clone();
+    
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(10);
 
-    let (tx, rx) = broadcast::channel(10);
-    let rx2 = tx.subscribe();
-
-    let (sender_termination_tx, mut sender_termination_rx) = mpsc::channel(10);
-    let sender = tokio::spawn(async move {
-        run_sender(conn_clone, make_audio_receiver, rx, sender_termination_tx).await;
+    let audio_sender_conn = conn.clone();
+    let (audio_sender_termination_tx, mut audio_sender_termination_rx) = mpsc::channel(10);
+    let audio_sender = tokio::spawn(async move {
+        run_audio_sender(audio_sender_conn, make_audio_receiver, shutdown_rx, audio_sender_termination_tx).await;
     });
 
+    let peer_message_sender_conn = conn.clone();
+    let shutdown_rx2 = shutdown_tx.subscribe();
+    let (peer_message_sender_termination_tx, mut peer_message_sender_termination_rx) = mpsc::channel(10);
+    let peer_message_sender = tokio::spawn(async move {
+        run_peer_message_sender(peer_message_sender_conn, peer_message_receiver, shutdown_rx2, peer_message_sender_termination_tx).await;
+    });
+
+    let shutdown_rx3 = shutdown_tx.subscribe();
     let (receiver_termination_tx, mut receiver_termination_rx) = mpsc::channel(10);
     let receiver = tokio::task::spawn(async move {
-        run_receiver(conn, enable_denoise, volume, rx2, receiver_termination_tx).await;
+        run_receiver(conn, app_event_sender, enable_denoise, volume, display_name, shutdown_rx3, receiver_termination_tx).await;
     });
 
     tokio::select! {
-        _ = sender_termination_rx.recv() => {
-            log::debug!("Sender termination received");
+        _ = audio_sender_termination_rx.recv() => {
+            log::debug!("Audio Sender termination received");
+        },
+        _ = peer_message_sender_termination_rx.recv() => {
+            log::debug!("Peer message sender termination received")
         },
         _ = receiver_termination_rx.recv() => {
             log::debug!("Receiver termination received");
@@ -176,12 +215,13 @@ pub async fn start_clerver(
             log::debug!("Shutdown received in start_clerver");
         }
     }
-    if tx.send(()).is_ok() {
+    if shutdown_tx.send(()).is_ok() {
         log::debug!("Shutdown sent to broadcast channel");
     } else {
         log::debug!("Failed to send shutdown to broadcast channel");
     }
-    let (s, r) = join!(sender, receiver);
+    let (s, p, r) = join!(audio_sender, peer_message_sender, receiver);
     s.unwrap();
+    p.unwrap();
     r.unwrap();
 }

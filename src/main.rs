@@ -139,7 +139,7 @@ async fn main() {
         async move { start_coordinator(coordinator_port, connection_manager_arc_clone).await },
     );
 
-    let (sender, user_action_receiver, handle) = if !opts.no_tui {
+    let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
         let (x, y, z) = insanity_tui::start_tui().await.unwrap();
         x.send(AppEvent::SetOwnAddress(onion_address.to_string()))
             .unwrap();
@@ -158,12 +158,12 @@ async fn main() {
             .zip(std::iter::repeat((
                 socket.clone(),
                 connection_manager_arc,
-                sender.clone(),
+                app_event_sender.clone(),
             )))
-            .map(|(peer, (socket, conn_manager, sender))| async move {
+            .map(|(peer, (socket, conn_manager, app_event_sender))| async move {
                 (
                     peer.clone().to_string(),
-                    ManagedPeer::new(peer, denoise, 100, socket, conn_manager, sender).await,
+                    ManagedPeer::new(peer, denoise, 100, socket, conn_manager, app_event_sender).await,
                 )
             })
             .collect::<FuturesUnordered<_>>()
@@ -199,6 +199,11 @@ async fn main() {
                     UserAction::SetVolume(id, volume) => {
                         if let Some(peer) = managed_peers_clone.get(&id) {
                             peer.set_volume(volume).await;
+                        }
+                    }
+                    UserAction::SendMessage(message) => {
+                        for (_, peer) in managed_peers_clone.iter() {
+                            peer.send_message(message.clone());
                         }
                     }
                 }

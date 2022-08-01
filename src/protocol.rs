@@ -17,11 +17,12 @@ use crate::clerver::AudioFrame;
 use crate::coordinator::AugmentedInfo;
 use crate::session::UpdatablePendingSession;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ProtocolMessage {
     AudioFrame(AudioFrame),
     IdentityDeclaration(PeerIdentity),
     PeerDiscovery(Vec<PeerIdentity>),
+    ChatMessage(String)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

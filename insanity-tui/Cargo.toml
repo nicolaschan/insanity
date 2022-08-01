@@ -17,3 +17,4 @@ path = "src/main.rs"
 crossterm = "0.23"
 tokio = { version = "1.16.1", features = ["sync", "rt", "rt-multi-thread", "macros"] }
 tui = "0.17.0"
+textwrap = "0.15.0"

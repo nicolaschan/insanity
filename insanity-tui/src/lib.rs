@@ -4,15 +4,29 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::collections::BTreeMap;
-use std::{cmp::min, error::Error, io, io::Stdout};
+use std::{error::Error, io, io::Stdout};
 use tokio::{
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
 };
 use tui::{backend::Backend, backend::CrosstermBackend, Terminal};
 
+mod editor;
+use editor::Editor;
 mod render;
 // mod main;
+
+const TAB_NAME_PEERS: &str = "Peers";
+const TAB_NAME_CHAT: &str = "Chat";
+const TAB_NAME_SETTINGS: &str = "Settings";
+
+// Order must match in TAB_NAMES.
+pub const TAB_IDX_PEERS: usize = 0;
+pub const TAB_IDX_CHAT: usize = 1;
+pub const TAB_IDX_SETTINGS: usize = 2;
+
+const NUM_TABS: usize = 3;
+const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerState {
@@ -56,6 +70,8 @@ pub enum AppEvent {
     PreviousTab,
     Nothing,
     Character(char),
+    Enter,
+    NewMessage(String, String),
     AddPeer(Peer),
     RemovePeer(String),
     Backspace,
@@ -82,132 +98,33 @@ pub enum UserAction {
     DisableDenoise(String),
     EnableDenoise(String),
     SetVolume(String, usize),
-}
-
-pub struct Editor {
-    pub buffer: String,
-    pub cursor: usize,
-}
-
-impl Default for Editor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Editor {
-    pub fn new() -> Editor {
-        Editor {
-            buffer: String::new(),
-            cursor: 0,
-        }
-    }
-
-    pub fn append(&mut self, c: char) {
-        let mut chars: Vec<char> = self.buffer.chars().collect();
-        chars.insert(self.cursor, c);
-        self.buffer = chars.iter().collect();
-        self.cursor += 1;
-    }
-
-    pub fn backspace(&mut self) {
-        if let Some(val) = self.cursor.checked_sub(1) {
-            let mut chars: Vec<char> = self.buffer.chars().collect();
-            chars.remove(self.cursor.saturating_sub(1));
-            self.buffer = chars.iter().collect();
-            self.cursor = val;
-        }
-    }
-
-    pub fn left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    pub fn right(&mut self) {
-        self.cursor = min(self.cursor + 1, self.buffer.len());
-    }
-
-    pub fn cursor_beginning(&mut self) {
-        self.cursor = 0;
-    }
-
-    pub fn cursor_end(&mut self) {
-        self.cursor = self.buffer.len();
-    }
-
-    pub fn delete_word(&mut self) {
-        for _ in 0..self
-            .cursor.saturating_sub(self.previous_word_index())
-        {
-            self.backspace();
-        }
-    }
-
-    pub fn next_word(&mut self) {
-        let chars: Vec<char> = self.buffer.chars().collect();
-        let mut found = false;
-        for i in (self.cursor + 1)..self.buffer.chars().count() {
-            if found {
-                if let Some(' ') = chars.get(i) {
-                    self.cursor = i;
-                    return;
-                }
-            } else if let Some(c) = chars.get(i) {
-                if c != &' ' {
-                    found = true;
-                }
-            }
-        }
-        self.cursor = self.buffer.chars().count();
-    }
-
-    fn previous_word_index(&mut self) -> usize {
-        let chars: Vec<char> = self.buffer.chars().collect();
-        let mut found = false;
-        for i in (0..self.cursor.saturating_sub(1)).rev() {
-            if found {
-                if let Some(' ') = chars.get(i) {
-                    return i + 1;
-                }
-            } else if let Some(c) = chars.get(i) {
-                if c != &' ' {
-                    found = true;
-                }
-            }
-        }
-        0
-    }
-
-    pub fn previous_word(&mut self) {
-        self.cursor = self.previous_word_index();
-    }
+    SendMessage(String)
 }
 
 pub struct App {
     pub user_action_sender: UnboundedSender<UserAction>,
-    pub tabs: Vec<String>,
+    pub tabs: [&'static str; NUM_TABS],
     pub tab_index: usize,
     pub killed: bool,
     pub peers: BTreeMap<String, Peer>,
     pub own_address: Option<String>,
     pub editor: Editor,
     pub peer_index: usize,
+    pub chat_history: Vec<(String, String)> // (Display Name, Message)
 }
 
 impl App {
     pub fn new(sender: UnboundedSender<UserAction>) -> App {
         App {
             user_action_sender: sender,
-            tabs: ["Peers", "Chat", "Settings"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            tabs: TAB_NAMES,
             tab_index: 0,
             killed: false,
             peers: BTreeMap::new(),
             own_address: None,
             editor: Editor::new(),
             peer_index: 0,
+            chat_history: vec![]
         }
     }
 
@@ -216,6 +133,7 @@ impl App {
             AppEvent::Kill => {
                 self.killed = true;
             }
+            AppEvent::Nothing => {}
             AppEvent::NextTab => {
                 self.move_tabs(1);
             }
@@ -230,7 +148,7 @@ impl App {
             }
             AppEvent::Character(c) => {
                 match self.tab_index {
-                    0 => {
+                    TAB_IDX_PEERS => {
                         match c {
                             ' ' => {
                                 self.toggle_peer();
@@ -259,11 +177,22 @@ impl App {
                             _ => {}
                         }
                     }
-                    1 => {
+                    TAB_IDX_CHAT => {
                         self.editor.append(c);
                     }
                     _ => {}
                 }
+            }
+            AppEvent::Enter => {
+                match self.tab_index {
+                    TAB_IDX_CHAT => {
+                        self.send_message();
+                    }
+                    _ => {}
+                }
+            }
+            AppEvent::NewMessage(sender_name, message) => {
+                self.chat_history.push((sender_name, message))
             }
             AppEvent::Backspace => {
                 self.editor.backspace();
@@ -314,7 +243,7 @@ impl App {
                     *peer = peer.with_volume(volume);
                 }
             }
-            _ => {}
+            // _ => {}
         }
     }
 
@@ -333,6 +262,14 @@ impl App {
             } else {
                 self.user_action_sender.send(UserAction::DisablePeer(peer.id.clone())).unwrap();
             }
+        }
+    }
+
+    fn send_message(&mut self) {
+        if !self.editor.is_empty() {
+            let message = self.editor.clear();
+            self.chat_history.push(("Me".to_string(), message.clone()));
+            self.user_action_sender.send(UserAction::SendMessage(message)).unwrap();
         }
     }
 
@@ -415,6 +352,9 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
                         KeyCode::Up => {
                             sender.send(AppEvent::Up).unwrap();
                         }
+                        KeyCode::Enter => {
+                            sender.send(AppEvent::Enter).unwrap();
+                        }
                         _ => {}
                     }
                 } else {
@@ -472,12 +412,12 @@ pub async fn start_tui() -> Result<
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let (sender, receiver) = unbounded_channel();
+    let (app_user_action_sender, app_user_action_receiver) = unbounded_channel();
 
-    let app = App::new(sender);
-    let (sender, handle) = get_sender(app, terminal).await;
-    handle_input(sender.clone()).await;
-    Ok((sender, receiver, handle))
+    let app = App::new(app_user_action_sender);
+    let (app_event_sender, handle) = get_sender(app, terminal).await;
+    handle_input(app_event_sender.clone()).await;
+    Ok((app_event_sender, app_user_action_receiver, handle))
 }
 
 pub async fn stop_tui(

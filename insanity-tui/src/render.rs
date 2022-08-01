@@ -20,7 +20,7 @@ fn default_block<'a>() -> Block<'a> {
         .borders(Borders::ALL)
 }
 
-use crate::{App, Editor, Peer};
+use crate::{App, Editor, Peer, TAB_IDX_PEERS, TAB_IDX_CHAT};
 
 pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     let chunks = Layout::default()
@@ -29,8 +29,8 @@ pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         .split(f.size());
     f.render_widget(tab_list(app), chunks[0]);
     match app.tab_index {
-        0 => render_peer_list(f, app, chunks[1]),
-        1 => render_chat(f, app, chunks[1]),
+        TAB_IDX_PEERS => render_peer_list(f, app, chunks[1]),
+        TAB_IDX_CHAT => render_chat(f, app, chunks[1]),
         _ => render_settings(f, app, chunks[1]),
     }
     // f.render_widget(Paragraph::new("insanity v2")
@@ -132,13 +132,32 @@ fn render_editor(editor: &Editor) -> Paragraph {
     Paragraph::new(text)
 }
 
+fn render_chat_history<'a>(chat_history: &'a Vec<(String, String)>, area: &'a Rect) -> Paragraph<'a> {
+    let max_text_width = area.width as usize;
+    let max_num_lines = area.height.saturating_sub(2) as usize;
+    let mut text: Vec<String> = vec![];
+    for &(ref display_name, ref message_text) in chat_history.iter().rev() {
+        let message = display_name.to_owned() + ": " + message_text;
+        let lines = textwrap::wrap(&message, max_text_width);
+        if text.len() + lines.len() <= max_num_lines {
+            text.push(lines.join("\n"));
+        } else {
+            break;
+        }
+    }
+    text.reverse();
+    Paragraph::new(text.join("\n"))
+}
+
 fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(area);
-    let widget = render_editor(&app.editor).block(default_block());
-    f.render_widget(widget, chunks[0]);
+    let editor_widget = render_editor(&app.editor).block(default_block());
+    let chat_history_widget = render_chat_history(&app.chat_history, &chunks[1]).block(default_block());
+    f.render_widget(editor_widget, chunks[0]);
+    f.render_widget(chat_history_widget, chunks[1]);
 }
 
 fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
