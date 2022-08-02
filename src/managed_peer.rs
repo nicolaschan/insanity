@@ -176,7 +176,7 @@ async fn connect(
         if let Some(ref sender) = ui_sender {
             sender
                 .send(AppEvent::AddPeer(Peer::new(
-                    address.to_string(),
+                    address.clone().to_string(),
                     Some(info.display_name.clone()),
                     PeerState::Connected(session.remote_addr().await.to_string()),
                     denoise.load(Ordering::Relaxed),
@@ -184,7 +184,7 @@ async fn connect(
                 )))
                 .unwrap();
         }
-        start_clerver(session, ui_sender, peer_message_receiver, denoise.clone(), volume, info.display_name, shutdown_receiver).await;
+        start_clerver(session, ui_sender, peer_message_receiver, denoise.clone(), volume, address.clone(), shutdown_receiver).await;
         log::info!("Connection closed with {}", address);
     }
 }

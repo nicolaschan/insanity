@@ -66,6 +66,8 @@ struct Opts {
 async fn main() {
     let opts: Opts = Opts::parse();
 
+    let display_name = format!("{}@{}", whoami::username(), whoami::hostname());
+
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
         None => dirs::data_local_dir()
@@ -135,14 +137,16 @@ async fn main() {
     let connection_manager_arc = Arc::new(connection_manager);
 
     let connection_manager_arc_clone = connection_manager_arc.clone();
+    let name_copy = display_name.clone();
     tokio::spawn(
-        async move { start_coordinator(coordinator_port, connection_manager_arc_clone).await },
+        async move { start_coordinator(coordinator_port, connection_manager_arc_clone, name_copy).await },
     );
 
     let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
         let (x, y, z) = insanity_tui::start_tui().await.unwrap();
         x.send(AppEvent::SetOwnAddress(onion_address.to_string()))
             .unwrap();
+        x.send(AppEvent::SetOwnDisplayName(display_name)).unwrap();
         (Some(x), Some(y), Some(z))
     } else {
         (None, None, None)

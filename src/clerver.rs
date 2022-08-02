@@ -17,7 +17,7 @@ use veq::veq::VeqSessionAlias;
 use crate::{
     client::{get_output_config, setup_output_stream},
     processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
-    protocol::ProtocolMessage,
+    protocol::{ProtocolMessage, OnionAddress},
     resampler::ResampledAudioReceiver,
     server::{make_audio_receiver, AudioReceiver},
 };
@@ -108,10 +108,11 @@ async fn run_receiver(
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Desync<usize>>,
-    display_name: String,
+    address: OnionAddress,
     mut shutdown: Receiver<()>,
     _termination_sender: mpsc::Sender<()>,
 ) {
+    let address = address.to_string();
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
     let processor = Arc::new(AudioProcessor::new(enable_denoise, volume));
@@ -161,8 +162,8 @@ async fn run_receiver(
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
                 ProtocolMessage::ChatMessage(chat_message) => {
-                    if let Some(ref app_event_sender) = app_event_sender {
-                        app_event_sender.send(AppEvent::NewMessage(display_name.clone(), chat_message)).unwrap();
+                    if let &Some(ref app_event_sender) = &app_event_sender {
+                        app_event_sender.send(AppEvent::NewMessage(address.clone(), chat_message)).unwrap();
                     }
                 }
             }
@@ -176,7 +177,7 @@ pub async fn start_clerver(
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Desync<usize>>,
-    display_name: String,
+    address: OnionAddress,
     mut shutdown: Receiver<()>,
 ) {
     
@@ -198,7 +199,7 @@ pub async fn start_clerver(
     let shutdown_rx3 = shutdown_tx.subscribe();
     let (receiver_termination_tx, mut receiver_termination_rx) = mpsc::channel(10);
     let receiver = tokio::task::spawn(async move {
-        run_receiver(conn, app_event_sender, enable_denoise, volume, display_name, shutdown_rx3, receiver_termination_tx).await;
+        run_receiver(conn, app_event_sender, enable_denoise, volume, address, shutdown_rx3, receiver_termination_tx).await;
     });
 
     tokio::select! {

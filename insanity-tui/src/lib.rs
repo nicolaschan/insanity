@@ -83,6 +83,7 @@ pub enum AppEvent {
     NextWord,
     DeleteWord,
     SetOwnAddress(String),
+    SetOwnDisplayName(String),
     Down,
     Up,
     TogglePeer,
@@ -106,8 +107,9 @@ pub struct App {
     pub tabs: [&'static str; NUM_TABS],
     pub tab_index: usize,
     pub killed: bool,
-    pub peers: BTreeMap<String, Peer>,
+    pub peers: BTreeMap<String, Peer>, // (Onion Address, Peer)
     pub own_address: Option<String>,
+    pub own_display_name: Option<String>,
     pub editor: Editor,
     pub peer_index: usize,
     pub chat_history: Vec<(String, String)> // (Display Name, Message)
@@ -122,6 +124,7 @@ impl App {
             killed: false,
             peers: BTreeMap::new(),
             own_address: None,
+            own_display_name: None,
             editor: Editor::new(),
             peer_index: 0,
             chat_history: vec![]
@@ -221,6 +224,9 @@ impl App {
             AppEvent::SetOwnAddress(address) => {
                 self.own_address = Some(address);
             }
+            AppEvent::SetOwnDisplayName(display_name) => {
+                self.own_display_name = Some(display_name);
+            }
             AppEvent::Down => {
                 self.peer_index = std::cmp::min(self.peer_index.checked_add(1).unwrap_or(0), self.peers.len() - 1);
             }
@@ -268,7 +274,9 @@ impl App {
     fn send_message(&mut self) {
         if !self.editor.is_empty() {
             let message = self.editor.clear();
-            self.chat_history.push(("Me".to_string(), message.clone()));
+            let default = "Me".to_string();
+            let own_address = self.own_address.as_ref().unwrap_or(&default);
+            self.chat_history.push((own_address.to_string(), message.clone()));
             self.user_action_sender.send(UserAction::SendMessage(message)).unwrap();
         }
     }

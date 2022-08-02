@@ -13,6 +13,21 @@ const SELECTED: Color = Color::Rgb(80, 80, 80);
 const CONNECTED: Color = Color::Rgb(0, 255, 0);
 const CONNECTING: Color = Color::Rgb(0, 255, 255);
 
+
+// Gruvbox (mostly) dark theme
+const COLOR_RED: Color    = Color::Rgb(0xfb, 0x49, 0x34); // Color::Rgb(0xcc, 0x24, 0x1d);
+const COLOR_GREEN: Color  = Color::Rgb(0x98, 0x98, 0x1a);
+const COLOR_YELLOW: Color = Color::Rgb(0xd7, 0x99, 0x21);
+const COLOR_BLUE: Color   = Color::Rgb(0x45, 0x85, 0x88);
+const COLOR_PURPLE: Color = Color::Rgb(0xb1, 0x62, 0x86);
+const COLOR_AQUA: Color   = Color::Rgb(0x68, 0x96, 0x6a);
+const COLOR_ORANGE: Color = Color::Rgb(0xd6, 0x5d, 0x0e);
+const NUM_CHAT_COLORS: usize = 7;
+const CHAT_COLORS: [Color; NUM_CHAT_COLORS] = [
+    COLOR_RED, COLOR_GREEN, COLOR_YELLOW, COLOR_BLUE, 
+    COLOR_PURPLE, COLOR_AQUA, COLOR_ORANGE
+];
+
 fn default_block<'a>() -> Block<'a> {
     Block::default()
         .border_type(BorderType::Rounded)
@@ -33,10 +48,6 @@ pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         TAB_IDX_CHAT => render_chat(f, app, chunks[1]),
         _ => render_settings(f, app, chunks[1]),
     }
-    // f.render_widget(Paragraph::new("insanity v2")
-    //     .alignment(Alignment::Center)
-    //     .style(Style::default().fg(BG_GRAY)),
-    //     chunks[2]);
 }
 
 fn tab_list(app: &App) -> impl Widget {
@@ -132,21 +143,87 @@ fn render_editor(editor: &Editor) -> Paragraph {
     Paragraph::new(text)
 }
 
-fn render_chat_history<'a>(chat_history: &'a Vec<(String, String)>, area: &'a Rect) -> Paragraph<'a> {
-    let max_text_width = area.width as usize;
+fn hash<T: std::hash::Hash>(object: &T) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+    let mut hasher = DefaultHasher::new();
+    object.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn render_chat_history<'a>(
+    chat_history: &'a Vec<(String, String)>, 
+    peers: &'a std::collections::BTreeMap<String, Peer>, 
+    own_address: &'a Option<String>,
+    own_display_name: &'a Option<String>,
+    area: &'a Rect) -> Paragraph<'a> 
+{
+    let max_text_width = area.width.saturating_sub(2) as usize;
     let max_num_lines = area.height.saturating_sub(2) as usize;
-    let mut text: Vec<String> = vec![];
-    for &(ref display_name, ref message_text) in chat_history.iter().rev() {
-        let message = display_name.to_owned() + ": " + message_text;
-        let lines = textwrap::wrap(&message, max_text_width);
-        if text.len() + lines.len() <= max_num_lines {
-            text.push(lines.join("\n"));
+    let mut text: Vec<Vec<tui::text::Spans>> = vec![];
+    let mut total_line_count = 0;
+    for (address, message_text) in chat_history.iter().rev() {
+        let name_color = CHAT_COLORS[(hash(address) % (NUM_CHAT_COLORS as u64)) as usize];
+        let name_style = Style::default().fg(name_color);
+        let display_name = if let Some(peer) = peers.get(address) {
+            peer.display_name.as_ref().unwrap_or(address)
+        } else if **own_address.as_ref().unwrap() == *address {
+            own_display_name.as_ref().unwrap_or(address)
         } else {
+            address
+        };
+
+        let message = display_name.to_string() + ": " + message_text;
+        let lines = textwrap::wrap(&message, max_text_width);
+
+        let mut name_count = 0;
+        // Number of full lines the display name takes.
+        let display_name_num_wraps = lines
+            .iter()
+            .take_while(|s| {
+                if s.len() < display_name.len() - name_count {
+                    name_count += s.len();
+                    true
+                } else {
+                    false
+                }
+            })
+            .count();
+        
+        // Style the line that is part display name and part message content.
+        let (name_part, text_part) = lines
+            .iter()
+            .nth(display_name_num_wraps)
+            .unwrap()
+            .split_at(display_name.len() - name_count);
+        let split_line = vec![Spans::from(vec![
+            Span::styled(name_part.to_string(), name_style),
+            Span::raw(text_part.to_string())
+        ])];
+
+        let lines: Vec<Spans> = lines
+            .iter()
+            .take(display_name_num_wraps)
+            .map(|s| Spans::from(vec![Span::styled(s.to_string(), name_style)]))
+            .chain(split_line.into_iter())
+            .chain(lines
+                .iter()
+                .skip(display_name_num_wraps + 1)
+                .map(|s| Spans::from(vec![Span::raw(s.to_string())]))
+            )
+            .rev()
+            .take(max_num_lines - total_line_count)
+            .collect();
+        total_line_count += lines.len();
+        text.push(lines.into_iter().rev().collect());
+
+        if total_line_count >= max_num_lines {
             break;
         }
     }
     text.reverse();
-    Paragraph::new(text.join("\n"))
+    let text: Vec<Spans> = text.into_iter().flatten().collect();
+    Paragraph::new(text)
 }
 
 fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
@@ -155,7 +232,7 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(area);
     let editor_widget = render_editor(&app.editor).block(default_block());
-    let chat_history_widget = render_chat_history(&app.chat_history, &chunks[1]).block(default_block());
+    let chat_history_widget = render_chat_history(&app.chat_history, &app.peers, &app.own_address, &app.own_display_name, &chunks[1]).block(default_block());
     f.render_widget(editor_widget, chunks[0]);
     f.render_widget(chat_history_widget, chunks[1]);
 }
