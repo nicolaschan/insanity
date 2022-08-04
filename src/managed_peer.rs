@@ -7,15 +7,15 @@ use desync::Desync;
 use insanity_tui::{AppEvent, Peer, PeerState};
 use tokio::{
     sync::{
-        broadcast::{self, Receiver},
-        mpsc::{UnboundedSender},
+        broadcast,
+        mpsc,
     },
 };
 use veq::veq::{VeqSocket};
 
 use crate::{
     clerver::start_clerver,
-    protocol::{ConnectionManager, OnionAddress},
+    protocol::{ConnectionManager, OnionAddress, ProtocolMessage},
 };
 
 pub struct ManagedPeer {
@@ -24,7 +24,8 @@ pub struct ManagedPeer {
     volume: Arc<Desync<usize>>,
     socket: VeqSocket,
     conn_manager: Arc<ConnectionManager>,
-    ui_sender: Option<UnboundedSender<AppEvent>>,
+    ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
+    peer_message_sender: broadcast::Sender<ProtocolMessage>,
     shutdown_tx: broadcast::Sender<()>,
     enabled: Arc<AtomicBool>,
 }
@@ -36,9 +37,10 @@ impl ManagedPeer {
         volume: usize,
         socket: VeqSocket,
         conn_manager: Arc<ConnectionManager>,
-        ui_sender: Option<UnboundedSender<AppEvent>>,
+        ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     ) -> Self {
-        let (tx, _rx) = broadcast::channel(10);
+        let (shutdown_tx, _shutdown_rx) = broadcast::channel(10);
+        let (peer_message_sender, _) = broadcast::channel(10);
         Self {
             address,
             denoise: Arc::new(AtomicBool::new(denoise)),
@@ -46,7 +48,8 @@ impl ManagedPeer {
             socket,
             conn_manager,
             ui_sender,
-            shutdown_tx: tx,
+            peer_message_sender,
+            shutdown_tx,
             enabled: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -73,6 +76,13 @@ impl ManagedPeer {
         });
     }
 
+    pub fn send_message(&self, message: String) {
+        let protocol_message = ProtocolMessage::ChatMessage(message);
+        if self.peer_message_sender.receiver_count() > 0 {
+            self.peer_message_sender.send(protocol_message).unwrap();
+        }
+    }
+
     pub async fn enable(&self) {
         if let Some(sender) = &self.ui_sender {
             sender
@@ -89,18 +99,19 @@ impl ManagedPeer {
         let address = self.address.clone();
         let conn_manager = self.conn_manager.clone();
         let ui_sender = self.ui_sender.clone();
+        let peer_message_sender = self.peer_message_sender.clone();
         let denoise = self.denoise.clone();
         let volume = self.volume.clone();
         let socket = self.socket.clone();
 
-        let mut rx = self.shutdown_tx.subscribe();
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
         tokio::spawn(async move {
             let (inner_tx, _inner_rx) = broadcast::channel(10);
             loop {
                 log::info!("Beginning connect loop to peer {}", address);
                 tokio::select! {
-                    _ = tokio::spawn(connect(address.clone(), conn_manager.clone(), ui_sender.clone(), denoise.clone(), volume.clone(), socket.clone(), inner_tx.subscribe())) => {},
-                    _ = rx.recv() => {
+                    _ = tokio::spawn(connect(address.clone(), conn_manager.clone(), ui_sender.clone(), peer_message_sender.subscribe(), denoise.clone(), volume.clone(), socket.clone(), inner_tx.subscribe())) => {},
+                    _ = shutdown_rx.recv() => {
                         inner_tx.send(()).unwrap();
                         break;
                     }
@@ -149,30 +160,31 @@ impl ManagedPeer {
 async fn connect(
     address: OnionAddress,
     conn_manager: Arc<ConnectionManager>,
-    ui_sender: Option<UnboundedSender<AppEvent>>,
+    ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
+    peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     denoise: Arc<AtomicBool>,
     volume: Arc<Desync<usize>>,
     mut socket: VeqSocket,
-    mut rx: Receiver<()>,
+    mut shutdown_receiver: broadcast::Receiver<()>,
 ) {
     log::info!("Connecting to peer {:?}", address);
     if let Some((session, info)) = tokio::select! {
         res = conn_manager.session(&mut socket, &address) => res,
-        _ = rx.recv() => { return; }
+        _ = shutdown_receiver.recv() => { return; }
     } {
         log::info!("Connected to peer {:?}", address);
-        if let Some(sender) = &ui_sender {
+        if let Some(ref sender) = ui_sender {
             sender
                 .send(AppEvent::AddPeer(Peer::new(
-                    address.to_string(),
-                    Some(info.display_name),
+                    address.clone().to_string(),
+                    Some(info.display_name.clone()),
                     PeerState::Connected(session.remote_addr().await.to_string()),
                     denoise.load(Ordering::Relaxed),
                     volume.sync(|v| *v),
                 )))
                 .unwrap();
         }
-        start_clerver(session, denoise.clone(), volume, rx).await;
+        start_clerver(session, ui_sender, peer_message_receiver, denoise.clone(), volume, address.clone(), shutdown_receiver).await;
         log::info!("Connection closed with {}", address);
     }
 }

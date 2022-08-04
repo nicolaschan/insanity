@@ -17,11 +17,12 @@ use crate::clerver::AudioFrame;
 use crate::coordinator::AugmentedInfo;
 use crate::session::UpdatablePendingSession;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ProtocolMessage {
     AudioFrame(AudioFrame),
     IdentityDeclaration(PeerIdentity),
     PeerDiscovery(Vec<PeerIdentity>),
+    ChatMessage(String)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -32,9 +33,9 @@ pub struct PeerIdentity {
 }
 
 impl PeerIdentity {
-    pub fn new(canonical_name: &str) -> PeerIdentity {
+    pub fn new(canonical_name: String) -> PeerIdentity {
         PeerIdentity {
-            canonical_name: canonical_name.to_string(),
+            canonical_name,
             display_name: None,
             addresses: Vec::new(),
         }
@@ -138,7 +139,7 @@ pub struct ConnectionManager {
     pub db: sled::Db,
 }
 
-pub fn socket_addr(string: String) -> SocketAddr {
+pub fn socket_addr(string: &String) -> SocketAddr {
     string
         .to_socket_addrs()
         .expect("Invalid peer address")
@@ -172,10 +173,10 @@ impl ConnectionManager {
             db,
         }
     }
-    pub async fn id_or_new(&self, peer: OnionAddress) -> Option<Uuid> {
+    pub async fn id_or_new(&self, peer: &OnionAddress) -> Option<Uuid> {
         let mut sidechannel = {
             let mut sc_guard = self.sidechannels.lock().await;
-            sc_guard.get_mut(&peer)?.clone()
+            sc_guard.get_mut(peer)?.clone()
         };
         Some(sidechannel.id_or_new().await)
     }

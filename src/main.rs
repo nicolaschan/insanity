@@ -66,6 +66,8 @@ struct Opts {
 async fn main() {
     let opts: Opts = Opts::parse();
 
+    let display_name = format!("{}@{}", whoami::username(), whoami::hostname());
+
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
         None => dirs::data_local_dir()
@@ -135,14 +137,16 @@ async fn main() {
     let connection_manager_arc = Arc::new(connection_manager);
 
     let connection_manager_arc_clone = connection_manager_arc.clone();
+    let name_copy = display_name.clone();
     tokio::spawn(
-        async move { start_coordinator(coordinator_port, connection_manager_arc_clone).await },
+        async move { start_coordinator(coordinator_port, connection_manager_arc_clone, name_copy).await },
     );
 
-    let (sender, user_action_receiver, handle) = if !opts.no_tui {
+    let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
         let (x, y, z) = insanity_tui::start_tui().await.unwrap();
         x.send(AppEvent::SetOwnAddress(onion_address.to_string()))
             .unwrap();
+        x.send(AppEvent::SetOwnDisplayName(display_name)).unwrap();
         (Some(x), Some(y), Some(z))
     } else {
         (None, None, None)
@@ -158,12 +162,12 @@ async fn main() {
             .zip(std::iter::repeat((
                 socket.clone(),
                 connection_manager_arc,
-                sender.clone(),
+                app_event_sender.clone(),
             )))
-            .map(|(peer, (socket, conn_manager, sender))| async move {
+            .map(|(peer, (socket, conn_manager, app_event_sender))| async move {
                 (
                     peer.clone().to_string(),
-                    ManagedPeer::new(peer, denoise, 100, socket, conn_manager, sender).await,
+                    ManagedPeer::new(peer, denoise, 100, socket, conn_manager, app_event_sender).await,
                 )
             })
             .collect::<FuturesUnordered<_>>()
@@ -199,6 +203,11 @@ async fn main() {
                     UserAction::SetVolume(id, volume) => {
                         if let Some(peer) = managed_peers_clone.get(&id) {
                             peer.set_volume(volume).await;
+                        }
+                    }
+                    UserAction::SendMessage(message) => {
+                        for (_, peer) in managed_peers_clone.iter() {
+                            peer.send_message(message.clone());
                         }
                     }
                 }

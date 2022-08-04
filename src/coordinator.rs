@@ -66,13 +66,19 @@ fn with_c(
     warp::any().map(move || connection_manager.clone())
 }
 
+fn with_display_name(
+    display_name: String,
+) -> impl Filter<Extract = (String,), Error = std::convert::Infallible> + Clone {
+    warp::any().map(move || display_name.clone())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AugmentedInfo {
     pub conn_info: ConnectionInfo,
     pub display_name: String,
 }
 
-pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>) {
+pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>, display_name: String) {
     let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
     // let peers_post = warp::post()
     //     .and(warp::path("peers"))
@@ -82,8 +88,8 @@ pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<Co
     //     });
     let info = warp::path("info")
         .and(with_c(connection_manager.clone()))
-        .and_then(|c: Arc<ConnectionManager>| async move {
-            let display_name = format!("{}@{}", whoami::username(), whoami::hostname());
+        .and(with_display_name(display_name.clone()))
+        .and_then(|c: Arc<ConnectionManager>, display_name: String| async move {
             Ok::<_, Infallible>(warp::reply::json(&AugmentedInfo {
                 conn_info: c.conn_info.clone(),
                 display_name,
@@ -93,7 +99,7 @@ pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<Co
         .and(warp::path!("id" / OnionAddress))
         .and(with_c(connection_manager.clone()))
         .and_then(|peer: OnionAddress, c: Arc<ConnectionManager>| async move {
-            match c.id_or_new(peer).await {
+            match c.id_or_new(&peer).await {
                 Some(id) => Ok(warp::reply::json(&id)),
                 None => Err(warp::reject::reject()),
             }
