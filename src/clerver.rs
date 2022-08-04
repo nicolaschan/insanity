@@ -120,7 +120,7 @@ async fn run_receiver(
     let (sample_format, config) = get_output_config(&output_device);
     let config_clone = config.clone();
     let mut output_stream_wrapper = send_safe::SendWrapperThread::new(move || {
-        setup_output_stream(sample_format, config_clone, output_device, processor_clone)
+        setup_output_stream(&sample_format, &config_clone, &output_device, processor_clone)
     });
     output_stream_wrapper
         .execute(|output_stream| {

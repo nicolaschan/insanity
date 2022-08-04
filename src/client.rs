@@ -7,14 +7,14 @@ use crate::processor::AudioProcessor;
 use crate::processor::AUDIO_CHANNELS;
 
 fn run_output<T: Sample>(
-    config: cpal::StreamConfig,
-    device: Device,
+    config: &cpal::StreamConfig,
+    device: &Device,
     processor: Arc<AudioProcessor<'static>>,
 ) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the output audio stream: {}", err);
     device
         .build_output_stream(
-            &config,
+            config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 processor.fill_buffer(data);
             },
@@ -36,15 +36,15 @@ fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStr
 }
 
 pub fn setup_output_stream(
-    sample_format: SampleFormat,
-    config: StreamConfig,
-    device: Device,
+    sample_format: &SampleFormat,
+    config: &StreamConfig,
+    device: &Device,
     processor: Arc<AudioProcessor<'static>>,
 ) -> Stream {
     match sample_format {
-        SampleFormat::F32 => run_output::<f32>(config, device, processor),
-        SampleFormat::I16 => run_output::<i16>(config, device, processor),
-        SampleFormat::U16 => run_output::<u16>(config, device, processor),
+        &SampleFormat::F32 => run_output::<f32>(config, device, processor),
+        &SampleFormat::I16 => run_output::<i16>(config, device, processor),
+        &SampleFormat::U16 => run_output::<u16>(config, device, processor),
     }
 }
 

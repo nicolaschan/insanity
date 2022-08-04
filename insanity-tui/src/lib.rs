@@ -14,7 +14,6 @@ use tui::{backend::Backend, backend::CrosstermBackend, Terminal};
 mod editor;
 use editor::Editor;
 mod render;
-// mod main;
 
 const TAB_NAME_PEERS: &str = "Peers";
 const TAB_NAME_CHAT: &str = "Chat";
@@ -46,20 +45,41 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(id: String, display_name: Option<String>, state: PeerState, denoised: bool, volume: usize) -> Peer {
-        Peer { id, display_name, state, denoised, volume }
+    pub fn new(
+        id: String,
+        display_name: Option<String>,
+        state: PeerState,
+        denoised: bool,
+        volume: usize,
+    ) -> Peer {
+        Peer {
+            id,
+            display_name,
+            state,
+            denoised,
+            volume,
+        }
     }
 
-    pub fn with_denoised(&self, denoised: bool) -> Peer {
-        Peer { denoised, ..self.clone() }
+    pub fn with_denoised(self, denoised: bool) -> Peer {
+        Peer {
+            denoised,
+            ..self
+        }
     }
 
-    pub fn with_state(&self, state: PeerState) -> Peer {
-        Peer { state, ..self.clone() }
+    pub fn with_state(self, state: PeerState) -> Peer {
+        Peer {
+            state,
+            ..self
+        }
     }
 
-    pub fn with_volume(&self, volume: usize) -> Peer {
-        Peer { volume, ..self.clone() }
+    pub fn with_volume(self, volume: usize) -> Peer {
+        Peer {
+            volume,
+            ..self
+        }
     }
 }
 
@@ -99,7 +119,7 @@ pub enum UserAction {
     DisableDenoise(String),
     EnableDenoise(String),
     SetVolume(String, usize),
-    SendMessage(String)
+    SendMessage(String),
 }
 
 pub struct App {
@@ -112,7 +132,8 @@ pub struct App {
     pub own_display_name: Option<String>,
     pub editor: Editor,
     pub peer_index: usize,
-    pub chat_history: Vec<(String, String)> // (Display Name, Message)
+    pub chat_history: Vec<(String, String)>, // (Display Name, Message)
+    pub unread_messages: bool,
 }
 
 impl App {
@@ -127,7 +148,8 @@ impl App {
             own_display_name: None,
             editor: Editor::new(),
             peer_index: 0,
-            chat_history: vec![]
+            chat_history: vec![],
+            unread_messages: false,
         }
     }
 
@@ -149,53 +171,50 @@ impl App {
             AppEvent::RemovePeer(id) => {
                 self.peers.remove(&id);
             }
-            AppEvent::Character(c) => {
-                match self.tab_index {
-                    TAB_IDX_PEERS => {
-                        match c {
-                            ' ' => {
-                                self.toggle_peer();
-                            }
-                            'd' => {
-                                self.toggle_denoise();
-                            }
-                            '+' => {
-                                self.adjust_volume(1);
-                            }
-                            '-' => {
-                                self.adjust_volume(-1);
-                            }
-                            'j' => {
-                                self.move_peer(1);
-                            }
-                            'k' => {
-                                self.move_peer(-1);
-                            }
-                            'g' => {
-                                self.peer_index = 0;
-                            }
-                            'G' => {
-                                self.peer_index = self.peers.len() - 1;
-                            }
-                            _ => {}
-                        }
+            AppEvent::Character(c) => match self.tab_index {
+                TAB_IDX_PEERS => match c {
+                    ' ' => {
+                        self.toggle_peer();
                     }
-                    TAB_IDX_CHAT => {
-                        self.editor.append(c);
+                    'd' => {
+                        self.toggle_denoise();
+                    }
+                    '+' => {
+                        self.adjust_volume(1);
+                    }
+                    '-' => {
+                        self.adjust_volume(-1);
+                    }
+                    'j' => {
+                        self.move_peer(1);
+                    }
+                    'k' => {
+                        self.move_peer(-1);
+                    }
+                    'g' => {
+                        self.peer_index = 0;
+                    }
+                    'G' => {
+                        self.peer_index = self.peers.len() - 1;
                     }
                     _ => {}
+                },
+                TAB_IDX_CHAT => {
+                    self.editor.append(c);
                 }
-            }
-            AppEvent::Enter => {
-                match self.tab_index {
-                    TAB_IDX_CHAT => {
-                        self.send_message();
-                    }
-                    _ => {}
+                _ => {}
+            },
+            AppEvent::Enter => match self.tab_index {
+                TAB_IDX_CHAT => {
+                    self.send_message();
                 }
-            }
+                _ => {}
+            },
             AppEvent::NewMessage(sender_name, message) => {
-                self.chat_history.push((sender_name, message))
+                self.chat_history.push((sender_name, message));
+                if self.tab_index != TAB_IDX_CHAT {
+                    self.unread_messages = true;
+                }
             }
             AppEvent::Backspace => {
                 self.editor.backspace();
@@ -228,7 +247,10 @@ impl App {
                 self.own_display_name = Some(display_name);
             }
             AppEvent::Down => {
-                self.peer_index = std::cmp::min(self.peer_index.checked_add(1).unwrap_or(0), self.peers.len() - 1);
+                self.peer_index = std::cmp::min(
+                    self.peer_index.checked_add(1).unwrap_or(0),
+                    self.peers.len() - 1,
+                );
             }
             AppEvent::Up => {
                 self.peer_index = self.peer_index.saturating_sub(1);
@@ -241,15 +263,14 @@ impl App {
             }
             AppEvent::SetPeerDenoise(peer_id, denoised) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
-                    *peer = peer.with_denoised(denoised);
+                    peer.denoised = denoised;
                 }
             }
             AppEvent::SetPeerVolume(peer_id, volume) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
-                    *peer = peer.with_volume(volume);
+                    peer.volume = volume;
                 }
             }
-            // _ => {}
         }
     }
 
@@ -264,9 +285,13 @@ impl App {
     fn toggle_peer(&mut self) {
         if let Some(peer) = self.selected_peer() {
             if peer.state == PeerState::Disabled {
-                self.user_action_sender.send(UserAction::EnablePeer(peer.id.clone())).unwrap();
+                self.user_action_sender
+                    .send(UserAction::EnablePeer(peer.id.clone()))
+                    .unwrap();
             } else {
-                self.user_action_sender.send(UserAction::DisablePeer(peer.id.clone())).unwrap();
+                self.user_action_sender
+                    .send(UserAction::DisablePeer(peer.id.clone()))
+                    .unwrap();
             }
         }
     }
@@ -277,24 +302,33 @@ impl App {
             let default = "Me".to_string();
             let own_address = self.own_address.as_ref().unwrap_or(&default);
             self.chat_history.push((own_address.to_string(), message.clone()));
-            self.user_action_sender.send(UserAction::SendMessage(message)).unwrap();
+            self.user_action_sender
+                .send(UserAction::SendMessage(message))
+                .unwrap();
         }
     }
 
     fn toggle_denoise(&mut self) {
         if let Some(peer) = self.selected_peer() {
             if peer.denoised {
-                self.user_action_sender.send(UserAction::DisableDenoise(peer.id.clone())).unwrap();
+                self.user_action_sender
+                    .send(UserAction::DisableDenoise(peer.id.clone()))
+                    .unwrap();
             } else {
-                self.user_action_sender.send(UserAction::EnableDenoise(peer.id.clone())).unwrap();
+                self.user_action_sender
+                    .send(UserAction::EnableDenoise(peer.id.clone()))
+                    .unwrap();
             }
         }
     }
 
     fn adjust_volume(&mut self, delta: isize) {
         if let Some(peer) = self.selected_peer() {
-            self.user_action_sender.send(
-                UserAction::SetVolume(peer.id.clone(), add_in_bounds(peer.volume, 0, 999, delta)))
+            self.user_action_sender
+                .send(UserAction::SetVolume(
+                    peer.id.clone(),
+                    add_in_bounds(peer.volume, 0, 999, delta),
+                ))
                 .unwrap();
         }
     }
@@ -303,6 +337,9 @@ impl App {
         let num_tabs = self.tabs.len();
         self.tab_index = (self.tab_index + adjustment.rem_euclid(num_tabs as isize) as usize)
             .rem_euclid(num_tabs);
+        if self.tab_index == TAB_IDX_CHAT {
+            self.unread_messages = false;
+        }
     }
 
     pub fn render<B: Backend>(&self, terminal: &mut Terminal<B>) -> io::Result<bool> {

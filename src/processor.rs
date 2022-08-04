@@ -137,7 +137,7 @@ impl MultiChannelDenoiser<'_> {
         }
     }
 
-    pub fn denoise_chunk(&mut self, chunk: AudioChunk) -> AudioChunk {
+    pub fn denoise_chunk(&mut self, chunk: &AudioChunk) -> AudioChunk {
         let magic = 32767.0;
 
         let mut denoised_output: Vec<f32> = Vec::new();
@@ -177,7 +177,7 @@ impl MultiChannelDenoiser<'_> {
             }
         }
 
-        AudioChunk::new(chunk.sequence_number, chunk.audio_format, denoised_output)
+        AudioChunk::new(chunk.sequence_number, chunk.audio_format.clone(), denoised_output)
     }
 }
 
@@ -203,7 +203,7 @@ impl AudioProcessor<'_> {
     pub fn handle_incoming(&self, mut chunk: AudioChunk) {
         if self.enable_denoise.load(Ordering::Relaxed) {
             let mut denoiser_guard = self.denoiser.lock().unwrap();
-            chunk = denoiser_guard.denoise_chunk(chunk);
+            chunk = denoiser_guard.denoise_chunk(&chunk);
         }
         
         // Adjust volume if necessary

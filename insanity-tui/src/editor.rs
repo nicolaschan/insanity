@@ -50,9 +50,7 @@ impl Editor {
     }
 
     pub fn delete_word(&mut self) {
-        for _ in 0..self
-            .cursor.saturating_sub(self.previous_word_index())
-        {
+        for _ in 0..self.cursor.saturating_sub(self.previous_word_index()) {
             self.backspace();
         }
     }

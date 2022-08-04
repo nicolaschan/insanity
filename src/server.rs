@@ -7,14 +7,14 @@ use async_trait::async_trait;
 use crate::processor::AUDIO_CHANNELS;
 
 fn run_input<T: Sample>(
-    config: cpal::StreamConfig,
-    device: Device,
+    config: &cpal::StreamConfig,
+    device: &Device,
     sender: UnboundedSender<f32>,
 ) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the input audio stream: {}", err);
     device
         .build_input_stream(
-            &config,
+            config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
                 for sample in data.iter() {
                     if let Ok(()) = sender.send(sample.to_f32()) {}
@@ -26,15 +26,15 @@ fn run_input<T: Sample>(
 }
 
 fn setup_input_stream(
-    sample_format: SampleFormat,
-    config: cpal::StreamConfig,
-    device: Device,
+    sample_format: &SampleFormat,
+    config: &cpal::StreamConfig,
+    device: &Device,
     sender: UnboundedSender<f32>,
 ) -> Stream {
     match sample_format {
-        SampleFormat::F32 => run_input::<f32>(config, device, sender),
-        SampleFormat::I16 => run_input::<i16>(config, device, sender),
-        SampleFormat::U16 => run_input::<u16>(config, device, sender),
+        &SampleFormat::F32 => run_input::<f32>(config, device, sender),
+        &SampleFormat::I16 => run_input::<i16>(config, device, sender),
+        &SampleFormat::U16 => run_input::<u16>(config, device, sender),
     }
 }
 
@@ -175,7 +175,7 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
     let (sample_format, config) = get_input_config(&input_device);
     let config_clone = config.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        setup_input_stream(sample_format, config_clone, input_device, input_sender)
+        setup_input_stream(&sample_format, &config_clone, &input_device, input_sender)
     });
     wrapper
         .execute(|input_stream| {
