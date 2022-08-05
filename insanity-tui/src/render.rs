@@ -267,9 +267,8 @@ fn render_chat_history<'a>(
 fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+        .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
         .split(area);
-    let editor_widget = render_editor(&app.editor).block(default_block());
     let chat_history_widget = render_chat_history(
             &app.chat_history,
             app.chat_offset,
@@ -279,8 +278,9 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
             &chunks[1],
         )   
         .block(default_block());
-    f.render_widget(editor_widget, chunks[0]);
-    f.render_widget(chat_history_widget, chunks[1]);
+    let editor_widget = render_editor(&app.editor).block(default_block());
+    f.render_widget(chat_history_widget, chunks[0]);
+    f.render_widget(editor_widget, chunks[1]);
 }
 
 fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
