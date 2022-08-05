@@ -275,7 +275,7 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
             &app.peers,
             &app.own_address,
             &app.own_display_name,
-            &chunks[1],
+            &chunks[0],
         )   
         .block(default_block());
     let editor_widget = render_editor(&app.editor).block(default_block());
