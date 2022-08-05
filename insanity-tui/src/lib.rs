@@ -363,7 +363,7 @@ impl App {
         let num_tabs = self.tabs.len();
         self.tab_index = (self.tab_index + adjustment.rem_euclid(num_tabs as isize) as usize)
             .rem_euclid(num_tabs);
-        if self.tab_index == TAB_IDX_CHAT {
+        if self.tab_index == TAB_IDX_CHAT && self.chat_offset == 0 {
             self.unread_messages = false;
         }
     }
