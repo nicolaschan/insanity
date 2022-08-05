@@ -134,6 +134,7 @@ pub struct App {
     pub peer_index: usize,
     pub chat_history: Vec<(String, String)>, // (Display Name, Message)
     pub unread_messages: bool,
+    pub chat_offset: usize, // Offset from bottom of chat in full messages.
 }
 
 impl App {
@@ -150,6 +151,7 @@ impl App {
             peer_index: 0,
             chat_history: vec![],
             unread_messages: false,
+            chat_offset: 0,
         }
     }
 
@@ -211,8 +213,8 @@ impl App {
                 _ => {}
             },
             AppEvent::NewMessage(sender_name, message) => {
-                self.chat_history.push((sender_name, message));
-                if self.tab_index != TAB_IDX_CHAT {
+                self.add_message((sender_name, message));
+                if self.tab_index != TAB_IDX_CHAT || self.chat_offset > 0 {
                     self.unread_messages = true;
                 }
             }
@@ -246,14 +248,29 @@ impl App {
             AppEvent::SetOwnDisplayName(display_name) => {
                 self.own_display_name = Some(display_name);
             }
-            AppEvent::Down => {
-                self.peer_index = std::cmp::min(
-                    self.peer_index.checked_add(1).unwrap_or(0),
-                    self.peers.len() - 1,
-                );
+            AppEvent::Down => match self.tab_index {
+                TAB_IDX_PEERS => {
+                    self.peer_index = std::cmp::min(
+                        self.peer_index.checked_add(1).unwrap_or(0),
+                        self.peers.len() - 1,
+                    );
+                }
+                TAB_IDX_CHAT => {
+                    self.chat_offset = self.chat_offset.saturating_sub(1);
+                    if self.chat_offset == 0 {
+                        self.unread_messages = false;
+                    }
+                }
+                _ => {}
             }
-            AppEvent::Up => {
-                self.peer_index = self.peer_index.saturating_sub(1);
+            AppEvent::Up => match self.tab_index {
+                TAB_IDX_PEERS => {
+                    self.peer_index = self.peer_index.saturating_sub(1);
+                }
+                TAB_IDX_CHAT => {
+                    self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
+                }
+                _ => {}
             }
             AppEvent::TogglePeer => {
                 self.toggle_peer();
@@ -296,12 +313,21 @@ impl App {
         }
     }
 
+    fn add_message(&mut self, message: (String, String)) {
+        self.chat_history.push(message);
+        // If offset to a particular message, stay offset to that message.
+        // Assume offset of 0 means scroll with new messages.
+        if self.chat_offset > 0 {
+            self.chat_offset += 1;
+        }
+    }
+
     fn send_message(&mut self) {
         if !self.editor.is_empty() {
             let message = self.editor.clear();
             let default = "Me".to_string();
             let own_address = self.own_address.as_ref().unwrap_or(&default);
-            self.chat_history.push((own_address.to_string(), message.clone()));
+            self.add_message((own_address.to_string(), message.clone()));
             self.user_action_sender
                 .send(UserAction::SendMessage(message))
                 .unwrap();

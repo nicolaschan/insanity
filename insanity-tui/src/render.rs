@@ -188,7 +188,8 @@ fn hash<T: std::hash::Hash>(object: &T) -> u64 {
 }
 
 fn render_chat_history<'a>(
-    chat_history: &'a Vec<(String, String)>,
+    chat_history: &'a [(String, String)],
+    chat_offset: usize,
     peers: &'a std::collections::BTreeMap<String, Peer>,
     own_address: &'a Option<String>,
     own_display_name: &'a Option<String>,
@@ -198,7 +199,7 @@ fn render_chat_history<'a>(
     let max_num_lines = area.height.saturating_sub(2) as usize;
     let mut text: Vec<Vec<tui::text::Spans>> = vec![];
     let mut total_line_count = 0;
-    for (address, message_text) in chat_history.iter().rev() {
+    for (address, message_text) in chat_history.iter().rev().skip(chat_offset) {
         let name_color = CHAT_COLORS[(hash(address) % (NUM_CHAT_COLORS as u64)) as usize];
         let name_style = Style::default().fg(name_color);
         let display_name = if let Some(peer) = peers.get(address) {
@@ -271,6 +272,7 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let editor_widget = render_editor(&app.editor).block(default_block());
     let chat_history_widget = render_chat_history(
             &app.chat_history,
+            app.chat_offset,
             &app.peers,
             &app.own_address,
             &app.own_display_name,
