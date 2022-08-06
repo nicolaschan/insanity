@@ -18,18 +18,27 @@ impl Editor {
     }
 
     pub fn append(&mut self, c: char) {
-        let mut chars: Vec<char> = self.buffer.chars().collect();
-        chars.insert(self.cursor, c);
-        self.buffer = chars.iter().collect();
+        if self.cursor == self.buffer.len() {
+            self.buffer.push(c);
+        } else {
+            self.buffer = self.buffer
+                .chars()
+                .take(self.cursor)
+                .chain([c])
+                .chain(self.buffer.chars().skip(self.cursor))
+                .collect()
+        }
         self.cursor += 1;
     }
 
     pub fn backspace(&mut self) {
-        if let Some(val) = self.cursor.checked_sub(1) {
-            let mut chars: Vec<char> = self.buffer.chars().collect();
-            chars.remove(self.cursor.saturating_sub(1));
-            self.buffer = chars.iter().collect();
-            self.cursor = val;
+        if let Some(new_cursor) = self.cursor.checked_sub(1) {
+            self.buffer = self.buffer
+                .chars()
+                .take(new_cursor)
+                .chain(self.buffer.chars().skip(self.cursor))
+                .collect();
+            self.cursor = new_cursor;
         }
     }
 

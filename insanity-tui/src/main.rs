@@ -29,18 +29,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 UserAction::DisablePeer(peer_id) => {
                     sender
-                        .send(AppEvent::AddPeer(peers.get(&peer_id.as_str()).unwrap().with_state(PeerState::Disabled)))
+                        .send(AppEvent::AddPeer(peers.get(&peer_id.as_str()).unwrap().clone().with_state(PeerState::Disabled)))
                         .unwrap();
                 }
                 UserAction::EnablePeer(peer_id) => {
                     sender
-                        .send(AppEvent::AddPeer(peers.get(&peer_id.as_str()).unwrap().with_state(PeerState::Disconnected)))
+                        .send(AppEvent::AddPeer(peers.get(&peer_id.as_str()).unwrap().clone().with_state(PeerState::Disconnected)))
                         .unwrap();
                 }
                 UserAction::SetVolume(peer_id, volume) => {
                     sender
                         .send(AppEvent::SetPeerVolume(peer_id, volume))
                         .unwrap();
+                }
+                UserAction::SendMessage(message) => {
+                    
                 }
             }
         }

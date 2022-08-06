@@ -159,15 +159,19 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     f.render_widget(widget, area);
 }
 
-fn render_editor(editor: &Editor) -> Paragraph {
-    let before_cursor: String = editor.buffer.chars().take(editor.cursor).collect();
+fn render_editor<'a>(editor: &'a Editor, area: &'a Rect) -> Paragraph<'a> {
+    let max_text_width = area.width.saturating_sub(2) as usize;
+    let mut remaining_width = max_text_width;
+    let before_cursor: String = editor.buffer.chars().take(std::cmp::min(editor.cursor, max_text_width)).collect();
+    remaining_width -= before_cursor.len();
     let at_cursor: String = editor
         .buffer
         .chars()
         .nth(editor.cursor)
         .unwrap_or(' ')
         .to_string();
-    let after_cursor: String = editor.buffer.chars().skip(editor.cursor + 1).collect();
+    remaining_width -= at_cursor.len();
+    let after_cursor: String = editor.buffer.chars().skip(editor.cursor + 1).take(remaining_width).collect();
     let text = vec![Spans::from(vec![
         Span::raw(before_cursor),
         Span::styled(
@@ -204,7 +208,7 @@ fn render_chat_history<'a>(
         let name_style = Style::default().fg(name_color);
         let display_name = if let Some(peer) = peers.get(address) {
             peer.display_name.as_ref().unwrap_or(address)
-        } else if **own_address.as_ref().unwrap() == *address {
+        } else if own_address.is_some() && **own_address.as_ref().unwrap() == *address {
             own_display_name.as_ref().unwrap_or(address)
         } else {
             address
@@ -278,7 +282,7 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
             &chunks[0],
         )   
         .block(default_block());
-    let editor_widget = render_editor(&app.editor).block(default_block());
+    let editor_widget = render_editor(&app.editor, &chunks[1]).block(default_block());
     f.render_widget(chat_history_widget, chunks[0]);
     f.render_widget(editor_widget, chunks[1]);
 }
