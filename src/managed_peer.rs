@@ -1,9 +1,8 @@
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 
-use desync::Desync;
 use insanity_tui::{AppEvent, Peer, PeerState};
 use tokio::{
     sync::{
@@ -21,7 +20,7 @@ use crate::{
 pub struct ManagedPeer {
     address: OnionAddress,
     denoise: Arc<AtomicBool>,
-    volume: Arc<Desync<usize>>,
+    volume: Arc<Mutex<usize>>,
     socket: VeqSocket,
     conn_manager: Arc<ConnectionManager>,
     ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
@@ -44,7 +43,7 @@ impl ManagedPeer {
         Self {
             address,
             denoise: Arc::new(AtomicBool::new(denoise)),
-            volume: Arc::new(Desync::new(volume)),
+            volume: Arc::new(Mutex::new(volume)),
             socket,
             conn_manager,
             ui_sender,
@@ -66,14 +65,13 @@ impl ManagedPeer {
     pub async fn set_volume(&self, volume: usize) {
         let ui_sender = self.ui_sender.clone();
         let address = self.address.to_string();
-        self.volume.desync(move |v| {
-            *v = volume;
-            if let Some(sender) = ui_sender {
-                sender
-                    .send(AppEvent::SetPeerVolume(address, volume))
-                    .unwrap();
-            }
-        });
+        let mut volume_guard = self.volume.lock().unwrap();
+        *volume_guard = volume;
+        if let Some(sender) = ui_sender {
+            sender
+                .send(AppEvent::SetPeerVolume(address, volume))
+                .unwrap();
+        }
     }
 
     pub fn send_message(&self, message: String) {
@@ -91,7 +89,7 @@ impl ManagedPeer {
                     None,
                     PeerState::Disconnected,
                     self.denoise.load(Ordering::Relaxed),
-                    self.volume.sync(|v| *v),
+                    *self.volume.lock().unwrap()
                 )))
                 .unwrap();
         }
@@ -105,6 +103,7 @@ impl ManagedPeer {
         let socket = self.socket.clone();
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let volume_clone = self.volume.clone();
         tokio::spawn(async move {
             let (inner_tx, _inner_rx) = broadcast::channel(10);
             loop {
@@ -124,7 +123,7 @@ impl ManagedPeer {
                             None,
                             PeerState::Disconnected,
                             denoise.load(Ordering::Relaxed),
-                            volume.sync(|v| *v),
+                            *volume_clone.lock().unwrap()
                         )))
                         .unwrap();
                 }
@@ -150,7 +149,7 @@ impl ManagedPeer {
                     None,
                     PeerState::Disabled,
                     self.denoise.load(Ordering::Relaxed),
-                    self.volume.sync(|v| *v),
+                    *self.volume.lock().unwrap()
                 )))
                 .unwrap();
         }
@@ -163,7 +162,7 @@ async fn connect(
     ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     denoise: Arc<AtomicBool>,
-    volume: Arc<Desync<usize>>,
+    volume: Arc<Mutex<usize>>,
     mut socket: VeqSocket,
     mut shutdown_receiver: broadcast::Receiver<()>,
 ) {
@@ -180,7 +179,7 @@ async fn connect(
                     Some(info.display_name.clone()),
                     PeerState::Connected(session.remote_addr().await.to_string()),
                     denoise.load(Ordering::Relaxed),
-                    volume.sync(|v| *v),
+                    *volume.lock().unwrap()
                 )))
                 .unwrap();
         }

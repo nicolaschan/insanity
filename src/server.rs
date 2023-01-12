@@ -11,7 +11,7 @@ fn run_input<T: Sample>(
     device: &Device,
     sender: UnboundedSender<f32>,
 ) -> Stream {
-    let err_fn = |err| eprintln!("an error occurred in the input audio stream: {}", err);
+    let err_fn = |err| eprintln!("an error occurred in the input audio stream: {err}");
     device
         .build_input_stream(
             config,
@@ -32,9 +32,9 @@ fn setup_input_stream(
     sender: UnboundedSender<f32>,
 ) -> Stream {
     match sample_format {
-        &SampleFormat::F32 => run_input::<f32>(config, device, sender),
-        &SampleFormat::I16 => run_input::<i16>(config, device, sender),
-        &SampleFormat::U16 => run_input::<u16>(config, device, sender),
+        SampleFormat::F32 => run_input::<f32>(config, device, sender),
+        SampleFormat::I16 => run_input::<i16>(config, device, sender),
+        SampleFormat::U16 => run_input::<u16>(config, device, sender),
     }
 }
 

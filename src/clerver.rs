@@ -1,8 +1,7 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
-use desync::Desync;
 use insanity_tui::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -95,10 +94,8 @@ async fn run_peer_message_sender(
         },
     } {
         let mut buf = Vec::new();
-        if message.write_to_stream(&mut buf).await.is_ok() {
-            if conn.send(buf).await.is_err() {
-                break;
-            }
+        if message.write_to_stream(&mut buf).await.is_ok() && conn.send(buf).await.is_err() {
+            break;
         }
     }
 }
@@ -107,7 +104,7 @@ async fn run_receiver(
     mut conn: VeqSessionAlias,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     enable_denoise: Arc<AtomicBool>,
-    volume: Arc<Desync<usize>>,
+    volume: Arc<Mutex<usize>>,
     address: OnionAddress,
     mut shutdown: Receiver<()>,
     _termination_sender: mpsc::Sender<()>,
@@ -162,7 +159,7 @@ async fn run_receiver(
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
                 ProtocolMessage::ChatMessage(chat_message) => {
-                    if let &Some(ref app_event_sender) = &app_event_sender {
+                    if let Some(app_event_sender) = &app_event_sender {
                         app_event_sender.send(AppEvent::NewMessage(address.clone(), chat_message)).unwrap();
                     }
                 }
@@ -176,7 +173,7 @@ pub async fn start_clerver(
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     enable_denoise: Arc<AtomicBool>,
-    volume: Arc<Desync<usize>>,
+    volume: Arc<Mutex<usize>>,
     address: OnionAddress,
     mut shutdown: Receiver<()>,
 ) {

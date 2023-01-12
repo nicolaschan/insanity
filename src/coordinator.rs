@@ -79,7 +79,7 @@ pub struct AugmentedInfo {
 }
 
 pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>, display_name: String) {
-    let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
+    let hello = warp::path!("hello" / String).map(|name| format!("Hello, {name}!"));
     // let peers_post = warp::post()
     //     .and(warp::path("peers"))
     //     .and(warp::body::json())

@@ -11,7 +11,7 @@ fn run_output<T: Sample>(
     device: &Device,
     processor: Arc<AudioProcessor<'static>>,
 ) -> Stream {
-    let err_fn = |err| eprintln!("an error occurred in the output audio stream: {}", err);
+    let err_fn = |err| eprintln!("an error occurred in the output audio stream: {err}");
     device
         .build_output_stream(
             config,
@@ -42,9 +42,9 @@ pub fn setup_output_stream(
     processor: Arc<AudioProcessor<'static>>,
 ) -> Stream {
     match sample_format {
-        &SampleFormat::F32 => run_output::<f32>(config, device, processor),
-        &SampleFormat::I16 => run_output::<i16>(config, device, processor),
-        &SampleFormat::U16 => run_output::<u16>(config, device, processor),
+        SampleFormat::F32 => run_output::<f32>(config, device, processor),
+        SampleFormat::I16 => run_output::<i16>(config, device, processor),
+        SampleFormat::U16 => run_output::<u16>(config, device, processor),
     }
 }
 

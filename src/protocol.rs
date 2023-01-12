@@ -205,7 +205,7 @@ impl ConnectionManager {
 
         let pending_session = UpdatablePendingSession::new(socket.clone());
 
-        if let Ok(Some(cached_info_serialized)) = self.db.get(format!("peer-{}", peer)) {
+        if let Ok(Some(cached_info_serialized)) = self.db.get(format!("peer-{peer}")) {
             let cached_info: AugmentedInfo = bincode::deserialize(&cached_info_serialized[..]).unwrap();
             pending_session.update(id, cached_info).await;
         }
@@ -216,7 +216,7 @@ impl ConnectionManager {
                     pending_session.update(id, tor_info).await;
                 }
                 (session, info) = pending_session.session() => {
-                    if let Err(e) = self.db.insert(format!("peer-{}", peer), bincode::serialize(&info).unwrap()) {
+                    if let Err(e) = self.db.insert(format!("peer-{peer}"), bincode::serialize(&info).unwrap()) {
                         log::error!("Failed to cache peer info: {}", e);
                     }
                     return Some((session, info));

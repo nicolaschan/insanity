@@ -101,7 +101,7 @@ async fn main() {
     let coordinator_port = opts.coordinator_port;
     let onion_address = start_tor(&tor_dir, socks_port, coordinator_port);
 
-    let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{}", socks_port)).unwrap();
+    let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{socks_port}")).unwrap();
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .proxy(proxy)
@@ -133,7 +133,7 @@ async fn main() {
     log::debug!("Connection info: {:?}", socket.connection_info());
     let connection_manager =
         ConnectionManager::new(socket.connection_info(), client, onion_address.clone(), db);
-    println!("Own address: {:?}", onion_address);
+    println!("Own address: {onion_address:?}");
     let connection_manager_arc = Arc::new(connection_manager);
 
     let connection_manager_arc_clone = connection_manager_arc.clone();
