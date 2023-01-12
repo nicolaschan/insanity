@@ -1591,9 +1591,9 @@ checksum = "7fc7aa29613bd6a620df431842069224d8bc9011086b1db4c0e0cd47fa03ec9a"
 
 [[package]]
 name = "libtor"
-version = "46.9.0+0.4.6.x"
+version = "47.8.0+0.4.7.x"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18ca40c5090fd84877853f509dce8f906922e6c6fb0be12f4b61f6116710d457"
+checksum = "7fc8b8da810d01f18307f256eae30f3f107e45637917d75809954ca0c825058c"
 dependencies = [
  "libtor-derive",
  "libtor-sys",
@@ -1614,14 +1614,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "libtor-sys"
-version = "46.9.1+0.4.6.9"
+name = "libtor-src"
+version = "47.10.0+0.4.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52bf218e9764d77c16b77b9a26f219c5302bf7be010fd82aba63b019dea41fea"
+checksum = "a11331b6b6fe7fe70680d3e39df108592117b8251ff54b496573ef75451243e6"
+dependencies = [
+ "fs_extra",
+]
+
+[[package]]
+name = "libtor-sys"
+version = "47.10.0+0.4.7.x"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a395e7e98b81fd2511e7bcdd644ab6eee8dcab47ff8e04f1e16b3684494888ac"
 dependencies = [
  "autotools",
  "cc",
- "fs_extra",
+ "libtor-src",
  "libz-sys",
  "openssl-sys",
 ]
