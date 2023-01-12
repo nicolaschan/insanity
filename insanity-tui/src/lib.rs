@@ -326,8 +326,8 @@ impl App {
         if !self.editor.is_empty() {
             let message = self.editor.clear();
             let default = "Me".to_string();
-            let own_address = self.own_address.as_ref().unwrap_or(&default);
-            self.add_message((own_address.to_string(), message.clone()));
+            let own_address = self.own_address.clone().unwrap_or(default);
+            self.add_message((own_address, message.clone()));
             self.user_action_sender
                 .send(UserAction::SendMessage(message))
                 .unwrap();
