@@ -21,7 +21,8 @@ impl Editor {
         if self.cursor == self.buffer.len() {
             self.buffer.push(c);
         } else {
-            self.buffer = self.buffer
+            self.buffer = self
+                .buffer
                 .chars()
                 .take(self.cursor)
                 .chain([c])
@@ -33,7 +34,8 @@ impl Editor {
 
     pub fn backspace(&mut self) {
         if let Some(new_cursor) = self.cursor.checked_sub(1) {
-            self.buffer = self.buffer
+            self.buffer = self
+                .buffer
                 .chars()
                 .take(new_cursor)
                 .chain(self.buffer.chars().skip(self.cursor))

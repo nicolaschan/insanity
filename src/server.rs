@@ -167,9 +167,7 @@ impl AudioReceiver for CpalStreamReceiver {
 pub fn make_audio_receiver() -> CpalStreamReceiver {
     let host = cpal::default_host();
     let (input_sender, input_receiver) = unbounded_channel();
-    let input_device = host
-        .default_input_device()
-        .expect("No default input device");
+    let input_device = host.default_input_device().expect("No default input device");
     // If input_stream is dropped, then the input_receiver stops receiving data.
     // CpalStreamReceiver keeps input_stream alive along with input_receiver.
     let (sample_format, config) = get_input_config(&input_device);
@@ -177,11 +175,7 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         setup_input_stream(&sample_format, &config_clone, &input_device, input_sender)
     });
-    wrapper
-        .execute(|input_stream| {
-            input_stream.play().unwrap();
-        })
-        .unwrap();
+    wrapper.execute(|input_stream| { input_stream.play().unwrap(); }).unwrap();
     CpalStreamReceiver {
         input_receiver,
         input_stream: wrapper,

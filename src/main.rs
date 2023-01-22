@@ -1,12 +1,4 @@
-use std::{
-    collections::{BTreeMap},
-    path::PathBuf,
-    str::FromStr,
-    sync::{
-        Arc,
-    },
-    time::Duration,
-};
+use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 
 use clap::Parser;
 use futures_util::stream::FuturesUnordered;
@@ -18,12 +10,8 @@ use insanity::{
 use insanity_tui::{AppEvent, UserAction};
 use std::iter::Iterator;
 
-
 use futures_util::StreamExt;
-use veq::{
-    snow_types::{SnowKeypair},
-    veq::VeqSocket,
-};
+use veq::{snow_types::SnowKeypair, veq::VeqSocket};
 
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -70,9 +58,7 @@ async fn main() {
 
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
-        None => dirs::data_local_dir()
-            .expect("no data directory!?")
-            .join("insanity"),
+        None => dirs::data_local_dir().expect("no data directory!?").join("insanity"),
     };
     std::fs::create_dir_all(&insanity_dir).expect("could not create insanity data directory");
 
@@ -111,13 +97,18 @@ async fn main() {
     let sled_path = insanity_dir.join("data.sled");
     let db = sled::open(sled_path).unwrap();
 
-    let keypair: SnowKeypair = match db.get("private_key")
+    let keypair: SnowKeypair = match db
+        .get("private_key")
         .unwrap()
-        .and_then(|v| bincode::deserialize::<SnowKeypair>(&v).ok()) {
+        .and_then(|v| bincode::deserialize::<SnowKeypair>(&v).ok())
+    {
         Some(keypair) => {
-            log::debug!("Found keypair in database. Public Key: {:?}", keypair.public());
+            log::debug!(
+                "Found keypair in database. Public Key: {:?}",
+                keypair.public()
+            );
             keypair
-        },
+        }
         None => {
             log::debug!("No keypair found in db, generating one");
             let keypair = SnowKeypair::new();
@@ -127,25 +118,21 @@ async fn main() {
         }
     };
 
-    let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair)
-        .await
-        .unwrap();
+    let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair).await.unwrap();
     log::debug!("Connection info: {:?}", socket.connection_info());
-    let connection_manager =
-        ConnectionManager::new(socket.connection_info(), client, onion_address.clone(), db);
+    let connection_manager = ConnectionManager::new(socket.connection_info(), client, onion_address.clone(), db);
     println!("Own address: {onion_address:?}");
     let connection_manager_arc = Arc::new(connection_manager);
 
     let connection_manager_arc_clone = connection_manager_arc.clone();
     let name_copy = display_name.clone();
-    tokio::spawn(
-        async move { start_coordinator(coordinator_port, connection_manager_arc_clone, name_copy).await },
-    );
+    tokio::spawn(async move {
+        start_coordinator(coordinator_port, connection_manager_arc_clone, name_copy).await
+    });
 
     let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
         let (x, y, z) = insanity_tui::start_tui().await.unwrap();
-        x.send(AppEvent::SetOwnAddress(onion_address.to_string()))
-            .unwrap();
+        x.send(AppEvent::SetOwnAddress(onion_address.to_string())).unwrap();
         x.send(AppEvent::SetOwnDisplayName(display_name)).unwrap();
         (Some(x), Some(y), Some(z))
     } else {
@@ -164,12 +151,13 @@ async fn main() {
                 connection_manager_arc,
                 app_event_sender.clone(),
             )))
-            .map(|(peer, (socket, conn_manager, app_event_sender))| async move {
-                (
-                    peer.clone().to_string(),
-                    ManagedPeer::new(peer, denoise, 100, socket, conn_manager, app_event_sender).await,
-                )
-            })
+            .map(
+                |(peer, (socket, conn_manager, app_event_sender))| async move {
+                    (
+                        peer.clone().to_string(),
+                        ManagedPeer::new(peer, denoise, 100, socket, conn_manager, app_event_sender).await)
+                },
+            )
             .collect::<FuturesUnordered<_>>()
             .collect::<BTreeMap<_, _>>()
             .await,

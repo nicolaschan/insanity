@@ -22,7 +22,7 @@ pub enum ProtocolMessage {
     AudioFrame(AudioFrame),
     IdentityDeclaration(PeerIdentity),
     PeerDiscovery(Vec<PeerIdentity>),
-    ChatMessage(String)
+    ChatMessage(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -206,7 +206,8 @@ impl ConnectionManager {
         let pending_session = UpdatablePendingSession::new(socket.clone());
 
         if let Ok(Some(cached_info_serialized)) = self.db.get(format!("peer-{peer}")) {
-            let cached_info: AugmentedInfo = bincode::deserialize(&cached_info_serialized[..]).unwrap();
+            let cached_info: AugmentedInfo =
+                bincode::deserialize(&cached_info_serialized[..]).unwrap();
             pending_session.update(id, cached_info).await;
         }
 

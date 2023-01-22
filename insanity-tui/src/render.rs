@@ -8,7 +8,13 @@ use tui::{
     Frame,
 };
 
-use crate::{App, Editor, Peer, TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS};
+use crate::{
+    App, Editor, Peer, 
+    TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, 
+    DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY,
+    MOVE_BOTTOM_PEER_LIST_KEY, MOVE_DOWN_PEER_LIST_KEY, MOVE_TOP_PEER_LIST_KEY, MOVE_UP_PEER_LIST_KEY,
+    TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
+};
 
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
 const SELECTED: Color = Color::Rgb(80, 80, 80);
@@ -16,12 +22,12 @@ const CONNECTED: Color = Color::Rgb(0, 255, 0);
 const CONNECTING: Color = Color::Rgb(0, 255, 255);
 
 // Gruvbox (mostly) dark theme
-const COLOR_RED: Color    = Color::Rgb(0xfb, 0x49, 0x34); // Color::Rgb(0xcc, 0x24, 0x1d);
-const COLOR_GREEN: Color  = Color::Rgb(0x98, 0x98, 0x1a);
+const COLOR_RED: Color = Color::Rgb(0xfb, 0x49, 0x34); // Color::Rgb(0xcc, 0x24, 0x1d);
+const COLOR_GREEN: Color = Color::Rgb(0x98, 0x98, 0x1a);
 const COLOR_YELLOW: Color = Color::Rgb(0xd7, 0x99, 0x21);
-const COLOR_BLUE: Color   = Color::Rgb(0x45, 0x85, 0x88);
+const COLOR_BLUE: Color = Color::Rgb(0x45, 0x85, 0x88);
 const COLOR_PURPLE: Color = Color::Rgb(0xb1, 0x62, 0x86);
-const COLOR_AQUA: Color   = Color::Rgb(0x68, 0x96, 0x6a);
+const COLOR_AQUA: Color = Color::Rgb(0x68, 0x96, 0x6a);
 const COLOR_ORANGE: Color = Color::Rgb(0xd6, 0x5d, 0x0e);
 const NUM_CHAT_COLORS: usize = 7;
 const CHAT_COLORS: [Color; NUM_CHAT_COLORS] = [
@@ -139,14 +145,30 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
     }
 }
 
+fn char_to_readable(c: char) -> String {
+    match c {
+        ' ' => "space".to_string(),
+        _ => c.to_string(),
+    }
+}
+
+fn peer_command_help_entry(key: char, help_str: &'static str) -> String {
+    format!("[{}] {}     ", char_to_readable(key), help_str)
+}
+
 fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
+        .split(area);
+
     let rows: Vec<Row> = app
         .peers
         .values()
         .enumerate()
         .map(|(i, peer)| peer_row(peer, i == app.peer_index))
         .collect();
-    let widget = Table::new(rows)
+    let peer_list = Table::new(rows)
         .style(Style::default().fg(Color::White))
         .widths(&[
             Constraint::Length(1),
@@ -156,13 +178,35 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         ])
         .column_spacing(1)
         .block(default_block());
-    f.render_widget(widget, area);
+    f.render_widget(peer_list, chunks[0]);
+
+    // Command help list
+    let commands = [
+        (TOGGLE_PEER_KEY, "toggle peer"),
+        (TOGGLE_PEER_DENOISE_KEY, "toggle peer denoise"),
+        (INCREMENT_PEER_VOLUME_KEY, "raise peer volume"),
+        (DECREMENT_PEER_VOLUME_KEY, "lower peer volume"),
+        (MOVE_DOWN_PEER_LIST_KEY, "move down"),
+        (MOVE_UP_PEER_LIST_KEY, "move up"),
+        (MOVE_TOP_PEER_LIST_KEY, "move to top"),
+        (MOVE_BOTTOM_PEER_LIST_KEY, "move to bottom"),
+    ];
+    let text: String = commands
+        .iter()
+        .map(|(key, help_str)| peer_command_help_entry(*key, help_str))
+        .fold("   ".to_string(), |acc, x| acc + &x);
+    let commands = Paragraph::new(text).block(Block::default());
+    f.render_widget(commands, chunks[1]);
 }
 
 fn render_editor<'a>(editor: &'a Editor, area: &'a Rect) -> Paragraph<'a> {
     let max_text_width = area.width.saturating_sub(2) as usize;
     let mut remaining_width = max_text_width;
-    let before_cursor: String = editor.buffer.chars().take(std::cmp::min(editor.cursor, max_text_width)).collect();
+    let before_cursor: String = editor
+        .buffer
+        .chars()
+        .take(std::cmp::min(editor.cursor, max_text_width))
+        .collect();
     remaining_width -= before_cursor.len();
     let at_cursor: String = editor
         .buffer
@@ -171,7 +215,12 @@ fn render_editor<'a>(editor: &'a Editor, area: &'a Rect) -> Paragraph<'a> {
         .unwrap_or(' ')
         .to_string();
     remaining_width -= at_cursor.len();
-    let after_cursor: String = editor.buffer.chars().skip(editor.cursor + 1).take(remaining_width).collect();
+    let after_cursor: String = editor
+        .buffer
+        .chars()
+        .skip(editor.cursor + 1)
+        .take(remaining_width)
+        .collect();
     let text = vec![Spans::from(vec![
         Span::raw(before_cursor),
         Span::styled(
@@ -274,14 +323,14 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
         .split(area);
     let chat_history_widget = render_chat_history(
-            &app.chat_history,
-            app.chat_offset,
-            &app.peers,
-            &app.own_address,
-            &app.own_display_name,
-            &chunks[0],
-        )   
-        .block(default_block());
+        &app.chat_history,
+        app.chat_offset,
+        &app.peers,
+        &app.own_address,
+        &app.own_display_name,
+        &chunks[0],
+    )
+    .block(default_block());
     let editor_widget = render_editor(&app.editor, &chunks[1]).block(default_block());
     f.render_widget(chat_history_widget, chunks[0]);
     f.render_widget(editor_widget, chunks[1]);
@@ -292,19 +341,17 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(area);
-    let widget = Paragraph::new(vec![
-            match app.own_address.as_ref() {
-                Some(addr) => Spans::from(vec![
-                    Span::styled("Your address: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(addr.to_string(), Style::default().fg(Color::LightBlue)),
-                ]),
-                None => Spans::from(vec![Span::styled(
-                    "Waiting for tor...".to_string(),
-                    Style::default().fg(Color::DarkGray),
-                )]),
-            },
-        ])
-        .block(default_block())
-        .style(Style::default().fg(Color::White));
+    let widget = Paragraph::new(vec![match app.own_address.as_ref() {
+        Some(addr) => Spans::from(vec![
+            Span::styled("Your address: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(addr.to_string(), Style::default().fg(Color::LightBlue)),
+        ]),
+        None => Spans::from(vec![Span::styled(
+            "Waiting for tor...".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )]),
+    }])
+    .block(default_block())
+    .style(Style::default().fg(Color::White));
     f.render_widget(widget, chunks[0]);
 }

@@ -4,13 +4,8 @@ use std::sync::{
 };
 
 use insanity_tui::{AppEvent, Peer, PeerState};
-use tokio::{
-    sync::{
-        broadcast,
-        mpsc,
-    },
-};
-use veq::veq::{VeqSocket};
+use tokio::sync::{broadcast, mpsc};
+use veq::veq::VeqSocket;
 
 use crate::{
     clerver::start_clerver,
@@ -56,9 +51,7 @@ impl ManagedPeer {
     pub async fn set_denoise(&self, denoise: bool) {
         self.denoise.store(denoise, Ordering::Relaxed);
         if let Some(sender) = &self.ui_sender {
-            sender
-                .send(AppEvent::SetPeerDenoise(self.address.to_string(), denoise))
-                .unwrap();
+            sender.send(AppEvent::SetPeerDenoise(self.address.to_string(), denoise)).unwrap();
         }
     }
 
@@ -68,9 +61,7 @@ impl ManagedPeer {
         let mut volume_guard = self.volume.lock().unwrap();
         *volume_guard = volume;
         if let Some(sender) = ui_sender {
-            sender
-                .send(AppEvent::SetPeerVolume(address, volume))
-                .unwrap();
+            sender.send(AppEvent::SetPeerVolume(address, volume)).unwrap();
         }
     }
 
@@ -89,7 +80,7 @@ impl ManagedPeer {
                     None,
                     PeerState::Disconnected,
                     self.denoise.load(Ordering::Relaxed),
-                    *self.volume.lock().unwrap()
+                    *self.volume.lock().unwrap(),
                 )))
                 .unwrap();
         }
@@ -123,7 +114,7 @@ impl ManagedPeer {
                             None,
                             PeerState::Disconnected,
                             denoise.load(Ordering::Relaxed),
-                            *volume_clone.lock().unwrap()
+                            *volume_clone.lock().unwrap(),
                         )))
                         .unwrap();
                 }
@@ -149,7 +140,7 @@ impl ManagedPeer {
                     None,
                     PeerState::Disabled,
                     self.denoise.load(Ordering::Relaxed),
-                    *self.volume.lock().unwrap()
+                    *self.volume.lock().unwrap(),
                 )))
                 .unwrap();
         }
@@ -179,11 +170,20 @@ async fn connect(
                     Some(info.display_name.clone()),
                     PeerState::Connected(session.remote_addr().await.to_string()),
                     denoise.load(Ordering::Relaxed),
-                    *volume.lock().unwrap()
+                    *volume.lock().unwrap(),
                 )))
                 .unwrap();
         }
-        start_clerver(session, ui_sender, peer_message_receiver, denoise.clone(), volume, address.clone(), shutdown_receiver).await;
+        start_clerver(
+            session,
+            ui_sender,
+            peer_message_receiver,
+            denoise.clone(),
+            volume,
+            address.clone(),
+            shutdown_receiver,
+        )
+        .await;
         log::info!("Connection closed with {}", address);
     }
 }

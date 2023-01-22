@@ -24,6 +24,15 @@ pub const TAB_IDX_PEERS: usize = 0;
 pub const TAB_IDX_CHAT: usize = 1;
 pub const TAB_IDX_SETTINGS: usize = 2;
 
+pub const TOGGLE_PEER_KEY: char = ' ';
+pub const TOGGLE_PEER_DENOISE_KEY: char = 'd';
+pub const INCREMENT_PEER_VOLUME_KEY: char = '+';
+pub const DECREMENT_PEER_VOLUME_KEY: char = '-';
+pub const MOVE_DOWN_PEER_LIST_KEY: char = 'j';
+pub const MOVE_UP_PEER_LIST_KEY: char = 'k';
+pub const MOVE_TOP_PEER_LIST_KEY: char = 'g';
+pub const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
+
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
 
@@ -62,24 +71,15 @@ impl Peer {
     }
 
     pub fn with_denoised(self, denoised: bool) -> Peer {
-        Peer {
-            denoised,
-            ..self
-        }
+        Peer { denoised, ..self }
     }
 
     pub fn with_state(self, state: PeerState) -> Peer {
-        Peer {
-            state,
-            ..self
-        }
+        Peer { state, ..self }
     }
 
     pub fn with_volume(self, volume: usize) -> Peer {
-        Peer {
-            volume,
-            ..self
-        }
+        Peer { volume, ..self }
     }
 }
 
@@ -175,28 +175,28 @@ impl App {
             }
             AppEvent::Character(c) => match self.tab_index {
                 TAB_IDX_PEERS => match c {
-                    ' ' => {
+                    TOGGLE_PEER_KEY => {
                         self.toggle_peer();
                     }
-                    'd' => {
+                    TOGGLE_PEER_DENOISE_KEY => {
                         self.toggle_denoise();
                     }
-                    '+' => {
+                    INCREMENT_PEER_VOLUME_KEY => {
                         self.adjust_volume(1);
                     }
-                    '-' => {
+                    DECREMENT_PEER_VOLUME_KEY => {
                         self.adjust_volume(-1);
                     }
-                    'j' => {
+                    MOVE_DOWN_PEER_LIST_KEY => {
                         self.move_peer(1);
                     }
-                    'k' => {
+                    MOVE_UP_PEER_LIST_KEY => {
                         self.move_peer(-1);
                     }
-                    'g' => {
+                    MOVE_TOP_PEER_LIST_KEY => {
                         self.peer_index = 0;
                     }
-                    'G' => {
+                    MOVE_BOTTOM_PEER_LIST_KEY => {
                         self.peer_index = self.peers.len() - 1;
                     }
                     _ => {}
@@ -262,7 +262,7 @@ impl App {
                     }
                 }
                 _ => {}
-            }
+            },
             AppEvent::Up => match self.tab_index {
                 TAB_IDX_PEERS => {
                     self.peer_index = self.peer_index.saturating_sub(1);
@@ -271,7 +271,7 @@ impl App {
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
                 }
                 _ => {}
-            }
+            },
             AppEvent::TogglePeer => {
                 self.toggle_peer();
             }

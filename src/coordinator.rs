@@ -15,22 +15,12 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> O
     let tor_log_path = config_dir.join("tor.log");
     let _tor_handle = thread::spawn(move || {
         Tor::new()
-            .flag(TorFlag::DataDirectory(
-                tor_data_dir.to_string_lossy().to_string(),
-            ))
+            .flag(TorFlag::DataDirectory(tor_data_dir.to_string_lossy().to_string()))
             .flag(TorFlag::SocksPort(socks_port))
-            .flag(TorFlag::HiddenServiceDir(
-                tor_hs_dir_clone.to_string_lossy().to_string(),
-            ))
+            .flag(TorFlag::HiddenServiceDir(tor_hs_dir_clone.to_string_lossy().to_string()))
             .flag(TorFlag::HiddenServiceVersion(HiddenServiceVersion::V3))
-            .flag(TorFlag::HiddenServicePort(
-                TorAddress::Port(coordinator_port),
-                None.into(),
-            ))
-            .flag(TorFlag::LogTo(
-                LogLevel::Notice,
-                LogDestination::File(tor_log_path.to_string_lossy().to_string()),
-            ))
+            .flag(TorFlag::HiddenServicePort(TorAddress::Port(coordinator_port), None.into()))
+            .flag(TorFlag::LogTo(LogLevel::Notice, LogDestination::File(tor_log_path.to_string_lossy().to_string())))
             .flag(TorFlag::Quiet())
             // .flag(TorFlag::Log(LogLevel::Debug))
             .start()
@@ -41,16 +31,9 @@ pub fn start_tor(config_dir: &Path, socks_port: u16, coordinator_port: u16) -> O
         match File::open(tor_hs_dir.join("hostname")) {
             Ok(mut tor_hostname_file) => {
                 let mut hostname_contents = String::new();
-                tor_hostname_file
-                    .read_to_string(&mut hostname_contents)
-                    .unwrap();
+                tor_hostname_file.read_to_string(&mut hostname_contents).unwrap();
                 log::info!("Tor hostname: {}", hostname_contents);
-                return OnionAddress::new(format!(
-                    "{}:{}",
-                    hostname_contents.trim(),
-                    coordinator_port
-                ))
-                .unwrap();
+                return OnionAddress::new(format!("{}:{}", hostname_contents.trim(), coordinator_port)).unwrap();
             }
             Err(_) => {
                 println!("Waiting for tor to start...");
@@ -78,7 +61,11 @@ pub struct AugmentedInfo {
     pub display_name: String,
 }
 
-pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<ConnectionManager>, display_name: String) {
+pub async fn start_coordinator(
+    coordinator_port: u16,
+    connection_manager: Arc<ConnectionManager>,
+    display_name: String,
+) {
     let hello = warp::path!("hello" / String).map(|name| format!("Hello, {name}!"));
     // let peers_post = warp::post()
     //     .and(warp::path("peers"))
@@ -89,12 +76,14 @@ pub async fn start_coordinator(coordinator_port: u16, connection_manager: Arc<Co
     let info = warp::path("info")
         .and(with_c(connection_manager.clone()))
         .and(with_display_name(display_name.clone()))
-        .and_then(|c: Arc<ConnectionManager>, display_name: String| async move {
-            Ok::<_, Infallible>(warp::reply::json(&AugmentedInfo {
-                conn_info: c.conn_info.clone(),
-                display_name,
-            }))
-        });
+        .and_then(
+            |c: Arc<ConnectionManager>, display_name: String| async move {
+                Ok::<_, Infallible>(warp::reply::json(&AugmentedInfo {
+                    conn_info: c.conn_info.clone(),
+                    display_name,
+                }))
+            },
+        );
     let id = warp::post()
         .and(warp::path!("id" / OnionAddress))
         .and(with_c(connection_manager.clone()))

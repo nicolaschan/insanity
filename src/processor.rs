@@ -176,7 +176,11 @@ impl MultiChannelDenoiser<'_> {
             }
         }
 
-        AudioChunk::new(chunk.sequence_number, chunk.audio_format.clone(), denoised_output)
+        AudioChunk::new(
+            chunk.sequence_number,
+            chunk.audio_format.clone(),
+            denoised_output,
+        )
     }
 }
 
@@ -204,7 +208,7 @@ impl AudioProcessor<'_> {
             let mut denoiser_guard = self.denoiser.lock().unwrap();
             chunk = denoiser_guard.denoise_chunk(&chunk);
         }
-        
+
         // Adjust volume if necessary
         let volume = { *self.volume.lock().unwrap() };
         if volume != 100 {
@@ -234,7 +238,7 @@ impl AudioProcessor<'_> {
             *val = match sample {
                 None => {
                     Sample::from(&0.0) // cry b/c there's no packets
-                },
+                }
                 Some(sample) => Sample::from(&sample),
             };
         }

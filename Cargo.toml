@@ -18,10 +18,10 @@ nnnoiseless = "0.3.0"
 rand = "0.8.4"
 serde = { version = "1.0.127", features = ["derive"] }
 itertools = "0.10.1"
-crossterm = "0.23.0"
+crossterm = "0.25.0"
 tokio = { version = "1", features = ["full"] }
-opus = "0.3"
-tui = { version = "0.17", default-features = false, features = ["crossterm"] }
+opus = "0.3.0"
+tui = { version = "0.19.0", default-features = false, features = ["crossterm"] }
 futures-util = "0.3.17"
 send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
 libtor = { version = "47.8.0", features = ["vendored-openssl"] }

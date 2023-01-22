@@ -1,6 +1,10 @@
-use tokio::sync::{mpsc::{Receiver, self, Sender}, broadcast, Mutex};
+use tokio::sync::{
+    broadcast,
+    mpsc::{self, Receiver, Sender},
+    Mutex,
+};
 use uuid::Uuid;
-use veq::veq::{VeqSocket, VeqSessionAlias};
+use veq::veq::{VeqSessionAlias, VeqSocket};
 
 use crate::coordinator::AugmentedInfo;
 
