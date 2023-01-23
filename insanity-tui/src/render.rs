@@ -148,6 +148,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
 fn char_to_readable(c: char) -> String {
     match c {
         ' ' => "space".to_string(),
+        '\t' => "tab".to_string(),
         _ => c.to_string(),
     }
 }
@@ -182,14 +183,15 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
 
     // Command help list
     let commands = [
+        ('\t', "tab"),
         (TOGGLE_PEER_KEY, "toggle peer"),
         (TOGGLE_PEER_DENOISE_KEY, "toggle denoise"),
         (INCREMENT_PEER_VOLUME_KEY, "volume up"),
         (DECREMENT_PEER_VOLUME_KEY, "volume down"),
-        (MOVE_DOWN_PEER_LIST_KEY, "move down"),
-        (MOVE_UP_PEER_LIST_KEY, "move up"),
-        (MOVE_TOP_PEER_LIST_KEY, "move to top"),
-        (MOVE_BOTTOM_PEER_LIST_KEY, "move to bottom"),
+        // (MOVE_DOWN_PEER_LIST_KEY, "move down"),
+        // (MOVE_UP_PEER_LIST_KEY, "move up"),
+        // (MOVE_TOP_PEER_LIST_KEY, "move to top"),
+        // (MOVE_BOTTOM_PEER_LIST_KEY, "move to bottom"),
     ];
     let text: String = commands
         .iter()
