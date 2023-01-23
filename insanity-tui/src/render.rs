@@ -183,9 +183,9 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     // Command help list
     let commands = [
         (TOGGLE_PEER_KEY, "toggle peer"),
-        (TOGGLE_PEER_DENOISE_KEY, "toggle peer denoise"),
-        (INCREMENT_PEER_VOLUME_KEY, "raise peer volume"),
-        (DECREMENT_PEER_VOLUME_KEY, "lower peer volume"),
+        (TOGGLE_PEER_DENOISE_KEY, "toggle denoise"),
+        (INCREMENT_PEER_VOLUME_KEY, "volume up"),
+        (DECREMENT_PEER_VOLUME_KEY, "volume down"),
         (MOVE_DOWN_PEER_LIST_KEY, "move down"),
         (MOVE_UP_PEER_LIST_KEY, "move up"),
         (MOVE_TOP_PEER_LIST_KEY, "move to top"),
@@ -195,7 +195,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .iter()
         .map(|(key, help_str)| peer_command_help_entry(*key, help_str))
         .fold("   ".to_string(), |acc, x| acc + &x);
-    let commands = Paragraph::new(text).block(Block::default());
+    let commands = Paragraph::new(text).block(Block::default().style(Style::default().fg(Color::DarkGray)));
     f.render_widget(commands, chunks[1]);
 }
 
