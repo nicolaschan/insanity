@@ -94,54 +94,56 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         Style::default()
     };
 
+    let denoise_symbol = if peer.denoised {
+        "🤫"
+    } else {
+        "🫨"
+    };
+
     let attributes = Cell::from(Spans::from(vec![Span::styled(
         format!("{}", peer.volume),
-        Style::default().fg(if peer.denoised {
-            Color::White
-        } else {
-            Color::DarkGray
+        Style::default().fg(match peer.state {
+            crate::PeerState::Connected(_) => Color::White,
+            _ => Color::DarkGray
         }),
     )]));
 
     match &peer.state {
         crate::PeerState::Connected(address) => Row::new(vec![
-            Cell::from("✓"),
+            Cell::from(denoise_symbol),
             attributes,
             Cell::from(match peer.display_name.as_ref() {
                 Some(name) => name.clone(),
                 None => peer.id.clone(),
             })
-            .style(style),
+            .style(style.fg(CONNECTED)),
             Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
-        ])
-        .style(Style::default().fg(CONNECTED)),
+        ]),
         crate::PeerState::Disconnected => Row::new(vec![
-            Cell::from(" "),
+            Cell::from(denoise_symbol),
             attributes,
             Cell::from(peer.id.clone()).style(style),
         ])
         .style(Style::default().fg(Color::DarkGray)),
         crate::PeerState::Disabled => Row::new(vec![
-            Cell::from("✗"),
+            Cell::from(denoise_symbol),
             attributes,
             Cell::from(Span::styled(
                 peer.id.clone(),
                 Style::default().add_modifier(Modifier::CROSSED_OUT),
             ))
-            .style(style),
-        ])
-        .style(Style::default().fg(Color::DarkGray)),
+            .style(style.fg(Color::DarkGray)),
+        ]),
         crate::PeerState::Connecting(address) => Row::new(vec![
-            Cell::from(DOT),
+            Cell::from(denoise_symbol),
             attributes,
             Cell::from(match peer.display_name.as_ref() {
                 Some(name) => name.clone(),
                 None => peer.id.clone(),
             })
-            .style(style),
+            .style(style.fg(CONNECTING)),
             Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
-        ])
-        .style(Style::default().fg(CONNECTING)),
+        ]),
     }
 }
 
@@ -172,7 +174,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let peer_list = Table::new(rows)
         .style(Style::default().fg(Color::White))
         .widths(&[
-            Constraint::Length(1),
+            Constraint::Min(2),
             Constraint::Length(3),
             Constraint::Min(70),
             Constraint::Min(24),
