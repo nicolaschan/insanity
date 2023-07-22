@@ -114,7 +114,8 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             attributes,
             Cell::from(Spans::from(vec![
                 Span::styled(display_name, style.fg(CONNECTED)),
-                Span::styled(format!("@{}", address), style.fg(Color::Yellow))
+                Span::styled(" <-> ", style.fg(Color::DarkGray)),
+                Span::styled(format!("{}", address), style.fg(Color::Yellow))
             ])).style(style)
         ]),
         &crate::PeerState::Disconnected => Row::new(vec![
@@ -135,8 +136,11 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         &crate::PeerState::Connecting(ref address) => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
-            Cell::from(display_name).style(style.fg(CONNECTING)),
-            Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
+            Cell::from(Spans::from(vec![
+                Span::styled(display_name, style.fg(CONNECTING)),
+                Span::styled(" <-> ", style.fg(Color::DarkGray)),
+                Span::styled(format!("{}", address), style.fg(Color::DarkGray))
+            ])).style(style)
         ]),
     }
 }
