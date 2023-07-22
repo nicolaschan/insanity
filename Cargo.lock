@@ -3501,7 +3501,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "veq"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/udpp.git#f238a6dd83ec240f4f61494eb8c4351b4c475a16"
+source = "git+https://github.com/nicolaschan/udpp.git#543ff7de41b754464541546e175513f75ef1443d"
 dependencies = [
  "async-std",
  "async-trait",
