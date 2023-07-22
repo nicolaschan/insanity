@@ -86,7 +86,7 @@ fn tab_list(app: &App) -> impl Widget {
         .divider(Span::styled(DOT, Style::default().fg(BG_GRAY)))
 }
 
-fn channel_row<'a>(channel: &Channel, selected: bool) -> Row<'a> {
+fn channel_row<'a>(channel: &Channel, selected: bool, last: bool) -> Row<'a> {
     let style = if selected {
         Style::default().bg(SELECTED)
     } else {
@@ -107,7 +107,7 @@ fn channel_row<'a>(channel: &Channel, selected: bool) -> Row<'a> {
     Row::new(vec![
         Cell::from(denoise_symbol),
         attributes,
-        Cell::from(format!(" ↪  {}", channel.name)).style(style),
+        Cell::from(Spans::from(vec![Span::styled(format!(" {}", channel.name), style)])),
     ])
 }
 
@@ -176,8 +176,10 @@ fn peer_rows<'a>(peer: &Peer, is_selected: bool, channel_index: usize) -> Vec<Ro
     for (i, (_channel_id, channel)) in peer.channels.iter().enumerate() {
         if i == 0 {
             rows.push(peer_row(peer, is_selected && channel_index == i));
+        } else if i == peer.channels.len() {
+            rows.push(channel_row(channel, is_selected && channel_index == i, true))
         } else {
-            rows.push(channel_row(channel, is_selected && channel_index == i));
+            rows.push(channel_row(channel, is_selected && channel_index == i, false));
         }
     }
     rows
