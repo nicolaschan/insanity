@@ -1,5 +1,3 @@
-#![feature(test)]
-
 pub mod clerver;
 pub mod client;
 pub mod coordinator;
