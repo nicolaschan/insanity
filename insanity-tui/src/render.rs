@@ -107,40 +107,33 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         }),
     )]));
 
+    let display_name = peer.display_name.as_ref().unwrap_or(&peer.id).to_string();
     match &peer.state {
-        crate::PeerState::Connected(address) => Row::new(vec![
+        &crate::PeerState::Connected(ref address) => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
-            Cell::from(match peer.display_name.as_ref() {
-                Some(name) => name.clone(),
-                None => peer.id.clone(),
-            })
-            .style(style.fg(CONNECTED)),
+            Cell::from(display_name).style(style.fg(CONNECTED)),
             Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
         ]),
-        crate::PeerState::Disconnected => Row::new(vec![
+        &crate::PeerState::Disconnected => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
-            Cell::from(peer.id.clone()).style(style),
+            Cell::from(display_name).style(style),
         ])
         .style(Style::default().fg(Color::DarkGray)),
-        crate::PeerState::Disabled => Row::new(vec![
+        &crate::PeerState::Disabled => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
             Cell::from(Span::styled(
-                peer.id.clone(),
+                display_name,
                 Style::default().add_modifier(Modifier::CROSSED_OUT),
             ))
             .style(style.fg(Color::DarkGray)),
         ]),
-        crate::PeerState::Connecting(address) => Row::new(vec![
+        &crate::PeerState::Connecting(ref address) => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
-            Cell::from(match peer.display_name.as_ref() {
-                Some(name) => name.clone(),
-                None => peer.id.clone(),
-            })
-            .style(style.fg(CONNECTING)),
+            Cell::from(display_name).style(style.fg(CONNECTING)),
             Cell::from(format!("@{}", address)).style(Style::default().fg(Color::DarkGray)),
         ]),
     }

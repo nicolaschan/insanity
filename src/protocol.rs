@@ -157,12 +157,6 @@ impl ConnectionManager {
         db: sled::Db,
     ) -> ConnectionManager {
         let peers = Arc::new(Mutex::new(HashMap::new()));
-        // tokio::spawn(async move {
-        //     loop {
-        //         println!("hi");
-        //         tokio::time::sleep(Duration::from_millis(1000)).await;
-        //     }
-        // });
         ConnectionManager {
             conn_info,
             peers,
@@ -195,6 +189,11 @@ impl ConnectionManager {
             }
         }
     }
+
+    pub fn cached_display_name(&self, peer: &OnionAddress) -> Option<String> {
+        bincode::deserialize(&self.db.get(format!("peer-{peer}")).ok()??).map(|info: AugmentedInfo| info.display_name).ok()
+    }
+
     pub async fn session(
         &self,
         socket: &mut VeqSocket,
@@ -206,8 +205,7 @@ impl ConnectionManager {
         let pending_session = UpdatablePendingSession::new(socket.clone());
 
         if let Ok(Some(cached_info_serialized)) = self.db.get(format!("peer-{peer}")) {
-            let cached_info: AugmentedInfo =
-                bincode::deserialize(&cached_info_serialized[..]).unwrap();
+            let cached_info: AugmentedInfo = bincode::deserialize(&cached_info_serialized[..]).unwrap();
             pending_session.update(id, cached_info).await;
         }
 

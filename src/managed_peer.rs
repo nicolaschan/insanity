@@ -73,28 +73,29 @@ impl ManagedPeer {
     }
 
     pub async fn enable(&self) {
-        if let Some(sender) = &self.ui_sender {
-            sender
-                .send(AppEvent::AddPeer(Peer::new(
-                    self.address.to_string(),
-                    None,
-                    PeerState::Disconnected,
-                    self.denoise.load(Ordering::Relaxed),
-                    *self.volume.lock().unwrap(),
-                )))
-                .unwrap();
-        }
-
         let address = self.address.clone();
         let conn_manager = self.conn_manager.clone();
         let ui_sender = self.ui_sender.clone();
         let peer_message_sender = self.peer_message_sender.clone();
         let denoise = self.denoise.clone();
         let volume = self.volume.clone();
+        let display_name = conn_manager.cached_display_name(&address);
+        
+        let peer = Peer::new(
+            address.to_string(),
+            display_name,
+            PeerState::Disconnected,
+            self.denoise.load(Ordering::Relaxed),
+            *self.volume.lock().unwrap(),
+        );
+
+        if let &Some(ref sender) = &self.ui_sender {
+            sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
+        }
+        
         let socket = self.socket.clone();
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
-        let volume_clone = self.volume.clone();
         tokio::spawn(async move {
             let (inner_tx, _inner_rx) = broadcast::channel(10);
             loop {
@@ -107,16 +108,8 @@ impl ManagedPeer {
                     }
                 }
                 log::info!("Lost connection to peer {}", address);
-                if let Some(sender) = &ui_sender {
-                    sender
-                        .send(AppEvent::AddPeer(Peer::new(
-                            address.to_string(),
-                            None,
-                            PeerState::Disconnected,
-                            denoise.load(Ordering::Relaxed),
-                            *volume_clone.lock().unwrap(),
-                        )))
-                        .unwrap();
+                if let &Some(ref sender) = &ui_sender {
+                    sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
                 }
             }
         });
