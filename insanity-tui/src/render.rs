@@ -17,7 +17,7 @@ use crate::{
 
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
 const SELECTED: Color = Color::Rgb(80, 80, 80);
-const CONNECTED: Color = Color::Rgb(0, 255, 0);
+const CONNECTED: Color = Color::Green; //Color::Rgb(0, 255, 0);
 const CONNECTING: Color = Color::Rgb(0, 255, 255);
 
 // Gruvbox (mostly) dark theme
