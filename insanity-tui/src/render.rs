@@ -12,7 +12,7 @@ use crate::{
     App, Editor, Peer, 
     TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, 
     DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY,
-    TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
+    TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY, Channel, ChannelId,
 };
 
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
@@ -86,6 +86,31 @@ fn tab_list(app: &App) -> impl Widget {
         .divider(Span::styled(DOT, Style::default().fg(BG_GRAY)))
 }
 
+fn channel_row<'a>(channel: &Channel, selected: bool) -> Row<'a> {
+    let style = if selected {
+        Style::default().bg(SELECTED)
+    } else {
+        Style::default()
+    };
+
+    let denoise_symbol = if channel.denoised {
+        "🤫"
+    } else {
+        "🫨"
+    };
+
+    let attributes = Cell::from(Spans::from(vec![Span::styled(
+        format!("{}", channel.volume),
+        Style::default().fg(Color::White),
+    )]));
+
+    Row::new(vec![
+        Cell::from(denoise_symbol),
+        attributes,
+        Cell::from(format!(" ↪  {}", channel.name)).style(style),
+    ])
+}
+
 fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
     let style = if selected {
         Style::default().bg(SELECTED)
@@ -93,14 +118,14 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         Style::default()
     };
 
-    let denoise_symbol = if peer.denoised {
+    let denoise_symbol = if peer.is_default_channel_denoised() {
         "🤫"
     } else {
         "🫨"
     };
 
     let attributes = Cell::from(Spans::from(vec![Span::styled(
-        format!("{}", peer.volume),
+        format!("{}", peer.get_default_channel_volume()),
         Style::default().fg(match peer.state {
             crate::PeerState::Connected(_) => Color::White,
             _ => Color::DarkGray
@@ -146,6 +171,18 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
     }
 }
 
+fn peer_rows<'a>(peer: &Peer, is_selected: bool, channel_index: usize) -> Vec<Row<'a>> {
+    let mut rows = vec![];
+    for (i, (_channel_id, channel)) in peer.channels.iter().enumerate() {
+        if i == 0 {
+            rows.push(peer_row(peer, is_selected && channel_index == i));
+        } else {
+            rows.push(channel_row(channel, is_selected && channel_index == i));
+        }
+    }
+    rows
+}
+
 fn char_to_readable(c: char) -> String {
     match c {
         ' ' => "space".to_string(),
@@ -168,7 +205,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .peers
         .values()
         .enumerate()
-        .map(|(i, peer)| peer_row(peer, i == app.peer_index))
+        .flat_map(|(i, peer)| peer_rows(peer, i == app.peer_index, app.channel_index))
         .collect();
     let peer_list = Table::new(rows)
         .style(Style::default().fg(Color::White))

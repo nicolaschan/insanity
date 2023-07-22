@@ -33,8 +33,25 @@ pub const MOVE_UP_PEER_LIST_KEY: char = 'k';
 pub const MOVE_TOP_PEER_LIST_KEY: char = 'g';
 pub const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
 
+
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
+
+
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub struct ChannelId(u8);
+
+impl Default for ChannelId {
+    fn default() -> Self {
+        ChannelId(0)
+    }
+}
+
+impl ChannelId {
+    pub fn new(id: u8) -> ChannelId {
+        ChannelId(id)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerState {
@@ -49,8 +66,34 @@ pub struct Peer {
     id: String,
     display_name: Option<String>,
     state: PeerState,
+    channels: BTreeMap<ChannelId, Channel>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Channel {
+    name: String,
     denoised: bool,
     volume: usize,
+}
+
+impl Default for Channel {
+    fn default() -> Self {
+        Channel {
+            name: "Default".to_string(),
+            denoised: true,
+            volume: 100,
+        }
+    }
+}
+
+impl Channel {
+    pub fn new(name: String, denoised: bool, volume: usize) -> Channel {
+        Channel {
+            name,
+            denoised,
+            volume,
+        }
+    }
 }
 
 impl Peer {
@@ -58,28 +101,43 @@ impl Peer {
         id: String,
         display_name: Option<String>,
         state: PeerState,
-        denoised: bool,
-        volume: usize,
     ) -> Peer {
+        let mut channels = BTreeMap::new();
+        channels.insert(ChannelId::default(), Channel::default());
         Peer {
             id,
             display_name,
             state,
-            denoised,
-            volume,
+            channels,
         }
     }
 
-    pub fn with_denoised(self, denoised: bool) -> Peer {
-        Peer { denoised, ..self }
+    pub fn add_channel(&mut self, id: ChannelId, channel: Channel) {
+        self.channels.insert(id, channel);
     }
 
     pub fn with_state(self, state: PeerState) -> Peer {
         Peer { state, ..self }
     }
 
-    pub fn with_volume(self, volume: usize) -> Peer {
-        Peer { volume, ..self }
+    pub fn is_default_channel_denoised(&self) -> bool {
+        let default = self.channels.get(&ChannelId::default()).unwrap();
+        default.denoised
+    }
+
+    pub fn get_default_channel_volume(&self) -> usize {
+        let default = self.channels.get(&ChannelId::default()).unwrap();
+        default.volume
+    }
+
+    pub fn set_default_channel_denoise(&mut self, denoised: bool) {
+        let default = self.channels.get_mut(&ChannelId::default()).unwrap();
+        default.denoised = denoised;
+    }
+
+    pub fn set_default_channel_volume(&mut self, volume: usize) {
+        let default = self.channels.get_mut(&ChannelId::default()).unwrap();
+        default.volume = volume;
     }
 }
 
@@ -132,6 +190,7 @@ pub struct App {
     pub own_display_name: Option<String>,
     pub editor: Editor,
     pub peer_index: usize,
+    pub channel_index: usize,
     pub chat_history: Vec<(String, String)>, // (Display Name, Message)
     pub unread_messages: bool,
     pub chat_offset: usize, // Offset from bottom of chat in full messages.
@@ -149,10 +208,16 @@ impl App {
             own_display_name: None,
             editor: Editor::new(),
             peer_index: 0,
+            channel_index: 0,
             chat_history: vec![],
             unread_messages: false,
             chat_offset: 0,
         }
+    }
+
+    fn num_channels_in_selected_peer(&self) -> usize {
+        let peer = self.selected_peer();
+        peer.map(|p| p.channels.len()).unwrap_or(0)
     }
 
     fn process_event(&mut self, event: AppEvent) {
@@ -195,9 +260,11 @@ impl App {
                     }
                     MOVE_TOP_PEER_LIST_KEY => {
                         self.peer_index = 0;
+                        self.channel_index = 0;
                     }
                     MOVE_BOTTOM_PEER_LIST_KEY => {
                         self.peer_index = self.peers.len() - 1;
+                        self.channel_index = self.num_channels_in_selected_peer() - 1;
                     }
                     _ => {}
                 },
@@ -250,10 +317,15 @@ impl App {
             }
             AppEvent::Down => match self.tab_index {
                 TAB_IDX_PEERS => {
-                    self.peer_index = std::cmp::min(
-                        self.peer_index.checked_add(1).unwrap_or(0),
-                        self.peers.len() - 1,
-                    );
+                    if self.channel_index + 1 < self.num_channels_in_selected_peer() {
+                        self.channel_index += 1;
+                    } else {
+                        self.channel_index = 0;
+                        self.peer_index = std::cmp::min(
+                            self.peer_index.checked_add(1).unwrap_or(0),
+                            self.peers.len() - 1,
+                        );
+                    }
                 }
                 TAB_IDX_CHAT => {
                     self.chat_offset = self.chat_offset.saturating_sub(1);
@@ -265,7 +337,12 @@ impl App {
             },
             AppEvent::Up => match self.tab_index {
                 TAB_IDX_PEERS => {
-                    self.peer_index = self.peer_index.saturating_sub(1);
+                    if self.channel_index > 0 {
+                        self.channel_index -= 1;
+                    } else {
+                        self.channel_index = self.num_channels_in_selected_peer() - 1;
+                        self.peer_index = self.peer_index.saturating_sub(1);
+                    }
                 }
                 TAB_IDX_CHAT => {
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
@@ -280,12 +357,12 @@ impl App {
             }
             AppEvent::SetPeerDenoise(peer_id, denoised) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
-                    peer.denoised = denoised;
+                    peer.set_default_channel_denoise(denoised);
                 }
             }
             AppEvent::SetPeerVolume(peer_id, volume) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
-                    peer.volume = volume;
+                    peer.set_default_channel_volume(volume);
                 }
             }
         }
@@ -336,7 +413,7 @@ impl App {
 
     fn toggle_denoise(&mut self) {
         if let Some(peer) = self.selected_peer() {
-            if peer.denoised {
+            if peer.is_default_channel_denoised() {
                 self.user_action_sender
                     .send(UserAction::DisableDenoise(peer.id.clone()))
                     .unwrap();
@@ -353,7 +430,7 @@ impl App {
             self.user_action_sender
                 .send(UserAction::SetVolume(
                     peer.id.clone(),
-                    add_in_bounds(peer.volume, 0, 999, delta),
+                    add_in_bounds(peer.get_default_channel_volume(), 0, 999, delta),
                 ))
                 .unwrap();
         }

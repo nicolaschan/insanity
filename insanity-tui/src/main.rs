@@ -1,18 +1,17 @@
-use insanity_tui::{start_tui, stop_tui, AppEvent, Peer, PeerState, UserAction};
+use insanity_tui::{start_tui, Peer, PeerState, ChannelId, Channel, AppEvent, UserAction, stop_tui};
 use std::{collections::BTreeMap, error::Error};
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (sender, mut user_action_receiver, handle) = start_tui().await?;
-    let mut peers = BTreeMap::new();
+    let mut peers: BTreeMap<&str, Peer> = BTreeMap::new();
     peers.insert(
         "francis",
         Peer::new(
             "francis".to_string(),
             None,
-            PeerState::Disconnected,
-            true,
-            100,
+            PeerState::Disconnected
         ),
     );
     peers.insert(
@@ -20,14 +19,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Peer::new(
             "nicolas".to_string(),
             None,
-            PeerState::Connected("hi".to_string()),
-            false,
-            100,
+            PeerState::Connected("hi".to_string())
         ),
     );
     peers.insert(
         "randall",
-        Peer::new("randall".to_string(), None, PeerState::Disabled, true, 100),
+        Peer::new("randall".to_string(), None, PeerState::Disabled),
     );
     peers.insert(
         "neelay",
@@ -35,10 +32,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "neelay".to_string(),
             None,
             PeerState::Connecting("bruh".to_string()),
-            true,
-            100,
         ),
     );
+
+    let nicolas = peers.get_mut("nicolas").unwrap();
+    nicolas.add_channel(ChannelId::new(8u8), Channel::new("music".to_string(), true, 100));
+    nicolas.add_channel(ChannelId::new(9u8), Channel::new("game".to_string(), true, 100));
 
     for peer in peers.values() {
         sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
@@ -84,7 +83,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .send(AppEvent::SetPeerVolume(peer_id, volume))
                         .unwrap();
                 }
-                UserAction::SendMessage(message) => {}
+                UserAction::SendMessage(_message) => {}
             }
         }
     });
