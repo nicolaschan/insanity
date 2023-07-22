@@ -153,6 +153,24 @@ async fn connect(
     log::info!("Connecting to peer {:?}", address);
     if let Some((session, info)) = tokio::select! {
         res = conn_manager.session(&mut socket, &address) => res,
+        _x = async {
+            if let Some(ref sender) = ui_sender {
+                loop {
+                    if let Some(cached_peer_info) = conn_manager.cached_peer_info(&address) {
+                        let ip_address = cached_peer_info.conn_info.addresses.iter().next().unwrap().to_string();
+                        sender.send(AppEvent::AddPeer(Peer::new(
+                            address.clone().to_string(),
+                            Some(cached_peer_info.display_name.clone()),
+                            PeerState::Connecting(ip_address),
+                            denoise.load(Ordering::Relaxed),
+                            *volume.lock().unwrap(),
+                        ))).unwrap();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            }
+            return;
+        } => { return; },
         _ = shutdown_receiver.recv() => { return; }
     } {
         log::info!("Connected to peer {:?}", address);

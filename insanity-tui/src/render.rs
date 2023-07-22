@@ -138,7 +138,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             attributes,
             Cell::from(Spans::from(vec![
                 Span::styled(display_name, style.fg(CONNECTING)),
-                Span::styled(" <-> ", style.fg(Color::DarkGray)),
+                Span::styled(" --> ", style.fg(Color::DarkGray)),
                 Span::styled(format!("{}", address), style.fg(Color::DarkGray))
             ])).style(style)
         ]),

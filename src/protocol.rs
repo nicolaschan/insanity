@@ -194,6 +194,10 @@ impl ConnectionManager {
         bincode::deserialize(&self.db.get(format!("peer-{peer}")).ok()??).map(|info: AugmentedInfo| info.display_name).ok()
     }
 
+    pub fn cached_peer_info(&self, peer: &OnionAddress) -> Option<AugmentedInfo> {
+        bincode::deserialize(&self.db.get(format!("peer-{peer}")).ok()??).ok()
+    }
+
     pub async fn session(
         &self,
         socket: &mut VeqSocket,
