@@ -174,8 +174,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .widths(&[
             Constraint::Min(2),
             Constraint::Length(3),
-            Constraint::Min(70),
-            Constraint::Min(24),
+            Constraint::Percentage(100),
         ])
         .column_spacing(1)
         .block(default_block());
