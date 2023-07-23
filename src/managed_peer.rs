@@ -1,9 +1,10 @@
-use std::sync::{
+use std::{sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
-};
+}};
 
 use insanity_tui::{AppEvent, Peer, PeerState};
+use itertools::Itertools;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 
@@ -89,7 +90,7 @@ impl ManagedPeer {
             *self.volume.lock().unwrap(),
         );
 
-        if let &Some(ref sender) = &self.ui_sender {
+        if let Some(sender) = &self.ui_sender {
             sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
         }
         
@@ -108,7 +109,7 @@ impl ManagedPeer {
                     }
                 }
                 log::info!("Lost connection to peer {}", address);
-                if let &Some(ref sender) = &ui_sender {
+                if let Some(sender) = &ui_sender {
                     sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
                 }
             }
@@ -155,9 +156,11 @@ async fn connect(
         res = conn_manager.session(&mut socket, &address) => res,
         _x = async {
             if let Some(ref sender) = ui_sender {
+                let mut index = 0;
                 loop {
                     if let Some(cached_peer_info) = conn_manager.cached_peer_info(&address) {
-                        let ip_address = cached_peer_info.conn_info.addresses.iter().next().unwrap().to_string();
+                        let ip_addresses_sorted = cached_peer_info.conn_info.addresses.iter().sorted().collect::<Vec<_>>();
+                        let ip_address = ip_addresses_sorted.get(index).map(|x| x.to_string()).unwrap_or("".to_string());
                         sender.send(AppEvent::AddPeer(Peer::new(
                             address.clone().to_string(),
                             Some(cached_peer_info.display_name.clone()),
@@ -165,11 +168,11 @@ async fn connect(
                             denoise.load(Ordering::Relaxed),
                             *volume.lock().unwrap(),
                         ))).unwrap();
+                        index = (index + 1) % ip_addresses_sorted.len();
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
-            return;
         } => { return; },
         _ = shutdown_receiver.recv() => { return; }
     } {
