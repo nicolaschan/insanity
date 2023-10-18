@@ -216,7 +216,7 @@ impl AudioProcessor<'_> {
             let volume_multiplier = if volume < 100 {
                 volume as f32 / 100.0
             } else {
-                ((volume as f32 / 100.0) - 1.0).exp2()
+                ((volume as f32 / 100.0) - 1.0).exp()
             };
             for sample in audio_data.iter_mut() {
                 *sample *= volume_multiplier;
