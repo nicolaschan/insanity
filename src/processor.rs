@@ -213,8 +213,9 @@ impl AudioProcessor<'_> {
         let volume = { *self.volume.lock().unwrap() };
         if volume != 100 {
             let mut audio_data = chunk.audio_data;
+            let volume_multiplier = (volume as f32 / 100.0).exp2() - 1.0;
             for sample in audio_data.iter_mut() {
-                *sample *= volume as f32 / 100.0;
+                *sample *= volume_multiplier;
             }
             chunk.audio_data = audio_data;
         }
