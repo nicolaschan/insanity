@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .send(AppEvent::SetPeerVolume(peer_id, volume))
                         .unwrap();
                 }
-                UserAction::SendMessage(message) => {}
+                UserAction::SendMessage(_message) => {}
             }
         }
     });
