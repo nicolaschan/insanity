@@ -128,10 +128,9 @@ impl ManagedPeer {
         }
         self.enabled.store(false, Ordering::Relaxed);
         if let Some(sender) = &self.ui_sender {
-            sender
-                .send(AppEvent::AddPeer(Peer::new(
+            sender.send(AppEvent::AddPeer(Peer::new(
                     self.address.to_string(),
-                    None,
+                    self.conn_manager.cached_display_name(&self.address),
                     PeerState::Disabled,
                     self.denoise.load(Ordering::Relaxed),
                     *self.volume.lock().unwrap(),
@@ -154,26 +153,26 @@ async fn connect(
     log::info!("Connecting to peer {:?}", address);
     if let Some((session, info)) = tokio::select! {
         res = conn_manager.session(&mut socket, &address) => res,
-        _x = async {
-            if let Some(ref sender) = ui_sender {
-                let mut index = 0;
-                loop {
-                    if let Some(cached_peer_info) = conn_manager.cached_peer_info(&address) {
-                        let ip_addresses_sorted = cached_peer_info.conn_info.addresses.iter().sorted().collect::<Vec<_>>();
-                        let ip_address = ip_addresses_sorted.get(index).map(|x| x.to_string()).unwrap_or("".to_string());
-                        sender.send(AppEvent::AddPeer(Peer::new(
-                            address.clone().to_string(),
-                            Some(cached_peer_info.display_name.clone()),
-                            PeerState::Connecting(ip_address),
-                            denoise.load(Ordering::Relaxed),
-                            *volume.lock().unwrap(),
-                        ))).unwrap();
-                        index = (index + 1) % ip_addresses_sorted.len();
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
-            }
-        } => { return; },
+        // _x = async {
+        //     if let Some(ref sender) = ui_sender {
+        //         let mut index = 0;
+        //         loop {
+        //             if let Some(cached_peer_info) = conn_manager.cached_peer_info(&address) {
+        //                 let ip_addresses_sorted = cached_peer_info.conn_info.addresses.iter().sorted().collect::<Vec<_>>();
+        //                 let ip_address = ip_addresses_sorted.get(index).map(|x| x.to_string()).unwrap_or("".to_string());
+        //                 sender.send(AppEvent::AddPeer(Peer::new(
+        //                     address.clone().to_string(),
+        //                     Some(cached_peer_info.display_name.clone()),
+        //                     PeerState::Connecting(ip_address),
+        //                     denoise.load(Ordering::Relaxed),
+        //                     *volume.lock().unwrap(),
+        //                 ))).unwrap();
+        //                 index = (index + 1) % ip_addresses_sorted.len();
+        //             }
+        //             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        //         }
+        //     }
+        // } => { return; },
         _ = shutdown_receiver.recv() => { return; }
     } {
         log::info!("Connected to peer {:?}", address);
