@@ -17,6 +17,13 @@ use crate::clerver::AudioFrame;
 use crate::coordinator::AugmentedInfo;
 use crate::session::UpdatablePendingSession;
 
+use http_body_util::BodyExt;
+use http_body_util::Empty;
+use hyper::body::Buf;
+use hyper::body::Bytes;
+use hyper::client::conn::http1;
+use hyper_util::rt::tokio::TokioIo;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ProtocolMessage {
     AudioFrame(AudioFrame),
@@ -79,8 +86,8 @@ pub enum ConnectMessage {
 #[derive(PartialEq, Eq, Hash, Clone, Serialize, Deserialize, Debug)]
 pub struct OnionAddress(String);
 impl OnionAddress {
-    pub fn new(str: String) -> Option<OnionAddress> {
-        Some(OnionAddress(str))
+    pub fn new(str: String) -> OnionAddress {
+        OnionAddress(str)
     }
 }
 impl Display for OnionAddress {
@@ -98,13 +105,16 @@ impl FromStr for OnionAddress {
 
 #[derive(Clone)]
 pub struct OnionSidechannel {
-    client: reqwest::Client,
+    client: arti_client::TorClient<tor_rtcompat::PreferredRuntime>,
     peer: OnionAddress,
     session_id: Arc<Mutex<Option<Uuid>>>,
 }
 
 impl OnionSidechannel {
-    pub fn new(client: reqwest::Client, peer: OnionAddress) -> OnionSidechannel {
+    pub fn new(
+        client: arti_client::TorClient<tor_rtcompat::PreferredRuntime>,
+        peer: OnionAddress,
+    ) -> OnionSidechannel {
         OnionSidechannel {
             client,
             peer,
@@ -122,10 +132,42 @@ impl OnionSidechannel {
             }
         }
     }
-    pub async fn peer_info(&self) -> Result<AugmentedInfo, reqwest::Error> {
-        let url = format!("http://{}/info", self.peer.0);
-        let response = self.client.get(&url).send().await?;
-        response.json().await
+    pub async fn peer_info(&self) -> Result<AugmentedInfo, Box<dyn std::error::Error>> {
+        // Use Tor client to connect to peer onion service.
+        log::debug!("Starting connection to {}", self.peer.0);
+        let stream = self.client.connect(&self.peer.0).await?;
+
+        // Use hyper to handle HTTP GET request and repsonse reading.
+
+        let io = TokioIo::new(stream);
+        let (mut sender, conn) =
+            http1::handshake::<TokioIo<arti_client::DataStream>, Empty<Bytes>>(io).await?;
+
+        tokio::task::spawn(async move {
+            match conn.await {
+                Ok(_) => log::debug!("Connection ended cleanly."),
+                Err(e) => log::debug!("Connection failed: {:?}", e),
+            }
+        });
+
+        let req = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri("/info")
+            .header(hyper::header::HOST, &self.peer.0)
+            .header(hyper::header::CONNECTION, "close")
+            .body(Empty::<Bytes>::new())?;
+
+        log::debug!("Sending info request to {}", self.peer.0);
+        let res = sender.send_request(req).await?;
+        if res.status().is_success() {
+            let body = res.collect().await?.aggregate();
+            let info: AugmentedInfo = serde_json::from_reader(body.reader())?;
+            Ok(info)
+        } else {
+            log::debug!("Unsuccesful info request to {}", self.peer.0);
+            // TODO: use a not random error type.
+            Err(Box::new(std::io::Error::other("Not ok response.")))
+        }
     }
 }
 
@@ -134,7 +176,7 @@ pub struct ConnectionManager {
     pub peers: Arc<Mutex<HashMap<OnionAddress, ConnectionInfo>>>,
     pub sidechannels: Arc<Mutex<HashMap<OnionAddress, OnionSidechannel>>>,
     pub addresses: HashSet<SocketAddr>,
-    pub client: reqwest::Client,
+    pub client: arti_client::TorClient<tor_rtcompat::PreferredRuntime>,
     pub own_address: OnionAddress,
     pub db: sled::Db,
 }
@@ -152,7 +194,7 @@ pub fn socket_addr(string: &String) -> SocketAddr {
 impl ConnectionManager {
     pub fn new(
         conn_info: ConnectionInfo,
-        client: reqwest::Client,
+        client: arti_client::TorClient<tor_rtcompat::PreferredRuntime>,
         own_address: OnionAddress,
         db: sled::Db,
     ) -> ConnectionManager {
@@ -191,7 +233,9 @@ impl ConnectionManager {
     }
 
     pub fn cached_display_name(&self, peer: &OnionAddress) -> Option<String> {
-        bincode::deserialize(&self.db.get(format!("peer-{peer}")).ok()??).map(|info: AugmentedInfo| info.display_name).ok()
+        bincode::deserialize(&self.db.get(format!("peer-{peer}")).ok()??)
+            .map(|info: AugmentedInfo| info.display_name)
+            .ok()
     }
 
     pub fn cached_peer_info(&self, peer: &OnionAddress) -> Option<AugmentedInfo> {
@@ -209,7 +253,8 @@ impl ConnectionManager {
         let pending_session = UpdatablePendingSession::new(socket.clone());
 
         if let Ok(Some(cached_info_serialized)) = self.db.get(format!("peer-{peer}")) {
-            let cached_info: AugmentedInfo = bincode::deserialize(&cached_info_serialized[..]).unwrap();
+            let cached_info: AugmentedInfo =
+                bincode::deserialize(&cached_info_serialized[..]).unwrap();
             pending_session.update(id, cached_info).await;
         }
 
@@ -247,9 +292,8 @@ async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> AugmentedInfo
         match sidechannel.peer_info().await {
             Ok(info) => return info,
             Err(_e) => {
-                // println!("e {:?}", e);
+                log::debug!("Error receving peer info.");
             }
         }
-        // tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }

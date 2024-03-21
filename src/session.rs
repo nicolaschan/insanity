@@ -3,7 +3,6 @@ use tokio::sync::{
     mpsc::{self, Receiver, Sender},
     Mutex,
 };
-use uuid::Uuid;
 use veq::veq::{VeqSessionAlias, VeqSocket};
 
 use crate::coordinator::AugmentedInfo;
@@ -31,7 +30,7 @@ impl UpdatablePendingSession {
         }
     }
 
-    pub async fn update(&self, id: Uuid, info: AugmentedInfo) {
+    pub async fn update(&self, id: uuid::Uuid, info: AugmentedInfo) {
         let mut current_info_guard = self.current_info.lock().await;
         if let Some(current_info) = (*current_info_guard).as_ref() {
             if current_info == &info {

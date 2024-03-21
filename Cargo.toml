@@ -7,36 +7,34 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.52"
-base64 = "0.13.0"
-base65536 = "1.0.1"
+async-trait = "0.1.77"
 bincode = "1.3.3"
-clap = "3.0.14"
-cpal = "0.13.4"
-crossbeam = "0.8"
+clap = {version = "4.5.3", features = ["derive"]}
+cpal = "0.13.5"
 nnnoiseless = "=0.3.0"
-rand = "0.8.4"
-serde = { version = "1.0.127", features = ["derive"] }
-itertools = "0.10.1"
-crossterm = "0.25.0"
+serde = { version = "1.0.197", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 opus = "0.3.0"
-tui = { version = "0.19.0", default-features = false, features = ["crossterm"] }
-futures-util = "0.3.17"
+futures-util = "0.3.30"
 send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
-libtor = { version = "47.8.0", features = ["vendored-openssl"] }
-uuid = { version = "0.8", features = ["serde", "v4"] }
-dirs = "4.0.0"
-warp = "0.3.1"
-stunclient = "0.3"
-reqwest = { version = "0.11", features = ["socks", "json"] }
-serde_json = "1.0.67"
-veq = { git = "https://github.com/nicolaschan/udpp.git" }
-rubato = "0.10.1"
+uuid = { version = "1.7", features = ["serde", "v4"] }
+dirs = "5.0.1"
+warp = "0.3.6"
+serde_json = "1.0.114"
+rubato = "0.10"
 insanity-tui = { path = "insanity-tui" }
-sha2 = "0.10.2"
-whoami = "1.2.1"
+sha2 = "0.10.8"
+whoami = "1.5.1"
 sled = "0.34.7"
 log = "0.4"
-fern = "0.6.1"
+fern = "0.6.2"
 chrono = "0.4"
+veq = { git = "https://github.com/nicolaschan/udpp.git" }
+arti-client = { version = "0.14.1", features = ["onion-service-service", "onion-service-client", "static"] }
+tor-rtcompat = "0.10.0"
+tor-config = "0.11.0"
+tor-hsservice = "0.8.0"
+tor-hsrproxy = "0.6.0"
+hyper-util = { version = "0.1.3", features = ["tokio"] }
+hyper = { version = "1.2.0", features = ["http1", "client"] }
+http-body-util = "0.1.1"

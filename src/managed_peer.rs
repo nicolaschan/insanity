@@ -4,7 +4,6 @@ use std::{sync::{
 }};
 
 use insanity_tui::{AppEvent, Peer, PeerState};
-use itertools::Itertools;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 

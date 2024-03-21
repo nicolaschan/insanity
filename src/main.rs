@@ -16,36 +16,38 @@ use veq::{snow_types::SnowKeypair, veq::VeqSocket};
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Opts {
+    /// Enables denoise by default for all peers upon connection.
     #[clap(short, long)]
     denoise: bool,
 
-    #[clap(long)]
-    music: Option<String>,
+    // #[clap(long)]
+    // music: Option<String>,
 
     #[clap(short, long, default_value = "1337")]
     listen_port: u16,
 
-    #[clap(long)]
+    /// Address of peer to connect to.
+    #[clap(short, long)]
     peer: Vec<String>,
 
-    #[clap(long)]
-    id: Option<String>,
+    // #[clap(long)]
+    // id: Option<String>,
 
+    /// Disables the terminal user interface.
     #[clap(long)]
     no_tui: bool,
 
-    #[clap(long, default_value = "48000")]
-    sample_rate: usize,
+    // #[clap(long, default_value = "48000")]
+    // sample_rate: usize,
 
-    #[clap(long, default_value = "2")]
-    channels: usize,
+    // #[clap(long, default_value = "2")]
+    // channels: usize,
 
-    #[clap(long, default_value = "19050")]
-    socks_port: u16,
-
-    #[clap(long, default_value = "11337")]
+    /// Port on which onion service listens. Forwards to a http server on the same port on the localhost.
+    #[clap(short, long, default_value = "11337")]
     coordinator_port: u16,
 
+    /// Directory to store insanity data.
     #[clap(long)]
     dir: Option<String>,
 }
@@ -54,7 +56,7 @@ struct Opts {
 async fn main() {
     let opts: Opts = Opts::parse();
 
-    let display_name = format!("{}@{}", whoami::username(), whoami::hostname());
+    let display_name = format!("{}@{}", whoami::username(), whoami::fallible::hostname().unwrap_or(String::from("unknown")));
 
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
@@ -83,16 +85,9 @@ async fn main() {
 
     let tor_dir = insanity_dir.join("tor");
     std::fs::create_dir_all(&tor_dir).expect("could not create tor data directory");
-    let socks_port = opts.socks_port;
-    let coordinator_port = opts.coordinator_port;
-    let onion_address = start_tor(&tor_dir, socks_port, coordinator_port);
 
-    let proxy = reqwest::Proxy::all(format!("socks5h://127.0.0.1:{socks_port}")).unwrap();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .proxy(proxy)
-        .build()
-        .unwrap();
+    let coordinator_port = opts.coordinator_port;
+    let (tor_client, onion_address) = start_tor(&tor_dir, coordinator_port).await;
 
     let sled_path = insanity_dir.join("data.sled");
     let db = sled::open(sled_path).unwrap();
@@ -120,7 +115,7 @@ async fn main() {
 
     let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair).await.unwrap();
     log::debug!("Connection info: {:?}", socket.connection_info());
-    let connection_manager = ConnectionManager::new(socket.connection_info(), client, onion_address.clone(), db);
+    let connection_manager = ConnectionManager::new(socket.connection_info(), tor_client, onion_address.clone(), db);
     println!("Own address: {onion_address:?}");
     let connection_manager_arc = Arc::new(connection_manager);
 
@@ -145,7 +140,7 @@ async fn main() {
     let managed_peers = Arc::new(
         peer_list
             .iter()
-            .map(|addr| OnionAddress::new(addr.clone()).unwrap())
+            .map(|addr| OnionAddress::new(addr.clone()))
             .zip(std::iter::repeat((
                 socket.clone(),
                 connection_manager_arc,
