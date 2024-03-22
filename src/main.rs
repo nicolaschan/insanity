@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc, time::D
 use clap::Parser;
 use futures_util::stream::FuturesUnordered;
 use insanity::{
-    coordinator::{start_coordinator, start_tor},
+    coordinator::{create_tor_client, forward_onion_connections}, // , start_coordinator}, // , start_tor},
     managed_peer::ManagedPeer,
     protocol::{ConnectionManager, OnionAddress},
 };
@@ -43,9 +43,9 @@ struct Opts {
     // #[clap(long, default_value = "2")]
     // channels: usize,
 
-    /// Port on which onion service listens. Forwards to a http server on the same port on the localhost.
-    #[clap(short, long, default_value = "11337")]
-    coordinator_port: u16,
+    /// Nickname to differentiate between onion services.
+    #[clap(long, default_value = "default")]
+    onion_nickname: String,
 
     /// Directory to store insanity data.
     #[clap(long)]
@@ -86,8 +86,10 @@ async fn main() {
     let tor_dir = insanity_dir.join("tor");
     std::fs::create_dir_all(&tor_dir).expect("could not create tor data directory");
 
-    let coordinator_port = opts.coordinator_port;
-    let (tor_client, onion_address) = start_tor(&tor_dir, coordinator_port).await;
+    let onion_nickname = opts.onion_nickname;
+    let (tor_client, onion_service, onion_request_stream) = create_tor_client(&tor_dir, onion_nickname).await;
+    let onion_name = onion_service.onion_name().expect("Failed to extract onion service name").to_string();
+    let onion_address = OnionAddress::new(format!("{}:{}", onion_name, insanity::coordinator::COORDINATOR_PORT));
 
     let sled_path = insanity_dir.join("data.sled");
     let db = sled::open(sled_path).unwrap();
@@ -122,7 +124,7 @@ async fn main() {
     let connection_manager_arc_clone = connection_manager_arc.clone();
     let name_copy = display_name.clone();
     tokio::spawn(async move {
-        start_coordinator(coordinator_port, connection_manager_arc_clone, name_copy).await
+        forward_onion_connections(onion_request_stream, connection_manager_arc_clone, name_copy).await;
     });
 
     let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
@@ -134,13 +136,13 @@ async fn main() {
         (None, None, None)
     };
 
-    let peer_list = opts.peer.clone();
+    let peer_list = opts.peer;
     let denoise = opts.denoise;
 
     let managed_peers = Arc::new(
         peer_list
-            .iter()
-            .map(|addr| OnionAddress::new(addr.clone()))
+            .into_iter()
+            .map(|addr| OnionAddress::new(addr))
             .zip(std::iter::repeat((
                 socket.clone(),
                 connection_manager_arc,

@@ -1,19 +1,34 @@
-use std::{convert::Infallible, net::{IpAddr, Ipv4Addr, SocketAddr}, path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 use std::io::Write;
 
+use http_body_util::Full;
 use serde::{Deserialize, Serialize};
 use tor_config::CfgPath;
-use tor_hsrproxy::{config::{Encapsulation, ProxyAction, ProxyPattern, ProxyRule, TargetAddr, ProxyConfigBuilder}, OnionServiceReverseProxy};
-use tor_hsservice::{config::OnionServiceConfigBuilder, HsNickname};
+use tor_hsservice::{config::OnionServiceConfigBuilder, HsNickname, RendRequest, StreamRequest, RunningOnionService};
+use tor_proto::stream::IncomingStreamRequest;
+use tor_cell::relaycell::msg::Connected;
 use veq::veq::ConnectionInfo;
-use warp::Filter;
 
-use crate::protocol::{ConnectionManager, OnionAddress};
+use crate::protocol::ConnectionManager;
+use futures::Stream;
+use futures::StreamExt;
 
+use hyper_util::rt::TokioIo;
+use hyper::{body::Bytes, server::conn::http1, Method, Response, StatusCode};
+use hyper::service::service_fn;
 
 use arti_client::{TorClient, TorClientConfig};
 
-pub async fn start_tor(config_dir: &Path, coordinator_port: u16) -> (TorClient<tor_rtcompat::PreferredRuntime>, OnionAddress) {
+// All onion services listen on this port.
+pub const COORDINATOR_PORT: u16 = 11337;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AugmentedInfo {
+    pub conn_info: ConnectionInfo,
+    pub display_name: String,
+}
+
+pub async fn create_tor_client(config_dir: &Path, nickname: String) -> (TorClient<tor_rtcompat::PreferredRuntime>, Arc<RunningOnionService>, impl Stream<Item = RendRequest>) {
     let tor_cache_dir = config_dir.join("tor-cache");
     let tor_state_dir = config_dir.join("tor-state");
 
@@ -22,7 +37,7 @@ pub async fn start_tor(config_dir: &Path, coordinator_port: u16) -> (TorClient<t
     client_config_builder.stream_timeouts().connect_timeout(Duration::from_secs(10));
     let client_config = client_config_builder.build().expect("Failed to set up tor client config.");
 
-    let client_handle = TorClient::create_bootstrapped(client_config);
+    let client_handle = TorClient::create_bootstrapped(client_config.clone());
     log::info!("Bootstrapping Tor client...");
     // Including print to stdout since TUI doesn't appear until Tor is started.
     print!("Bootstrapping Tor client...");
@@ -39,99 +54,78 @@ pub async fn start_tor(config_dir: &Path, coordinator_port: u16) -> (TorClient<t
     };
     client.set_stream_prefs(stream_prefs);
 
-    // Launch onion service.
-    let nickname = HsNickname::new(coordinator_port.to_string()).expect("Failed to create tor onion nickname.");
-    let onion_service_config = OnionServiceConfigBuilder::default().nickname(nickname.clone()).build().expect("Failed to build tor onion service config.");
+    let hs_nickname = HsNickname::new(nickname).expect("Failed to create tor onion nickname.");
+    let onion_service_config = OnionServiceConfigBuilder::default().nickname(hs_nickname).build().expect("Failed to build tor onion service config.");
     let (onion_service, request_stream) = client.launch_onion_service(onion_service_config).expect("Failed to launch tor onion service");
-    let onion_name: String = onion_service.onion_name().expect("Failed to extract onion service name").to_string().trim().to_string();
 
-    // Start task for forwarding connections to the onion service to a local port.
-    {
-        let onion_service = onion_service.clone();
-        let client = client.clone();
+    (client, onion_service, request_stream)
+}
+
+
+pub async fn forward_onion_connections(request_stream: impl Stream<Item = RendRequest> + std::marker::Unpin, connection_manager: Arc<ConnectionManager>, display_name: String) {
+    log::info!("New onion service started.");
+    let stream_requests = tor_hsservice::handle_rend_requests(request_stream);
+    tokio::pin!(stream_requests);
+
+    while let Some(stream_request) = stream_requests.next().await {
+        let connection_manager = connection_manager.clone();
+        let display_name = display_name.clone();
         tokio::spawn(async move {
-            log::info!("Onion service started.");
-            // Needed to prevent onion service from being dropped.
-            // The onion service dropping ends the reverse proxy.
-            let _onion_service = onion_service;
-            // Forward onion:coordinator_port to localhost:coordinator_port.
-            let proxy_rule = ProxyRule::new(
-                ProxyPattern::one_port(coordinator_port).expect("Failed to set up tor proxy pattern."),
-                ProxyAction::Forward(Encapsulation::Simple, TargetAddr::Inet(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), coordinator_port)))
-            );
-            let mut proxy_config_builder = ProxyConfigBuilder::default();
-            proxy_config_builder.proxy_ports().push(proxy_rule);
-            let proxy_config = proxy_config_builder.build().expect("Failed to set up tor proxy config.");
-
-            // Start reverse proxy.
-            // This should remain on for the entire duration insanity is running.
-            let reverse_proxy = OnionServiceReverseProxy::new(proxy_config);
-            let res = reverse_proxy.handle_requests(client.runtime().clone(), nickname, request_stream).await;
-
-            match res {
-                Ok(()) => log::error!("Onion service ended cleanly."),
-                Err(e) => log::error!("Onion service ended with error {e}."),
-            }
-            panic!("Onion service ended early.");
+            handle_stream_request(stream_request, connection_manager, display_name).await;
         });
     }
-
-    let onion_address = OnionAddress::new(format!("{}:{}", onion_name, coordinator_port));
-    (client, onion_address)
+    log::error!("Onion service ended early.");
 }
 
-fn with_c(
-    connection_manager: Arc<ConnectionManager>,
-) -> impl Filter<Extract = (Arc<ConnectionManager>,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || connection_manager.clone())
-}
-
-fn with_display_name(
-    display_name: String,
-) -> impl Filter<Extract = (String,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || display_name.clone())
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AugmentedInfo {
-    pub conn_info: ConnectionInfo,
-    pub display_name: String,
-}
-
-pub async fn start_coordinator(
-    coordinator_port: u16,
-    connection_manager: Arc<ConnectionManager>,
-    display_name: String,
+async fn handle_stream_request(
+    stream_request: StreamRequest, connection_manager: Arc<ConnectionManager>, display_name: String
 ) {
-    let hello = warp::path!("hello" / String).map(|name| format!("Hello, {name}!"));
-    // let peers_post = warp::post()
-    //     .and(warp::path("peers"))
-    //     .and(warp::body::json())
-    //     .map(|peer: String| {
-    //         warp::reply::json(&peer)
-    //     });
-    let info = warp::path("info")
-        .and(with_c(connection_manager.clone()))
-        .and(with_display_name(display_name.clone()))
-        .and_then(
-            |c: Arc<ConnectionManager>, display_name: String| async move {
-                Ok::<_, Infallible>(warp::reply::json(&AugmentedInfo {
-                    conn_info: c.conn_info.clone(),
-                    display_name,
-                }))
-            },
-        );
-    let id = warp::post()
-        .and(warp::path!("id" / OnionAddress))
-        .and(with_c(connection_manager.clone()))
-        .and_then(|peer: OnionAddress, c: Arc<ConnectionManager>| async move {
-            match c.id_or_new(&peer).await {
-                Some(id) => Ok(warp::reply::json(&id)),
-                None => Err(warp::reject::reject()),
-            }
-        });
-    let routes = hello.or(info).or(id);
-    warp::serve(routes)
-        .run(([127, 0, 0, 1], coordinator_port))
-        .await;
+    match stream_request.request() {
+        &IncomingStreamRequest::Begin(ref begin) if begin.port() == COORDINATOR_PORT => {
+            let onion_service_stream = stream_request.accept(Connected::new_empty()).await.unwrap();
+            let io = TokioIo::new(onion_service_stream);
+            http1::Builder::new().serve_connection(io, service_fn(|request| serve(request, connection_manager.clone(), display_name.clone()))).await.unwrap();
+        }
+        _ => {
+            log::debug!("Received request to onion service on wrong port.");
+            stream_request.shutdown_circuit().unwrap();
+        }
+    }
+}
+
+async fn serve(request: hyper::Request<hyper::body::Incoming>, connection_manager: Arc<ConnectionManager>, display_name: String) -> Result<hyper::Response<Full<Bytes>>, http::Error> {
+    let path = request.uri().path();
+    log::debug!("Path: {path}");
+
+    // Assume the path begins with '/' and skip the first token which is the empty string.
+    let mut parts = path.split('/').skip(1);
+    let first = parts.next().ok_or(()).unwrap();
+    log::debug!("Path first: {first}");
+
+    match (request.method(), first) {
+        (&Method::GET, "hello") => {
+            let name = parts.next().ok_or(()).unwrap();
+            Ok(hyper::Response::new(Full::new(Bytes::from(
+                format!("Hello, {name}!")
+            ))))
+        },
+        (&Method::GET, "info") => {
+            log::debug!("Path info.");
+            let info = AugmentedInfo {
+                conn_info: connection_manager.conn_info.clone(),
+                display_name,
+            };
+            let json = serde_json::to_string(&info).unwrap();
+            Ok(hyper::Response::new(Full::new(Bytes::from(
+                json
+            ))))
+        },
+        _ => {
+            // TODO: probably something better to respond with then empty bytes.
+            log::error!("Unexpected path.");
+            let mut not_found = Response::new(Full::new(Bytes::from("")));
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            Ok(not_found)
+        }
+    }
 }
