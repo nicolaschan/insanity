@@ -1,9 +1,10 @@
-use std::{sync::{
+use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
-}};
+};
 
 use insanity_tui::{AppEvent, Peer, PeerState};
+use itertools::Itertools;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 
@@ -51,7 +52,9 @@ impl ManagedPeer {
     pub async fn set_denoise(&self, denoise: bool) {
         self.denoise.store(denoise, Ordering::Relaxed);
         if let Some(sender) = &self.ui_sender {
-            sender.send(AppEvent::SetPeerDenoise(self.address.to_string(), denoise)).unwrap();
+            sender
+                .send(AppEvent::SetPeerDenoise(self.address.to_string(), denoise))
+                .unwrap();
         }
     }
 
@@ -61,7 +64,9 @@ impl ManagedPeer {
         let mut volume_guard = self.volume.lock().unwrap();
         *volume_guard = volume;
         if let Some(sender) = ui_sender {
-            sender.send(AppEvent::SetPeerVolume(address, volume)).unwrap();
+            sender
+                .send(AppEvent::SetPeerVolume(address, volume))
+                .unwrap();
         }
     }
 
@@ -80,7 +85,7 @@ impl ManagedPeer {
         let denoise = self.denoise.clone();
         let volume = self.volume.clone();
         let display_name = conn_manager.cached_display_name(&address);
-        
+
         let peer = Peer::new(
             address.to_string(),
             display_name,
@@ -92,7 +97,7 @@ impl ManagedPeer {
         if let Some(sender) = &self.ui_sender {
             sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
         }
-        
+
         let socket = self.socket.clone();
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
@@ -127,7 +132,8 @@ impl ManagedPeer {
         }
         self.enabled.store(false, Ordering::Relaxed);
         if let Some(sender) = &self.ui_sender {
-            sender.send(AppEvent::AddPeer(Peer::new(
+            sender
+                .send(AppEvent::AddPeer(Peer::new(
                     self.address.to_string(),
                     self.conn_manager.cached_display_name(&self.address),
                     PeerState::Disabled,
@@ -152,26 +158,26 @@ async fn connect(
     log::info!("Connecting to peer {:?}", address);
     if let Some((session, info)) = tokio::select! {
         res = conn_manager.session(&mut socket, &address) => res,
-        // _x = async {
-        //     if let Some(ref sender) = ui_sender {
-        //         let mut index = 0;
-        //         loop {
-        //             if let Some(cached_peer_info) = conn_manager.cached_peer_info(&address) {
-        //                 let ip_addresses_sorted = cached_peer_info.conn_info.addresses.iter().sorted().collect::<Vec<_>>();
-        //                 let ip_address = ip_addresses_sorted.get(index).map(|x| x.to_string()).unwrap_or("".to_string());
-        //                 sender.send(AppEvent::AddPeer(Peer::new(
-        //                     address.clone().to_string(),
-        //                     Some(cached_peer_info.display_name.clone()),
-        //                     PeerState::Connecting(ip_address),
-        //                     denoise.load(Ordering::Relaxed),
-        //                     *volume.lock().unwrap(),
-        //                 ))).unwrap();
-        //                 index = (index + 1) % ip_addresses_sorted.len();
-        //             }
-        //             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        //         }
-        //     }
-        // } => { return; },
+        _x = async {
+            if let Some(ref sender) = ui_sender {
+                let mut index = 0;
+                loop {
+                    if let Some(cached_peer_info) = conn_manager.cached_peer_info(&address) {
+                        let ip_addresses_sorted = cached_peer_info.conn_info.addresses.iter().sorted().collect::<Vec<_>>();
+                        let ip_address = ip_addresses_sorted.get(index).map(|x| x.to_string()).unwrap_or("".to_string());
+                        sender.send(AppEvent::AddPeer(Peer::new(
+                            address.clone().to_string(),
+                            Some(cached_peer_info.display_name.clone()),
+                            PeerState::Connecting(ip_address),
+                            denoise.load(Ordering::Relaxed),
+                            *volume.lock().unwrap(),
+                        ))).unwrap();
+                        index = (index + 1) % ip_addresses_sorted.len();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        } => { return; },
         _ = shutdown_receiver.recv() => { return; }
     } {
         log::info!("Connected to peer {:?}", address);

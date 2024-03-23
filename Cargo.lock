@@ -2341,6 +2341,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "insanity-tui",
+ "itertools 0.12.1",
  "log",
  "nnnoiseless",
  "opus",

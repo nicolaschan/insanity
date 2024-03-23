@@ -292,8 +292,8 @@ async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> AugmentedInfo
     loop {
         match sidechannel.peer_info().await {
             Ok(info) => return info,
-            Err(_e) => {
-                log::debug!("Error receving peer info.");
+            Err(e) => {
+                log::debug!("Error receving peer info: {}", e);
             }
         }
     }
