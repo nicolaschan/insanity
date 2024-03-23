@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
-      run: rustup toolchain install stable-x86_64-pc-windows-gnu
+      run: rustup toolchain install --force-non-host stable-x86_64-pc-windows-gnu
     - name: Rustup Target
       run: rustup target add x86_64-pc-windows-gnu
     - name: Build

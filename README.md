@@ -1,6 +1,7 @@
 # insanity P2P voice chat
 
-[![Linux](https://github.com/nicolaschan/insanity/actions/workflows/linux.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux.yml)
+[![Linux GNU](https://github.com/nicolaschan/insanity/actions/workflows/linux-gnu.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux-gnu.yml)
+[![Linux musl](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml)
 [![Windows MinGW](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml)
 [![Windows MSVC](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml)
 
