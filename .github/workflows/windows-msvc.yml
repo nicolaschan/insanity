@@ -21,4 +21,9 @@ jobs:
     - name: Rustup Target
       run: rustup target add x86_64-pc-windows-msvc
     - name: Build
-      run: cargo +stable-x86_64-pc-windows-msvc build --verbose --target x86_64-pc-windows-msvc
+      run: cargo +stable-x86_64-pc-windows-msvc build --release --verbose --target x86_64-pc-windows-msvc
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity.exe
+        path: target/x86_64-pc-windows-msvc/release/insanity.exe
