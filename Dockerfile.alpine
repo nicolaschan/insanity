@@ -1,5 +1,8 @@
 FROM rust:alpine
 
+ARG ALSA_VERSION=1.2.9
+ARG OPUS_VERSION=1.5.1
+
 RUN apk add build-base gcc musl-dev alsa-lib-dev openssl-dev perl cmake g++ opus-dev pkgconf linux-headers
 
 ENV CC=gcc
@@ -9,15 +12,15 @@ ENV RUSTFLAGS="-C link-arg=-lopus -C link-arg=-lasound"
 WORKDIR /usr/src/insanity
 COPY . .
 
-RUN wget https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.9.tar.bz2 && \
-  tar -xvf alsa-lib-1.2.9.tar.bz2 && \
-  cd alsa-lib-1.2.9/ && \
+RUN wget https://www.alsa-project.org/files/pub/lib/alsa-lib-${ALSA_VERSION}.tar.bz2 && \
+  tar -xvf alsa-lib-${ALSA_VERSION}.tar.bz2 && \
+  cd alsa-lib-${ALSA_VERSION}/ && \
   ./configure --enable-static --disable-shared && \
   make -j$(nproc) && \
   make install 
-RUN wget https://downloads.xiph.org/releases/opus/opus-1.5.1.tar.gz && \
-  tar -vxf opus-1.5.1.tar.gz && \
-  cd opus-1.5.1/ && \
+RUN wget https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz && \
+  tar -vxf opus-${OPUS_VERSION}.tar.gz && \
+  cd opus-${OPUS_VERSION}/ && \
   ./configure --enable-static --disable-shared && \
   make -j$(nproc) && \
   make install
@@ -25,3 +28,4 @@ RUN wget https://downloads.xiph.org/releases/opus/opus-1.5.1.tar.gz && \
 RUN cargo install --path .
 
 ENTRYPOINT ["insanity"]
+
