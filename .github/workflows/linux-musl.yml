@@ -15,16 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: sudo apt-get install -y libasound2-dev musl-tools
-    - name: Rustup Toolchain
-      run: rustup toolchain install --force-non-host stable-x86_64-unknown-linux-musl
-    - name: Rustup Target
-      run: rustup target add x86_64-unknown-linux-musl
-    - name: Build
-      run: cargo build --release --verbose --target x86_64-unknown-linux-musl
+    - name: Docker Build
+      run: docker build -t insanity-musl -f Dockerfile.alpine .
+    - name: Copy artifact
+      run: |
+        docker create --name temp-container insanity-musl
+        docker cp temp-container:/usr/local/cargo/bin/insanity ./insanity
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
       with:
         name: insanity-musl
-        path: target/x86_64-unknown-linux-musl/release/insanity
+        path: insanity
