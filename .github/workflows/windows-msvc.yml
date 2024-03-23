@@ -1,0 +1,24 @@
+name: Windows MSVC
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: Rustup Toolchain
+      run: rustup toolchain install stable-x86_64-pc-windows-msvc
+    - name: Rustup Target
+      run: rustup target add x86_64-pc-windows-msvc
+    - name: Build
+      run: cargo +stable-x86_64-pc-windows-msvc build --verbose --target x86_64-pc-windows-msvc
