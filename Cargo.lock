@@ -535,9 +535,9 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "backtrace"
-version = "0.3.70"
+version = "0.3.71"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95d8e92cac0961e91dbd517496b00f7e9b92363dbe6d42c3198268323798860c"
+checksum = "26b05800d2e817c8b3b4b54abd461726265fa9789ae34330622f2db9ee696f9d"
 dependencies = [
  "addr2line",
  "cc",
@@ -706,9 +706,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
-version = "1.5.0"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
+checksum = "514de17de45fdb8dc022b1a7975556c53c86f9f0aa5f534b98977b171857c2c9"
 
 [[package]]
 name = "caret"
@@ -1365,11 +1365,11 @@ dependencies = [
 
 [[package]]
 name = "derive-adhoc"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57ca5c68cf8568ff97903eeea4d54a7ab8b15f71ac439a3eff1cbdb2a707fd62"
+checksum = "9fc3f185a1a0d933e54447b3492fe9880db2c3ad37c04b3a3bf9b24a73b7bd02"
 dependencies = [
- "derive-adhoc-macros 0.8.2",
+ "derive-adhoc-macros 0.8.3",
  "heck 0.4.1",
 ]
 
@@ -1392,9 +1392,9 @@ dependencies = [
 
 [[package]]
 name = "derive-adhoc-macros"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f35abdabee572dec7fba2cad5e21a47ba99fe75347c8cad233a39890a5b2807"
+checksum = "69f1a082460419acefc6a66ff74c6e15c460d9b95530697f5d10892ee624aa60"
 dependencies = [
  "heck 0.4.1",
  "itertools 0.12.1",
@@ -2304,9 +2304,9 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.2.5"
+version = "2.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b0b929d511467233429c45a44ac1dcaa21ba0f5ba11e4879e6ed28ddb4f9df4"
+checksum = "168fb715dda47215e360912c096649d23d58bf392ac62f73919e831745e40f26"
 dependencies = [
  "equivalent",
  "hashbrown 0.14.3",
@@ -2395,15 +2395,6 @@ dependencies = [
  "hermit-abi 0.3.9",
  "libc",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "ipnetwork"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf466541e9d546596ee94f9f69590f89473455f88372423e0008fc1a7daf100e"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -2781,6 +2772,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "network-interface"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d68759ef97fe9c9e46f79ea8736c19f1d28992e24c8dc8ce86752918bfeaae7"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror",
+ "winapi",
+]
+
+[[package]]
 name = "nix"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2808,12 +2811,6 @@ dependencies = [
  "once_cell",
  "rustfft 3.0.1",
 ]
-
-[[package]]
-name = "no-std-net"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43794a0ace135be66a25d3ae77d41b91615fb68ae937f904090203e81f755b65"
 
 [[package]]
 name = "nom"
@@ -3355,38 +3352,6 @@ name = "platforms"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "626dec3cac7cc0e1577a2ec3fc496277ec2baa084bebad95bb6fdbfae235f84c"
-
-[[package]]
-name = "pnet_base"
-version = "0.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe4cf6fb3ab38b68d01ab2aea03ed3d1132b4868fa4e06285f29f16da01c5f4c"
-dependencies = [
- "no-std-net",
-]
-
-[[package]]
-name = "pnet_datalink"
-version = "0.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad5854abf0067ebbd3967f7d45ebc8976ff577ff0c7bd101c4973ae3c70f98fe"
-dependencies = [
- "ipnetwork",
- "libc",
- "pnet_base",
- "pnet_sys",
- "winapi",
-]
-
-[[package]]
-name = "pnet_sys"
-version = "0.34.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "417c0becd1b573f6d544f73671070b039051e5ad819cc64aa96377b536128d00"
-dependencies = [
- "libc",
- "winapi",
-]
 
 [[package]]
 name = "polling"
@@ -4002,7 +3967,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.2.5",
+ "indexmap 2.2.6",
  "serde",
  "serde_derive",
  "serde_json",
@@ -4610,7 +4575,7 @@ version = "0.19.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b5bb770da30e5cbfde35a2d7b9b8a2c4b8ef89548a7a6aeab5c9a576e3e7421"
 dependencies = [
- "indexmap 2.2.5",
+ "indexmap 2.2.6",
  "toml_datetime",
  "winnow 0.5.40",
 ]
@@ -4621,7 +4586,7 @@ version = "0.20.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70f427fce4d84c72b5b732388bf4a9f4531b53f74e2887e3ecb2481f68f66d81"
 dependencies = [
- "indexmap 2.2.5",
+ "indexmap 2.2.6",
  "toml_datetime",
  "winnow 0.5.40",
 ]
@@ -4632,7 +4597,7 @@ version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8534fd7f78b5405e860340ad6575217ce99f38d4d5c8f2442cb5ecb50090e1"
 dependencies = [
- "indexmap 2.2.5",
+ "indexmap 2.2.6",
  "toml_datetime",
  "winnow 0.5.40",
 ]
@@ -4643,7 +4608,7 @@ version = "0.22.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8e40bb779c5187258fd7aad0eb68cb8706a0a81fa712fbea808ab43c4b8374c4"
 dependencies = [
- "indexmap 2.2.5",
+ "indexmap 2.2.6",
  "serde",
  "serde_spanned",
  "toml_datetime",
@@ -4830,7 +4795,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c579e92f3b9e419e68cd317d33f567491365b81f943b063d30f32e4a2f072c5"
 dependencies = [
  "config",
- "derive-adhoc 0.8.2",
+ "derive-adhoc 0.8.3",
  "derive_builder_fork_arti",
  "directories",
  "educe",
@@ -5008,7 +4973,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4613dfe9d946db3b5769b860a16598a9c4a0f85df21653d0765b1238106d297"
 dependencies = [
  "async-trait",
- "derive-adhoc 0.8.2",
+ "derive-adhoc 0.8.3",
  "derive_more",
  "educe",
  "either",
@@ -5079,7 +5044,7 @@ dependencies = [
  "amplify",
  "async-trait",
  "base64ct",
- "derive-adhoc 0.8.2",
+ "derive-adhoc 0.8.3",
  "derive_builder_fork_arti",
  "derive_more",
  "digest",
@@ -5134,7 +5099,7 @@ checksum = "365c02c66f2f0159078714dd44947fb06c76956a3621fc102783119e5093be96"
 dependencies = [
  "amplify",
  "arrayvec",
- "derive-adhoc 0.8.2",
+ "derive-adhoc 0.8.3",
  "derive_builder_fork_arti",
  "derive_more",
  "downcast-rs",
@@ -5317,7 +5282,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4bbf6c0a786daab669a75ec7380ae57f9aba91f2c4ea05a12e596d9bc6b49a0"
 dependencies = [
  "amplify",
- "derive-adhoc 0.8.2",
+ "derive-adhoc 0.8.3",
  "derive_more",
  "filetime",
  "fs-mistrust",
@@ -5419,7 +5384,7 @@ dependencies = [
  "amplify",
  "async-trait",
  "backtrace",
- "derive-adhoc 0.8.2",
+ "derive-adhoc 0.8.3",
  "derive_more",
  "educe",
  "futures",
@@ -5724,7 +5689,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "veq"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/udpp.git#04ebfefed1b4a9ec17468a7cdf26aaeee401575c"
+source = "git+https://github.com/nicolaschan/udpp.git#6125cb5d9ef1f9625adda8c2fad98ebf28cbdae3"
 dependencies = [
  "async-std",
  "async-trait",
@@ -5733,7 +5698,7 @@ dependencies = [
  "clap 4.5.3",
  "crossbeam",
  "log",
- "pnet_datalink",
+ "network-interface",
  "serde",
  "snow",
  "stunclient",
