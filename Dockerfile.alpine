@@ -1,31 +1,36 @@
-FROM rust:alpine
+# Base image for building ALSA and Opus
+FROM rust:alpine as build-base
+RUN apk add --no-cache build-base gcc musl-dev openssl-dev perl cmake g++ pkgconf linux-headers wget tar
 
+# Build ALSA
+FROM build-base as alsa-build
 ARG ALSA_VERSION=1.2.9
+WORKDIR /build
+RUN wget https://www.alsa-project.org/files/pub/lib/alsa-lib-${ALSA_VERSION}.tar.bz2 && \
+    tar -xvf alsa-lib-${ALSA_VERSION}.tar.bz2 && \
+    cd alsa-lib-${ALSA_VERSION} && \
+    ./configure --enable-static --disable-shared && \
+    make -j$(nproc) && \
+    make install
+
+# Build Opus
+FROM build-base as opus-build
 ARG OPUS_VERSION=1.5.1
+WORKDIR /build
+RUN wget https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz && \
+    tar -vxf opus-${OPUS_VERSION}.tar.gz && \
+    cd opus-${OPUS_VERSION} && \
+    ./configure --enable-static --disable-shared && \
+    make -j$(nproc) && \
+    make install
 
-RUN apk add build-base gcc musl-dev alsa-lib-dev openssl-dev perl cmake g++ opus-dev pkgconf linux-headers
-
-ENV CC=gcc
-ENV CXX=g++
-ENV RUSTFLAGS="-C link-arg=-lopus -C link-arg=-lasound"
-
+# Final image
+FROM build-base as final
+COPY --from=alsa-build /usr/lib /usr/lib
+COPY --from=opus-build /usr/local /usr/local
+RUN apk add --no-cache alsa-lib-dev opus-dev
 WORKDIR /usr/src/insanity
 COPY . .
-
-RUN wget https://www.alsa-project.org/files/pub/lib/alsa-lib-${ALSA_VERSION}.tar.bz2 && \
-  tar -xvf alsa-lib-${ALSA_VERSION}.tar.bz2 && \
-  cd alsa-lib-${ALSA_VERSION}/ && \
-  ./configure --enable-static --disable-shared && \
-  make -j$(nproc) && \
-  make install 
-RUN wget https://downloads.xiph.org/releases/opus/opus-${OPUS_VERSION}.tar.gz && \
-  tar -vxf opus-${OPUS_VERSION}.tar.gz && \
-  cd opus-${OPUS_VERSION}/ && \
-  ./configure --enable-static --disable-shared && \
-  make -j$(nproc) && \
-  make install
-
 RUN cargo install --path .
-
 ENTRYPOINT ["insanity"]
 
