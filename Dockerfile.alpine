@@ -1,6 +1,6 @@
 FROM rust:alpine
 
-RUN apk add build-base gcc musl-dev alsa-lib-dev openssl-dev perl cmake g++ opus-dev pkgconf
+RUN apk add build-base gcc musl-dev alsa-lib-dev openssl-dev perl cmake g++ opus-dev pkgconf linux-headers
 
 ENV CC=gcc
 ENV CXX=g++
@@ -8,6 +8,19 @@ ENV RUSTFLAGS="-C link-arg=-lopus -C link-arg=-lasound"
 
 WORKDIR /usr/src/insanity
 COPY . .
+
+RUN wget https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.9.tar.bz2 && \
+  tar -xvf alsa-lib-1.2.9.tar.bz2 && \
+  cd alsa-lib-1.2.9/ && \
+  ./configure --enable-static --disable-shared && \
+  make -j$(nproc) && \
+  make install 
+RUN wget https://downloads.xiph.org/releases/opus/opus-1.5.1.tar.gz && \
+  tar -vxf opus-1.5.1.tar.gz && \
+  cd opus-1.5.1/ && \
+  ./configure --enable-static --disable-shared && \
+  make -j$(nproc) && \
+  make install
 
 RUN cargo install --path .
 
