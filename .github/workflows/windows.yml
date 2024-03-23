@@ -22,9 +22,9 @@ jobs:
         platform: x64
     - uses: actions/checkout@v3
     - name: Rustup Toolchain
-      run: rustup toolchain install nightly-x86_64-pc-windows-gnu
+      run: rustup toolchain install stable-x86_64-pc-windows-gnu
     - name: Rustup Target
       run: rustup target add x86_64-pc-windows-gnu
     - name: Build
-      run: cargo +nightly-x86_64-pc-windows-gnu build --verbose --target x86_64-pc-windows-gnu
+      run: cargo +stable-x86_64-pc-windows-gnu build --verbose --target x86_64-pc-windows-gnu
       
