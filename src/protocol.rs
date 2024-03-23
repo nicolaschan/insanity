@@ -162,6 +162,7 @@ impl OnionSidechannel {
         if res.status().is_success() {
             let body = res.collect().await?.aggregate();
             let info: AugmentedInfo = serde_json::from_reader(body.reader())?;
+            log::debug!("Received info from {}: {:?}", self.peer.0, info);
             Ok(info)
         } else {
             log::debug!("Unsuccesful info request to {}", self.peer.0);

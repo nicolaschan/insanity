@@ -156,8 +156,14 @@ async fn serve(
                 conn_info: connection_manager.conn_info.clone(),
                 display_name,
             };
-            let json = serde_json::to_string(&info).unwrap();
-            Ok(hyper::Response::new(Full::new(Bytes::from(json))))
+            if let Ok(json) = serde_json::to_string(&info) {
+                Ok(hyper::Response::new(Full::new(Bytes::from(json))))
+            } else {
+                log::error!("Failed to serialize JSON.");
+                let mut not_found = Response::new(Full::new(Bytes::from("")));
+                *not_found.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+                Ok(not_found)
+            }
         }
         _ => {
             // TODO: probably something better to respond with then empty bytes.
