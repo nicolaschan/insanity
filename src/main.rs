@@ -115,7 +115,7 @@ async fn main() {
         }
     };
 
-    let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair).await.unwrap();
+    let socket = VeqSocket::bind_with_keypair(format!("[::]:{}", opts.listen_port), keypair).await.unwrap();
     log::debug!("Connection info: {:?}", socket.connection_info());
     let connection_manager = ConnectionManager::new(socket.connection_info(), tor_client, onion_address.clone(), db);
     println!("Own address: {onion_address:?}");
