@@ -1,9 +1,10 @@
 FROM rust:alpine
 
-RUN apk add build-base gcc musl-dev alsa-lib-dev openssl-dev perl cmake g++ opus-dev
+RUN apk add build-base gcc musl-dev alsa-lib-dev openssl-dev perl cmake g++ opus-dev pkgconf
 
 ENV CC=gcc
 ENV CXX=g++
+ENV RUSTFLAGS="-C link-arg=-lopus -C link-arg=-lasound"
 
 WORKDIR /usr/src/insanity
 COPY . .
