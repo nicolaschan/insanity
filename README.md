@@ -1,11 +1,10 @@
 # insanity P2P voice chat
 
-All existing voice chat solutions are bad.
-This one is worse.
-
 [![Linux](https://github.com/nicolaschan/insanity/actions/workflows/linux.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux.yml)
 [![Windows MinGW](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml)
 [![Windows MSVC](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml)
+
+> All existing voice chat solutions are bad. This one is worse.
 
 ## Usage
 
