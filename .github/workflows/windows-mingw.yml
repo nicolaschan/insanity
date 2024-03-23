@@ -27,4 +27,8 @@ jobs:
       run: rustup target add x86_64-pc-windows-gnu
     - name: Build
       run: cargo +stable-x86_64-pc-windows-gnu build --verbose --target x86_64-pc-windows-gnu
-      
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-mingw.exe
+        path: target/x86_64-pc-windows-gnu/release/insanity.exe
