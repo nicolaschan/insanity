@@ -112,7 +112,7 @@ async fn handle_stream_request(
         &IncomingStreamRequest::Begin(ref begin) if begin.port() == COORDINATOR_PORT => {
             if let Ok(onion_service_stream) = stream_request.accept(Connected::new_empty()).await {
                 let io = TokioIo::new(onion_service_stream);
-                if let Ok(_) = http1::Builder::new()
+                match http1::Builder::new()
                     .serve_connection(
                         io,
                         service_fn(|request| {
@@ -120,7 +120,10 @@ async fn handle_stream_request(
                         }),
                     )
                     .await
-                {}
+                {
+                    Ok(_) => {}
+                    Err(e) => log::debug!("Failed to serve connection: {:?}", e),
+                }
             }
         }
         _ => {

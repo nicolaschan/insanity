@@ -108,7 +108,7 @@ async fn main() {
         }
         None => {
             log::debug!("No keypair found in db, generating one");
-            let keypair = SnowKeypair::new();
+            let keypair = SnowKeypair::new().expect("Failed to generate keypair");
             db.insert("private_key", bincode::serialize(&keypair).unwrap())
                 .unwrap();
             keypair

@@ -53,9 +53,17 @@ impl UpdatablePendingSession {
                     log::info!("Terminating pending session {}", id);
                 }
                 session = socket.connect(id, info.conn_info.clone()) => {
-                    if let Err(e) = session_sender.send((session, info)).await {
-                        log::warn!("Error sending session: {}", e);
+                    match session {
+                        Ok(session) => {
+                            if let Err(e) = session_sender.send((session, info)).await {
+                                log::warn!("Error sending session: {}", e);
+                            }
+                        },
+                        Err(e) => {
+                            log::warn!("Error connecting session: {e}");
+                        }
                     }
+                    
                 }
             }
         });
