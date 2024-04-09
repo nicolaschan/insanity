@@ -1,5 +1,5 @@
 with import <nixpkgs> { }; 
 
 runCommand "dummy" {
-    buildInputs = [ rustup gcc alsa-lib automake autoconf perl pkgconfig ];
+    buildInputs = [ rustup gcc alsa-lib cmake libopus automake autoconf perl pkg-config ];
 } ""
