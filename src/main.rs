@@ -128,14 +128,11 @@ async fn main() {
             document.id(),
             serde_json::to_string(&join_ticket)
         );
-
-        // let mut rng = rand::thread_rng();
-        // let author = Author::new(&mut rng);
-        // let author_id = author.id();
-        let author = iroh_node.authors.create().await.unwrap();
-        document.set_bytes(author, "foo", "bar").await.unwrap();
         document
     };
+
+    let author = iroh_node.authors.create().await.unwrap();
+    doc.set_bytes(author, "address", onion_address.to_string()).await.unwrap();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
