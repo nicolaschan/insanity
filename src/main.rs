@@ -9,6 +9,7 @@ use insanity::{
 };
 use insanity_tui::{AppEvent, UserAction};
 use iroh::{
+    net::NodeAddr,
     rpc_protocol::ShareMode,
     sync::{store::Query, Author, AuthorId},
 };
@@ -110,14 +111,14 @@ async fn main() {
         insanity::coordinator::COORDINATOR_PORT
     ));
 
-    let iroh_node = iroh::node::Builder::default()
-        .bind_port(8483)
-        .spawn()
-        .await
-        .unwrap();
+    let iroh_node = iroh::node::Builder::default().spawn().await.unwrap();
     let doc = if let Some(ticket) = opts.ticket {
         let ticket = serde_json::from_str(&ticket).unwrap();
         let document = iroh_node.docs.import(ticket).await.unwrap();
+        log::info!(
+            "Joined document with sync peers: {:?}",
+            document.get_sync_peers().await
+        );
         document
     } else {
         let document = iroh_node.docs.create().await.unwrap();
@@ -133,12 +134,17 @@ async fn main() {
         // let author_id = author.id();
         let author = iroh_node.authors.create().await.unwrap();
         document.set_bytes(author, "foo", "bar").await.unwrap();
-
         document
     };
 
-    let contents: Vec<_> = doc.get_many(Query::all()).await.unwrap().collect().await;
-    log::info!("Got document contents: {:?}", contents);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            let contents: Vec<_> = doc.get_many(Query::all()).await.unwrap().collect().await;
+            log::info!("Got document contents: {:?}", contents);
+        }
+    });
 
     let sled_path = insanity_dir.join("data.sled");
     let db = sled::open(sled_path).unwrap();
