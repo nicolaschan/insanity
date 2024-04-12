@@ -17,7 +17,7 @@ use veq::veq::VeqSessionAlias;
 use crate::{
     client::{get_output_config, setup_output_stream},
     processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
-    protocol::{OnionAddress, ProtocolMessage},
+    protocol::ProtocolMessage,
     resampler::ResampledAudioReceiver,
     server::{make_audio_receiver, AudioReceiver},
 };
@@ -106,11 +106,11 @@ async fn run_receiver(
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
-    address: OnionAddress,
+    id: uuid::Uuid,
     mut shutdown: Receiver<()>,
     _termination_sender: mpsc::Sender<()>,
 ) {
-    let address = address.to_string();
+    let id = id.to_string();
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
     let processor = Arc::new(AudioProcessor::new(enable_denoise, volume));
@@ -165,9 +165,9 @@ async fn run_receiver(
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
                 ProtocolMessage::ChatMessage(chat_message) => {
-                    if let Some(app_event_sender) = &app_event_sender {
+                    if let &Some(ref app_event_sender) = &app_event_sender {
                         app_event_sender
-                            .send(AppEvent::NewMessage(address.clone(), chat_message))
+                            .send(AppEvent::NewMessage(id.clone(), chat_message))
                             .unwrap();
                     }
                 }
@@ -182,7 +182,7 @@ pub async fn start_clerver(
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
-    address: OnionAddress,
+    id: uuid::Uuid,
     mut shutdown: Receiver<()>,
 ) {
     let (shutdown_tx, shutdown_rx) = broadcast::channel(10);
@@ -191,16 +191,29 @@ pub async fn start_clerver(
     let audio_sender = {
         let conn = conn.clone();
         tokio::spawn(async move {
-            run_audio_sender(conn, make_audio_receiver, shutdown_rx, audio_sender_termination_tx).await;
+            run_audio_sender(
+                conn,
+                make_audio_receiver,
+                shutdown_rx,
+                audio_sender_termination_tx,
+            )
+            .await;
         })
     };
 
-    let (peer_message_sender_termination_tx, mut peer_message_sender_termination_rx) = mpsc::channel(10);
+    let (peer_message_sender_termination_tx, mut peer_message_sender_termination_rx) =
+        mpsc::channel(10);
     let peer_message_sender = {
         let conn = conn.clone();
         let shutdown_rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
-            run_peer_message_sender(conn, peer_message_receiver, shutdown_rx, peer_message_sender_termination_tx).await;
+            run_peer_message_sender(
+                conn,
+                peer_message_receiver,
+                shutdown_rx,
+                peer_message_sender_termination_tx,
+            )
+            .await;
         })
     };
 
@@ -208,7 +221,16 @@ pub async fn start_clerver(
     let receiver = {
         let shutdown_rx = shutdown_tx.subscribe();
         tokio::task::spawn(async move {
-            run_receiver(conn, app_event_sender, enable_denoise, volume, address, shutdown_rx, receiver_termination_tx).await;
+            run_receiver(
+                conn,
+                app_event_sender,
+                enable_denoise,
+                volume,
+                id,
+                shutdown_rx,
+                receiver_termination_tx,
+            )
+            .await;
         })
     };
 

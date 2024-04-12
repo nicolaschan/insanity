@@ -5,7 +5,7 @@ use tokio::sync::{
 };
 use veq::veq::{VeqSessionAlias, VeqSocket};
 
-use crate::coordinator::AugmentedInfo;
+use crate::connection_manager::AugmentedInfo;
 
 pub struct UpdatablePendingSession {
     socket: VeqSocket,
@@ -41,7 +41,10 @@ impl UpdatablePendingSession {
         *current_info_guard = Some(info.clone());
 
         if let Err(e) = self.terminate_tx.send(()) {
-            log::warn!("Error sending terminate signal: {}", e);
+            log::warn!(
+                "UpdatablePendingSession::update: Error sending terminate signal: {}",
+                e
+            );
         }
 
         let mut terminate_rx = self.terminate_tx.subscribe();
@@ -52,9 +55,10 @@ impl UpdatablePendingSession {
                 _ = terminate_rx.recv() => {
                     log::info!("Terminating pending session {}", id);
                 }
-                session = socket.connect(id, info.conn_info.clone()) => {
+                session = socket.connect(id, info.connection_info.clone()) => {
                     match session {
                         Ok(session) => {
+                            log::debug!("Socket connected ok to {id}");
                             if let Err(e) = session_sender.send((session, info)).await {
                                 log::warn!("Error sending session: {}", e);
                             }
@@ -63,7 +67,7 @@ impl UpdatablePendingSession {
                             log::warn!("Error connecting session: {e}");
                         }
                     }
-                    
+
                 }
             }
         });
@@ -71,7 +75,7 @@ impl UpdatablePendingSession {
 
     pub async fn session(&self) -> (VeqSessionAlias, AugmentedInfo) {
         let mut session_guard = self.session.lock().await;
-        if let Some((session, info)) = session_guard.as_ref() {
+        if let Some(&(ref session, ref info)) = session_guard.as_ref() {
             return (session.clone(), info.clone());
         }
 
@@ -82,7 +86,10 @@ impl UpdatablePendingSession {
         *session_guard = Some((session.clone(), info.clone()));
 
         if let Err(e) = self.terminate_tx.send(()) {
-            log::warn!("Error sending terminate signal: {}", e);
+            log::warn!(
+                "UpdatablePendingSession::session Error sending terminate signal: {}",
+                e
+            );
         }
 
         (session, info)

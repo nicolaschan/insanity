@@ -14,7 +14,7 @@ use uuid::Uuid;
 use veq::veq::{ConnectionInfo, VeqSessionAlias, VeqSocket};
 
 use crate::clerver::AudioFrame;
-use crate::coordinator::AugmentedInfo;
+use crate::connection_manager::AugmentedInfo;
 use crate::session::UpdatablePendingSession;
 
 use http_body_util::BodyExt;
@@ -172,7 +172,7 @@ impl OnionSidechannel {
     }
 }
 
-pub struct ConnectionManager {
+pub struct ConnectionManagerOld {
     pub conn_info: ConnectionInfo,
     pub peers: Arc<Mutex<HashMap<OnionAddress, ConnectionInfo>>>,
     pub sidechannels: Arc<Mutex<HashMap<OnionAddress, OnionSidechannel>>>,
@@ -192,15 +192,15 @@ pub fn socket_addr(string: &String) -> SocketAddr {
         .to_owned()
 }
 
-impl ConnectionManager {
+impl ConnectionManagerOld {
     pub fn new(
         conn_info: ConnectionInfo,
         client: arti_client::TorClient<tor_rtcompat::PreferredRuntime>,
         own_address: OnionAddress,
         db: sled::Db,
-    ) -> ConnectionManager {
+    ) -> ConnectionManagerOld {
         let peers = Arc::new(Mutex::new(HashMap::new()));
-        ConnectionManager {
+        ConnectionManagerOld {
             conn_info,
             peers,
             sidechannels: Arc::new(Mutex::new(HashMap::new())),
