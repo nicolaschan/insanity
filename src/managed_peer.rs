@@ -146,34 +146,36 @@ async fn run_connection_loop(peer: ManagedPeer) {
 
     loop {
         log::info!("Beginning connect loop to peer {}", peer.id);
-
+        let mut socket = peer.socket.clone();
         tokio::select! {
-            session = connect(peer.id, peer.info(), peer.socket.clone()) => {
+            session = socket.connect(peer.id, peer.info().connection_info.clone()) => {
+            // session = connect(peer.id, peer.info(), peer.socket.clone()) => {
                 // Start and block on clerver.
-
-                log::debug!("Connected to {}", peer.id);
-                if let &Some(ref app_event_tx) = &peer.app_event_tx {
-                    if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
-                        peer.id.to_string(),
-                        Some(peer.display_name.clone()),
-                        PeerState::Connected(session.remote_addr().await.to_string()),
-                        peer.denoise.load(Ordering::Relaxed),
-                        *peer.volume.lock().unwrap(),
-                    ))) {
-                        log::debug!("Failed to send app event: {:?}", e);
+                if let Ok(session) = session {
+                    log::debug!("Connected to {}", peer.id);
+                    if let &Some(ref app_event_tx) = &peer.app_event_tx {
+                        if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                            peer.id.to_string(),
+                            Some(peer.display_name.clone()),
+                            PeerState::Connected(session.remote_addr().await.to_string()),
+                            peer.denoise.load(Ordering::Relaxed),
+                            *peer.volume.lock().unwrap(),
+                        ))) {
+                            log::debug!("Failed to send app event: {:?}", e);
+                        }
                     }
-                }
 
-                log::info!("Starting clerver for connection with {}.", peer.id);
-                run_clerver(
-                    session,
-                    peer.app_event_tx.clone(),
-                    peer.peer_message_tx.subscribe(),
-                    peer.denoise.clone(),
-                    peer.volume.clone(),
-                    peer.id,
-                )
-                .await;
+                    log::info!("Starting clerver for connection with {}.", peer.id);
+                    run_clerver(
+                        session,
+                        peer.app_event_tx.clone(),
+                        peer.peer_message_tx.subscribe(),
+                        peer.denoise.clone(),
+                        peer.volume.clone(),
+                        peer.id,
+                    )
+                    .await;
+                }
             },
             _ = update_app_connecting_status(
                 peer.id,
@@ -197,6 +199,7 @@ async fn connect(
 ) -> VeqSessionAlias {
     let pending_session = UpdatablePendingSession::new(socket);
     pending_session.update(id, info).await;
+    log::debug!("Updated pending session of {id}.");
     let (session, _info) = pending_session.session().await;
     session
 }
