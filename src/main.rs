@@ -7,12 +7,6 @@ use insanity_tui::AppEvent;
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Opts {
-    /// Enables denoise by default for all peers upon connection.
-    #[clap(short, long, default_value_t = true)]
-    denoise: bool,
-
-    // #[clap(long)]
-    // music: Option<String>,
     #[clap(short, long, default_value = "1337")]
     listen_port: u16,
 
@@ -20,20 +14,9 @@ struct Opts {
     #[clap(short, long)]
     peer: Vec<String>,
 
-    // #[clap(long)]
-    // id: Option<String>,
     /// Disables the terminal user interface.
     #[clap(long)]
     no_tui: bool,
-
-    // #[clap(long, default_value = "48000")]
-    // sample_rate: usize,
-
-    // #[clap(long, default_value = "2")]
-    // channels: usize,
-    /// Nickname to differentiate between onion services.
-    #[clap(long, default_value = "default")]
-    onion_nickname: String,
 
     /// Directory to store insanity data.
     #[clap(long)]
@@ -84,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
         let (x, y, z) = insanity_tui::start_tui().await.unwrap();
-        // TODO: what to set for own address now?
+        // TODO: set this to a write doc token for the room.
         x.send(AppEvent::SetOwnAddress(
             opts.room.clone().unwrap_or("its me, roomless".to_string()),
         ))?;
@@ -95,14 +78,18 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Start connection manager
-    let connection_manager = ConnectionManager::builder(insanity_dir, opts.listen_port)
-        .display_name(Some(display_name))
-        .room(opts.room)
-        .app_event_sender(app_event_sender)
-        .start()
-        .await?;
+    let mut conn_manager_builder =
+        ConnectionManager::builder(insanity_dir, opts.listen_port).display_name(display_name);
+    if let Some(room) = opts.room {
+        conn_manager_builder = conn_manager_builder.room(room);
+    }
+    if let Some(app_event_sender) = app_event_sender {
+        conn_manager_builder = conn_manager_builder.app_event_sender(app_event_sender)
+    }
+    let connection_manager = conn_manager_builder.start().await?;
 
     if let Some(mut user_action_rx) = user_action_receiver {
+        // Forward user actions to connection manager.
         tokio::spawn(async move {
             while let Some(action) = user_action_rx.recv().await {
                 if let Err(e) = connection_manager.send_user_action(action) {
@@ -111,6 +98,17 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
+
+    if let Some(handle) = handle {
+        insanity_tui::stop_tui(handle).await.unwrap();
+    } else {
+        loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+    }
+
+    Ok(())
+
 
     // if let Some(mut receiver) = user_action_receiver {
     //     tokio::spawn(async move {
@@ -151,14 +149,7 @@ async fn main() -> anyhow::Result<()> {
     //     });
     // }
 
-    if let Some(handle) = handle {
-        insanity_tui::stop_tui(handle).await.unwrap();
-    } else {
-        loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        }
-    }
-
+    
     // let connection_manager = ConnectionManagerOld::new(
     //     socket.connection_info(),
     //     tor_client,
@@ -265,9 +256,4 @@ async fn main() -> anyhow::Result<()> {
     //     }
     // }
 
-    // loop {
-    //     tokio::time::sleep(Duration::from_secs(10)).await;
-    // }
-
-    Ok(())
 }
