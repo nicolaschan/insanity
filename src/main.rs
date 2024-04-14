@@ -3,6 +3,7 @@ use std::{path::PathBuf, str::FromStr, time::Duration};
 use clap::Parser;
 use insanity::connection_manager::ConnectionManager;
 use insanity_tui::AppEvent;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -30,6 +31,8 @@ struct Opts {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opts: Opts = Opts::parse();
+
+    let main_cancellation_token = CancellationToken::new();
 
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
@@ -78,8 +81,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Start connection manager
-    let mut conn_manager_builder =
-        ConnectionManager::builder(insanity_dir, opts.listen_port).display_name(display_name);
+    let mut conn_manager_builder = ConnectionManager::builder(insanity_dir, opts.listen_port)
+        .display_name(display_name)
+        .cancellation_token(main_cancellation_token.clone());
     if let Some(room) = opts.room {
         conn_manager_builder = conn_manager_builder.room(room);
     }
@@ -107,153 +111,9 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // TODO: Maybe should wait for tasks to shutdown, but who cares?
+    main_cancellation_token.cancel();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
     Ok(())
-
-
-    // if let Some(mut receiver) = user_action_receiver {
-    //     tokio::spawn(async move {
-    //         while let Some(action) = receiver.recv().await {
-    //             match action {
-    //                 UserAction::DisableDenoise(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.set_denoise(false).await;
-    //                     }
-    //                 }
-    //                 UserAction::EnableDenoise(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.set_denoise(true).await;
-    //                     }
-    //                 }
-    //                 UserAction::DisablePeer(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.disable().await;
-    //                     }
-    //                 }
-    //                 UserAction::EnablePeer(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.enable().await;
-    //                     }
-    //                 }
-    //                 UserAction::SetVolume(id, volume) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.set_volume(volume).await;
-    //                     }
-    //                 }
-    //                 UserAction::SendMessage(message) => {
-    //                     for (_, peer) in managed_peers_clone.iter() {
-    //                         peer.send_message(message.clone());
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     });
-    // }
-
-    
-    // let connection_manager = ConnectionManagerOld::new(
-    //     socket.connection_info(),
-    //     tor_client,
-    //     onion_address.clone(),
-    //     db,
-    // );
-    // let connection_manager_arc = Arc::new(connection_manager);
-
-    // let connection_manager_arc_clone = connection_manager_arc.clone();
-    // let name_copy = display_name.clone();
-
-    // let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
-    //     let (x, y, z) = insanity_tui::start_tui().await.unwrap();
-    //     x.send(AppEvent::SetOwnAddress(onion_address.to_string()))
-    //         .unwrap();
-    //     x.send(AppEvent::SetOwnDisplayName(display_name)).unwrap();
-    //     (Some(x), Some(y), Some(z))
-    // } else {
-    //     (None, None, None)
-    // };
-
-    // let peer_list = opts.peer;
-    // let denoise = opts.denoise;
-
-    // let managed_peers = Arc::new(
-    //     peer_list
-    //         .into_iter()
-    //         .map(|addr| OnionAddress::new(addr))
-    //         .zip(std::iter::repeat((
-    //             socket.clone(),
-    //             connection_manager_arc,
-    //             app_event_sender.clone(),
-    //         )))
-    //         .map(
-    //             |(peer, (socket, conn_manager, app_event_sender))| async move {
-    //                 (
-    //                     peer.clone().to_string(),
-    //                     ManagedPeerOld::new(
-    //                         peer,
-    //                         denoise,
-    //                         100,
-    //                         socket,
-    //                         conn_manager,
-    //                         app_event_sender,
-    //                     )
-    //                     .await,
-    //                 )
-    //             },
-    //         )
-    //         .collect::<FuturesUnordered<_>>()
-    //         .collect::<BTreeMap<_, _>>()
-    //         .await,
-    // );
-
-    // let managed_peers_clone = managed_peers.clone();
-    // if let Some(mut receiver) = user_action_receiver {
-    //     tokio::spawn(async move {
-    //         while let Some(action) = receiver.recv().await {
-    //             match action {
-    //                 UserAction::DisableDenoise(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.set_denoise(false).await;
-    //                     }
-    //                 }
-    //                 UserAction::EnableDenoise(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.set_denoise(true).await;
-    //                     }
-    //                 }
-    //                 UserAction::DisablePeer(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.disable().await;
-    //                     }
-    //                 }
-    //                 UserAction::EnablePeer(id) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.enable().await;
-    //                     }
-    //                 }
-    //                 UserAction::SetVolume(id, volume) => {
-    //                     if let Some(peer) = managed_peers_clone.get(&id) {
-    //                         peer.set_volume(volume).await;
-    //                     }
-    //                 }
-    //                 UserAction::SendMessage(message) => {
-    //                     for (_, peer) in managed_peers_clone.iter() {
-    //                         peer.send_message(message.clone());
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     });
-    // }
-
-    // for peer in managed_peers.values() {
-    //     peer.enable().await;
-    // }
-
-    // if let Some(handle) = handle {
-    //     insanity_tui::stop_tui(handle).await.unwrap();
-    // } else {
-    //     loop {
-    //         tokio::time::sleep(Duration::from_secs(1)).await;
-    //     }
-    // }
-
 }

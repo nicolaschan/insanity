@@ -5,26 +5,29 @@ use std::sync::{
 
 use insanity_tui::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
-use veq::veq::{VeqSessionAlias, VeqSocket};
+use veq::veq::VeqSocket;
 
-use crate::{
-    clerver::run_clerver, connection_manager::AugmentedInfo, protocol::ProtocolMessage,
-    session::UpdatablePendingSession,
-};
+use crate::{clerver::run_clerver, connection_manager::AugmentedInfo, protocol::ProtocolMessage};
 
-// TODO: switch from the shutdown broadcaster to a
-// child of the connection manager cancellation token
+#[derive(Clone, Debug)]
+pub enum ConnectionStatus {
+    Disabled,
+    Connecting,
+    Connected,
+}
+
 #[derive(Clone)]
 pub struct ManagedPeer {
     id: uuid::Uuid,
-    pub connection_info: veq::veq::ConnectionInfo,
+    connection_info: veq::veq::ConnectionInfo,
     socket: VeqSocket,
-    pub shutdown_tx: broadcast::Sender<()>,
-    pub peer_message_tx: broadcast::Sender<ProtocolMessage>,
+    shutdown_tx: broadcast::Sender<()>,
+    peer_message_tx: broadcast::Sender<ProtocolMessage>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
-    pub display_name: String,
-    pub denoise: Arc<AtomicBool>,
-    pub volume: Arc<Mutex<usize>>,
+    connection_status: Arc<Mutex<ConnectionStatus>>,
+    display_name: String,
+    denoise: Arc<AtomicBool>,
+    volume: Arc<Mutex<usize>>,
 }
 
 impl ManagedPeer {
@@ -49,7 +52,13 @@ impl ManagedPeer {
             socket,
             app_event_tx,
             id,
+            connection_status: Arc::new(Mutex::new(ConnectionStatus::Disabled)),
         }
+    }
+
+    pub fn set_info(&mut self, info: AugmentedInfo) {
+        self.connection_info = info.connection_info;
+        self.display_name = info.display_name;
     }
 
     pub fn info(&self) -> AugmentedInfo {
@@ -57,6 +66,11 @@ impl ManagedPeer {
             connection_info: self.connection_info.clone(),
             display_name: self.display_name.clone(),
         }
+    }
+
+    pub fn connection_status(&self) -> ConnectionStatus {
+        let connection_status = self.connection_status.lock().unwrap();
+        connection_status.clone()
     }
 
     pub fn set_denoise(&self, denoise: bool) -> anyhow::Result<()> {
@@ -85,18 +99,6 @@ impl ManagedPeer {
     }
 
     pub fn enable(&self) {
-        if let &Some(ref app_event_tx) = &self.app_event_tx {
-            if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
-                self.id.to_string(),
-                Some(self.display_name.clone()),
-                PeerState::Disabled,
-                self.denoise.load(Ordering::Relaxed),
-                *self.volume.lock().unwrap(),
-            ))) {
-                log::debug!("Failed to send app event: {:?}", e);
-            }
-        }
-
         let id = self.id.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let peer = self.clone();
@@ -113,25 +115,26 @@ impl ManagedPeer {
     }
 
     pub fn disable(&self) -> anyhow::Result<()> {
-        if self.shutdown_tx.send(()).is_ok() {
-            log::info!("Disabled peer: {}", self.id);
+        self.shutdown_tx.send(())?;
+        log::info!("Disabled peer: {}", self.id);
 
-            if let &Some(ref app_event_tx) = &self.app_event_tx {
-                if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
-                    self.id.to_string(),
-                    Some(self.display_name.clone()),
-                    PeerState::Disabled,
-                    self.denoise.load(Ordering::Relaxed),
-                    *self.volume.lock().unwrap(),
-                ))) {
-                    log::debug!("Failed to send app event: {:?}", e);
-                }
-            }
-
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Failed to disable peer {}", self.id))
+        if let Ok(mut connection_status) = self.connection_status.lock() {
+            *connection_status = ConnectionStatus::Disabled;
         }
+
+        if let &Some(ref app_event_tx) = &self.app_event_tx {
+            if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                self.id.to_string(),
+                Some(self.display_name.clone()),
+                PeerState::Disabled,
+                self.denoise.load(Ordering::Relaxed),
+                *self.volume.lock().unwrap(),
+            ))) {
+                log::debug!("Failed to send app event: {:?}", e);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -146,13 +149,22 @@ async fn run_connection_loop(peer: ManagedPeer) {
 
     loop {
         log::info!("Beginning connect loop to peer {}", peer.id);
+
+        if let Ok(mut connection_status) = peer.connection_status.lock() {
+            *connection_status = ConnectionStatus::Connecting;
+        }
+
         let mut socket = peer.socket.clone();
         tokio::select! {
             session = socket.connect(peer.id, peer.info().connection_info.clone()) => {
-            // session = connect(peer.id, peer.info(), peer.socket.clone()) => {
                 // Start and block on clerver.
                 if let Ok(session) = session {
                     log::debug!("Connected to {}", peer.id);
+
+                    if let Ok(mut connection_status) = peer.connection_status.lock() {
+                        *connection_status = ConnectionStatus::Connected;
+                    }
+
                     if let &Some(ref app_event_tx) = &peer.app_event_tx {
                         if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
                             peer.id.to_string(),
@@ -191,19 +203,6 @@ async fn run_connection_loop(peer: ManagedPeer) {
     }
 }
 
-/// Connects the local socket to peer identified by id and info.
-async fn connect(
-    id: uuid::Uuid,
-    info: AugmentedInfo,
-    socket: veq::veq::VeqSocket,
-) -> VeqSessionAlias {
-    let pending_session = UpdatablePendingSession::new(socket);
-    pending_session.update(id, info).await;
-    log::debug!("Updated pending session of {id}.");
-    let (session, _info) = pending_session.session().await;
-    session
-}
-
 /// Cycles through connection info and sends to app. Should never terminate.
 async fn update_app_connecting_status(
     id: uuid::Uuid,
@@ -213,8 +212,12 @@ async fn update_app_connecting_status(
     ip_addresses: Vec<String>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
 ) {
-    if let Some(app_event_tx) = app_event_tx {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(1000));
+    if ip_addresses.is_empty() {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
+        }
+    } else if let Some(app_event_tx) = app_event_tx {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
         loop {
             for ip_address in ip_addresses.iter() {
                 interval.tick().await;

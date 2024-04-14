@@ -9,7 +9,7 @@ use std::str::FromStr;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::managed_peer::ManagedPeer;
+use crate::managed_peer::{ConnectionStatus, ManagedPeer};
 use veq::snow_types::SnowPublicKey;
 
 use crate::room_handler;
@@ -147,7 +147,8 @@ impl ConnectionManagerBuilder {
         // Create local socket.
         let keypair: SnowKeypair = get_or_make_keypair(&db)?;
         let socket = VeqSocket::bind_with_keypair(
-            (std::net::Ipv6Addr::LOCALHOST, self.listen_port),
+            // (std::net::Ipv4Addr::UNSPECIFIED, self.listen_port),
+            (std::net::Ipv6Addr::UNSPECIFIED, self.listen_port),
             keypair,
         )
         .await?;
@@ -186,15 +187,15 @@ fn manage_peers(
         loop {
             tokio::select! {
                 Some(augmented_info) = conn_info_rx.recv() => {
+                    if socket.connection_info().public_key == augmented_info.connection_info.public_key {
+                        // Don't try to connect to self.
+                        continue;
+                    }
                     let id = snow_public_keys_to_uuid(&socket.connection_info().public_key, &augmented_info.connection_info.public_key);
                     if let Some(managed_peer) = update_peer_info(id, augmented_info, socket.clone(), app_event_tx.clone(), &mut managed_peers) {
                         log::debug!("Updated peer info for {id} to: {:?}", managed_peer.info());
-                        // If info of this peer has changed, re-do the connection.
-                        // TODO: check if already connected, and if so, don't do anything?
-                        // TODO: disable currently doesnt check if currently enabled, so it fails if already disabled,
-                        // e.g. on first enabling of this peer.
-                        let _ = managed_peer.disable();
-                        managed_peer.enable();
+                        log::debug!("(Re)Connecting to peer {id}.");
+                        reconnect(managed_peer);
                     }
                 },
                 Some(user_action) = user_action_rx.recv() => {
@@ -210,6 +211,59 @@ fn manage_peers(
         }
     });
     conn_info_tx
+}
+
+fn reconnect(managed_peer: ManagedPeer) {
+    match managed_peer.connection_status() {
+        ConnectionStatus::Disabled => {
+            managed_peer.enable();
+        }
+        ConnectionStatus::Connecting | ConnectionStatus::Connected => {
+            match managed_peer.disable() {
+                Ok(()) => {
+                    managed_peer.enable();
+                }
+                Err(e) => {
+                    log::debug!("Failed to disable peer, so couldn't re-enable: {:?}", e);
+                }
+            }
+        }
+    }
+}
+
+/// Returns Some containing the old peer and the updated peer, or None if no peer updated.
+fn update_peer_info(
+    id: uuid::Uuid,
+    new_info: AugmentedInfo,
+    socket: veq::veq::VeqSocket,
+    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+    managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
+) -> Option<ManagedPeer> {
+    match managed_peers.get_mut(&id) {
+        Some(current_managed_peer) => {
+            // If already have this peer, update the managed peer as necessary.
+            if current_managed_peer.info() != new_info {
+                current_managed_peer.set_info(new_info);
+                Some(current_managed_peer.clone())
+            } else {
+                None
+            }
+        }
+        None => {
+            // If new peer, add to managed peers.
+            let managed_peer = ManagedPeer::new(
+                id,
+                new_info.connection_info,
+                socket,
+                app_event_tx,
+                new_info.display_name,
+                true,
+                100,
+            );
+            managed_peers.insert(id, managed_peer.clone());
+            Some(managed_peer)
+        }
+    }
 }
 
 fn handle_user_action(
@@ -236,7 +290,6 @@ fn handle_user_action(
             }
         }
         UserAction::EnablePeer(id) => {
-            // TODO: need to actually implement this.
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
                 peer.enable();
@@ -257,41 +310,6 @@ fn handle_user_action(
         }
     }
     Ok(())
-}
-
-/// Returns Some containing the old peer and the updated peer, or None if no peer updated.
-fn update_peer_info(
-    id: uuid::Uuid,
-    info: AugmentedInfo,
-    socket: veq::veq::VeqSocket,
-    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
-    managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
-) -> Option<ManagedPeer> {
-    let AugmentedInfo {
-        connection_info,
-        display_name,
-    } = info;
-    if managed_peers.contains_key(&id) {
-        // If already have this peer, update the managed peer.
-        // If any changes occur, restart connection to peer.
-        // TODO: handle this case
-        None
-    } else {
-        // If new peer, add to managed peers and start connection
-        // TODO: use commandline argument for denoise default.
-        let managed_peer = ManagedPeer::new(
-            id,
-            connection_info,
-            socket,
-            app_event_tx,
-            display_name,
-            true,
-            100,
-        );
-        // true, 100, connection_info, display_name);
-        managed_peers.insert(id, managed_peer.clone());
-        Some(managed_peer)
-    }
 }
 
 // This converts snow public keys to strings and then does what
