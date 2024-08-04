@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cpal::traits::DeviceTrait;
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use log::debug;
 
 use crate::processor::AudioProcessor;
 use crate::processor::AUDIO_CHANNELS;
@@ -53,8 +54,8 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
     let supported_config_range = find_stereo(supported_configs_range).unwrap();
     let max_sample_rate = supported_config_range.max_sample_rate();
 
-    let channels = 1; //supported_config_range.channels();
-    let sample_rate = std::cmp::min(SampleRate(44100), max_sample_rate);
+    let channels = supported_config_range.channels();
+    let sample_rate = std::cmp::min(SampleRate(48000), max_sample_rate);
     let buffer_size = match supported_config_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -67,6 +68,10 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
     };
 
     // let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
+    debug!(
+        "jonathan-debug Output config: {:?} config range: {:?}",
+        supported_config, supported_config_range
+    );
     let sample_format = supported_config_range.sample_format();
     (sample_format, supported_config)
 }
