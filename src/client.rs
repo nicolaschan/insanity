@@ -69,8 +69,8 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
 
     // let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
     debug!(
-        "jonathan-debug Output config: {:?} config range: {:?}",
-        supported_config, supported_config_range
+        "jonathan-debug Output config: {:?} config range: {:?} max {:?}",
+        supported_config, supported_config_range, max_sample_rate
     );
     let sample_format = supported_config_range.sample_format();
     (sample_format, supported_config)
