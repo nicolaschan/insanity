@@ -53,7 +53,7 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
     let supported_config_range = find_stereo(supported_configs_range).unwrap();
     let max_sample_rate = supported_config_range.max_sample_rate();
 
-    let channels = supported_config_range.channels();
+    let channels = 1; //supported_config_range.channels();
     let sample_rate = std::cmp::min(SampleRate(44100), max_sample_rate);
     let buffer_size = match supported_config_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
@@ -61,7 +61,7 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
     };
     // println!("buffer size: {:?}", buffer_size);
     let supported_config = StreamConfig {
-        1,
+        channels,
         sample_rate,
         buffer_size,
     };
