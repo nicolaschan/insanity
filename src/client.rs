@@ -55,7 +55,6 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
 
     let channels = supported_config_range.channels();
     let sample_rate = std::cmp::min(SampleRate(44100), max_sample_rate);
-    let sample_rate = max_sample_rate;
     let buffer_size = match supported_config_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
