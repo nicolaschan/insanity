@@ -61,7 +61,7 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
     };
     // println!("buffer size: {:?}", buffer_size);
     let supported_config = StreamConfig {
-        channels,
+        1,
         sample_rate,
         buffer_size,
     };
