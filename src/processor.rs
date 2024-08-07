@@ -6,10 +6,8 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use cpal::{Sample, SampleRate};
-use log::debug;
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
-use sha2::digest::generic_array::sequence;
 
 use crate::realtime_buffer::RealTimeBuffer;
 use crate::resampler::ResampledAudioReceiver;
@@ -241,18 +239,15 @@ impl AudioProcessor<'_> {
     }
 
     pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
-        for val in to_fill.iter_mut() {
-            let sample = self.runtime.block_on(async {
+        // LOL this is insane maybe we should use channels or something proper
+        self.runtime.block_on(async {
+            for val in to_fill.iter_mut() {
                 let mut audio_receiver_guard = self.audio_receiver.lock().unwrap();
-                audio_receiver_guard.next().await
-            });
-            if sample.is_some() {
-                debug!("Sample: {:?}", sample);
+                *val = match audio_receiver_guard.next().await {
+                    None => Sample::from(&0.0), // cry b/c there's no packets
+                    Some(sample) => Sample::from(&sample),
+                };
             }
-            *val = match sample {
-                None => Sample::from(&0.0), // cry b/c there's no packets
-                Some(sample) => Sample::from(&sample),
-            };
-        }
+        });
     }
 }
