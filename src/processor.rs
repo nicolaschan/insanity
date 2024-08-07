@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use cpal::{Sample, SampleRate};
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
+use tokio::runtime::Handle;
 
 use crate::realtime_buffer::RealTimeBuffer;
 use crate::resampler::ResampledAudioReceiver;
@@ -193,11 +194,12 @@ pub struct AudioProcessor<'a> {
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
     audio_receiver: Mutex<ResampledAudioReceiver<RealtimeAudioReceiver>>,
-    runtime: tokio::runtime::Runtime,
+    handle: Handle,
 }
 
 impl AudioProcessor<'_> {
     pub fn new(
+        handle: Handle,
         enable_denoise: Arc<AtomicBool>,
         volume: Arc<Mutex<usize>>,
         output_sample_rate: SampleRate,
@@ -205,7 +207,6 @@ impl AudioProcessor<'_> {
         let chunk_buffer = Arc::new(Mutex::new(RealTimeBuffer::new(10)));
         let audio_receiver = RealtimeAudioReceiver::new(chunk_buffer.clone(), 48000, 2);
         let audio_receiver = ResampledAudioReceiver::new(audio_receiver, output_sample_rate.0);
-        let runtime = tokio::runtime::Runtime::new().unwrap();
 
         AudioProcessor {
             enable_denoise,
@@ -213,7 +214,7 @@ impl AudioProcessor<'_> {
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
             audio_receiver: Mutex::new(audio_receiver),
             chunk_buffer,
-            runtime,
+            handle,
         }
     }
 
@@ -240,7 +241,7 @@ impl AudioProcessor<'_> {
 
     pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
         // LOL this is insane maybe we should use channels or something proper
-        self.runtime.block_on(async {
+        self.handle.block_on(async {
             for val in to_fill.iter_mut() {
                 let mut audio_receiver_guard = self.audio_receiver.lock().unwrap();
                 *val = match audio_receiver_guard.next().await {

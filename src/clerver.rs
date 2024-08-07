@@ -7,6 +7,7 @@ use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
 use tokio::{
     join,
+    runtime::Handle,
     sync::{
         broadcast::{self, Receiver},
         mpsc,
@@ -117,6 +118,7 @@ async fn run_receiver(
     let output_device = host.default_output_device().unwrap();
     let (sample_format, config) = get_output_config(&output_device);
     let processor = Arc::new(AudioProcessor::new(
+        Handle::current(),
         enable_denoise,
         volume,
         config.sample_rate,
