@@ -2288,6 +2288,7 @@ dependencies = [
  "chrono",
  "clap 4.5.13",
  "cpal",
+ "crossbeam-channel",
  "dirs",
  "fern",
  "futures",

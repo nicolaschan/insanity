@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::io::{Error, Write};
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -47,11 +47,6 @@ impl PeerIdentity {
             addresses: Vec::new(),
         }
     }
-}
-
-pub struct PeerState {
-    _identity: PeerIdentity,
-    _sockets: HashMap<String, Vec<UdpSocket>>,
 }
 
 impl ProtocolMessage {

@@ -27,7 +27,7 @@ pub struct AudioFrame(u128, Vec<u8>);
 
 // A clerver is a CLient + sERVER.
 
-async fn run_audio_sender<R: AudioReceiver + Send + 'static>(
+async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
     mut conn: VeqSessionAlias,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
     mut shutdown: Receiver<()>,
@@ -50,7 +50,9 @@ async fn run_audio_sender<R: AudioReceiver + Send + 'static>(
         let mut samples = Vec::new();
         let sample_count = AUDIO_CHUNK_SIZE * channels_count as usize;
         for _ in 0..sample_count {
-            samples.push(audio_receiver.next().await);
+            // .unwrap() is ok here because this type of audio receiver is "infinite"
+            // and will delay on await instead of return None
+            samples.push(audio_receiver.next().await.unwrap());
         }
 
         // let samples: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
@@ -113,9 +115,13 @@ async fn run_receiver(
     let address = address.to_string();
     let host = cpal::default_host();
     let output_device = host.default_output_device().unwrap();
-    let processor = Arc::new(AudioProcessor::new(enable_denoise, volume));
-    let processor_clone = processor.clone();
     let (sample_format, config) = get_output_config(&output_device);
+    let processor = Arc::new(AudioProcessor::new(
+        enable_denoise,
+        volume,
+        config.sample_rate,
+    ));
+    let processor_clone = processor.clone();
     let config_clone = config.clone();
     let mut output_stream_wrapper = send_safe::SendWrapperThread::new(move || {
         setup_output_stream(
@@ -136,7 +142,7 @@ async fn run_receiver(
     //     config.sample_rate.0,
     //     u16_to_channels(config.channels)
     // );
-    let mut decoder = Decoder::new(config.sample_rate.0, u16_to_channels(config.channels)).unwrap();
+    let mut decoder = Decoder::new(48000, u16_to_channels(config.channels)).unwrap();
 
     while let Ok(packet) = tokio::select! {
         res = conn.recv() => res,
@@ -191,16 +197,29 @@ pub async fn start_clerver(
     let audio_sender = {
         let conn = conn.clone();
         tokio::spawn(async move {
-            run_audio_sender(conn, make_audio_receiver, shutdown_rx, audio_sender_termination_tx).await;
+            run_audio_sender(
+                conn,
+                make_audio_receiver,
+                shutdown_rx,
+                audio_sender_termination_tx,
+            )
+            .await;
         })
     };
 
-    let (peer_message_sender_termination_tx, mut peer_message_sender_termination_rx) = mpsc::channel(10);
+    let (peer_message_sender_termination_tx, mut peer_message_sender_termination_rx) =
+        mpsc::channel(10);
     let peer_message_sender = {
         let conn = conn.clone();
         let shutdown_rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
-            run_peer_message_sender(conn, peer_message_receiver, shutdown_rx, peer_message_sender_termination_tx).await;
+            run_peer_message_sender(
+                conn,
+                peer_message_receiver,
+                shutdown_rx,
+                peer_message_sender_termination_tx,
+            )
+            .await;
         })
     };
 
@@ -208,7 +227,16 @@ pub async fn start_clerver(
     let receiver = {
         let shutdown_rx = shutdown_tx.subscribe();
         tokio::task::spawn(async move {
-            run_receiver(conn, app_event_sender, enable_denoise, volume, address, shutdown_rx, receiver_termination_tx).await;
+            run_receiver(
+                conn,
+                app_event_sender,
+                enable_denoise,
+                volume,
+                address,
+                shutdown_rx,
+                receiver_termination_tx,
+            )
+            .await;
         })
     };
 

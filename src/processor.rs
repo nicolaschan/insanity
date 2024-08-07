@@ -1,23 +1,28 @@
 // extern crate test;
 
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::{collections::VecDeque, sync::atomic::AtomicBool};
 
 use std::sync::{Arc, Mutex};
 
-use cpal::Sample;
+use cpal::{Sample, SampleRate};
+use log::debug;
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
+use sha2::digest::generic_array::sequence;
 
 use crate::realtime_buffer::RealTimeBuffer;
+use crate::resampler::ResampledAudioReceiver;
+use crate::server::AudioReceiver;
+use crate::server::RealtimeAudioReceiver;
 
 pub const AUDIO_CHUNK_SIZE: usize = 480;
 pub const AUDIO_CHANNELS: u16 = 2;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct AudioFormat {
-    channel_count: u16,
-    sample_rate: u32,
+    pub channel_count: u16,
+    pub sample_rate: u32,
 }
 
 impl AudioFormat {
@@ -188,18 +193,29 @@ pub struct AudioProcessor<'a> {
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
-    audio_buffer: Mutex<VecDeque<f32>>,
-    chunk_buffer: Mutex<RealTimeBuffer<AudioChunk>>,
+    chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
+    audio_receiver: Mutex<ResampledAudioReceiver<RealtimeAudioReceiver>>,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl AudioProcessor<'_> {
-    pub fn new(enable_denoise: Arc<AtomicBool>, volume: Arc<Mutex<usize>>) -> Self {
+    pub fn new(
+        enable_denoise: Arc<AtomicBool>,
+        volume: Arc<Mutex<usize>>,
+        output_sample_rate: SampleRate,
+    ) -> Self {
+        let chunk_buffer = Arc::new(Mutex::new(RealTimeBuffer::new(10)));
+        let audio_receiver = RealtimeAudioReceiver::new(chunk_buffer.clone(), 48000, 2);
+        let audio_receiver = ResampledAudioReceiver::new(audio_receiver, output_sample_rate.0);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+
         AudioProcessor {
             enable_denoise,
             volume,
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
-            chunk_buffer: Mutex::new(RealTimeBuffer::new(10)),
-            audio_buffer: Mutex::new(VecDeque::new()),
+            audio_receiver: Mutex::new(audio_receiver),
+            chunk_buffer,
+            runtime,
         }
     }
 
@@ -225,21 +241,16 @@ impl AudioProcessor<'_> {
     }
 
     pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
-        let mut audio_buffer_guard = self.audio_buffer.lock().unwrap();
-        let mut i = 0; // limit the number of tries to get the next chunk or else we wait too long
-        while to_fill.len() > audio_buffer_guard.len() && (i <= to_fill.len() / AUDIO_CHUNK_SIZE) {
-            let mut guard = self.chunk_buffer.lock().unwrap();
-            if let Some(chunk) = guard.next_item() {
-                audio_buffer_guard.extend(chunk.audio_data);
-            };
-            i += 1;
-        }
         for val in to_fill.iter_mut() {
-            let sample = audio_buffer_guard.pop_front();
+            let sample = self.runtime.block_on(async {
+                let mut audio_receiver_guard = self.audio_receiver.lock().unwrap();
+                audio_receiver_guard.next().await
+            });
+            if sample.is_some() {
+                debug!("Sample: {:?}", sample);
+            }
             *val = match sample {
-                None => {
-                    Sample::from(&0.0) // cry b/c there's no packets
-                }
+                None => Sample::from(&0.0), // cry b/c there's no packets
                 Some(sample) => Sample::from(&sample),
             };
         }

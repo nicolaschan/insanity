@@ -1,10 +1,15 @@
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use log::debug;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use async_trait::async_trait;
 
-use crate::processor::AUDIO_CHANNELS;
+use crate::processor::{AudioChunk, AUDIO_CHANNELS};
+use crate::realtime_buffer::RealTimeBuffer;
 
 fn run_input<T: Sample>(
     config: &cpal::StreamConfig,
@@ -140,15 +145,15 @@ pub struct CpalStreamReceiver {
 
 #[async_trait]
 pub trait AudioReceiver {
-    async fn next(&mut self) -> f32;
+    async fn next(&mut self) -> Option<f32>;
     fn sample_rate(&self) -> u32;
     fn channels(&self) -> u16;
 }
 
 #[async_trait]
 impl AudioReceiver for CpalStreamReceiver {
-    async fn next(&mut self) -> f32 {
-        self.input_receiver.recv().await.unwrap()
+    async fn next(&mut self) -> Option<f32> {
+        self.input_receiver.recv().await
     }
     fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -167,7 +172,9 @@ impl AudioReceiver for CpalStreamReceiver {
 pub fn make_audio_receiver() -> CpalStreamReceiver {
     let host = cpal::default_host();
     let (input_sender, input_receiver) = unbounded_channel();
-    let input_device = host.default_input_device().expect("No default input device");
+    let input_device = host
+        .default_input_device()
+        .expect("No default input device");
     // If input_stream is dropped, then the input_receiver stops receiving data.
     // CpalStreamReceiver keeps input_stream alive along with input_receiver.
     let (sample_format, config) = get_input_config(&input_device);
@@ -175,7 +182,11 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         setup_input_stream(&sample_format, &config_clone, &input_device, input_sender)
     });
-    wrapper.execute(|input_stream| { input_stream.play().unwrap(); }).unwrap();
+    wrapper
+        .execute(|input_stream| {
+            input_stream.play().unwrap();
+        })
+        .unwrap();
     CpalStreamReceiver {
         input_receiver,
         input_stream: wrapper,
@@ -218,3 +229,45 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
 //         start_server_with_receiver(socket, move || make_audio_receiver(config_clone), config).await;
 //     }
 // }
+
+pub struct RealtimeAudioReceiver {
+    chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
+    sample_buffer: VecDeque<f32>,
+    sample_rate: u32,
+    channels: u16,
+}
+
+impl RealtimeAudioReceiver {
+    pub fn new(
+        chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> RealtimeAudioReceiver {
+        RealtimeAudioReceiver {
+            chunk_buffer,
+            sample_buffer: VecDeque::new(),
+            sample_rate,
+            channels,
+        }
+    }
+}
+
+#[async_trait]
+impl AudioReceiver for RealtimeAudioReceiver {
+    async fn next(&mut self) -> Option<f32> {
+        if self.sample_buffer.is_empty() {
+            let mut buffer = self.chunk_buffer.lock().unwrap();
+            if let Some(chunk) = buffer.next_item() {
+                debug!("Received chunk: {:?}", chunk.sequence_number);
+                self.sample_buffer.extend(chunk.audio_data);
+            }
+        }
+        self.sample_buffer.pop_front()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+}
