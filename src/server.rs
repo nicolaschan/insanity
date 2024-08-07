@@ -258,7 +258,6 @@ impl AudioReceiver for RealtimeAudioReceiver {
         if self.sample_buffer.is_empty() {
             let mut buffer = self.chunk_buffer.lock().unwrap();
             if let Some(chunk) = buffer.next_item() {
-                debug!("Received chunk: {:?}", chunk.sequence_number);
                 self.sample_buffer.extend(chunk.audio_data);
             }
         }
