@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use cpal::traits::DeviceTrait;
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use itertools::Itertools;
 use log::debug;
 
 use crate::processor::AudioProcessor;
@@ -25,15 +26,9 @@ fn run_output<T: Sample>(
 }
 
 fn find_stereo(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStreamConfigRange> {
-    let mut something = None;
-    for item in range {
-        if item.channels() == AUDIO_CHANNELS {
-            return Some(item);
-        } else {
-            something = Some(item);
-        }
-    }
-    something
+    range
+        .into_iter()
+        .find_or_last(|x| x.channels() == AUDIO_CHANNELS)
 }
 
 pub fn setup_output_stream(
@@ -69,7 +64,7 @@ pub fn get_output_config(device: &Device) -> (SampleFormat, StreamConfig) {
 
     // let supported_config = supported_config_range.with_sample_rate(std::cmp::min(SampleRate(48000), max_sample_rate));
     debug!(
-        "jonathan-debug Output config: {:?} config range: {:?} max {:?}",
+        "Output config: {:?} config range: {:?} max {:?}",
         supported_config, supported_config_range, max_sample_rate
     );
     let sample_format = supported_config_range.sample_format();
