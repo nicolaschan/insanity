@@ -42,7 +42,7 @@
           buildInputs = [
             # Add your build dependencies here, for example:
             pkgs.openssl
- pkgs.libopus
+            pkgs.libopus
             pkgs.alsa-lib
           ];
 
