@@ -22,7 +22,6 @@ struct Opts {
 
     // #[clap(long)]
     // music: Option<String>,
-
     #[clap(short, long, default_value = "1337")]
     listen_port: u16,
 
@@ -32,7 +31,6 @@ struct Opts {
 
     // #[clap(long)]
     // id: Option<String>,
-
     /// Disables the terminal user interface.
     #[clap(long)]
     no_tui: bool,
@@ -42,7 +40,6 @@ struct Opts {
 
     // #[clap(long, default_value = "2")]
     // channels: usize,
-
     /// Nickname to differentiate between onion services.
     #[clap(long, default_value = "default")]
     onion_nickname: String,
@@ -56,14 +53,22 @@ struct Opts {
 async fn main() {
     let opts: Opts = Opts::parse();
 
-    let display_name = format!("{}@{}", whoami::username(), whoami::fallible::hostname().unwrap_or(String::from("unknown")));
+    let display_name = format!(
+        "{}@{}",
+        whoami::username(),
+        whoami::fallible::hostname().unwrap_or(String::from("unknown"))
+    );
 
     let insanity_dir = match opts.dir {
         Some(dir) => PathBuf::from_str(&dir).unwrap(),
-        None => dirs::data_local_dir().expect("no data directory!?").join("insanity"),
+        None => dirs::data_local_dir()
+            .expect("no data directory!?")
+            .join("insanity"),
     };
     std::fs::create_dir_all(&insanity_dir).expect("could not create insanity data directory");
 
+    let log_path = insanity_dir.join("insanity.log");
+    println!("Logging to {:?}", log_path);
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -75,10 +80,7 @@ async fn main() {
             ))
         })
         .level(log::LevelFilter::Debug)
-        .chain(
-            fern::log_file(insanity_dir.join("insanity.log"))
-                .expect("could not create insanity log file"),
-        )
+        .chain(fern::log_file(log_path).expect("could not create insanity log file"))
         .apply()
         .expect("could not setup logging");
     log::info!("Starting insanity");
@@ -87,9 +89,17 @@ async fn main() {
     std::fs::create_dir_all(&tor_dir).expect("could not create tor data directory");
 
     let onion_nickname = opts.onion_nickname;
-    let (tor_client, onion_service, onion_request_stream) = create_tor_client(&tor_dir, onion_nickname).await;
-    let onion_name = onion_service.onion_name().expect("Failed to extract onion service name").to_string();
-    let onion_address = OnionAddress::new(format!("{}:{}", onion_name, insanity::coordinator::COORDINATOR_PORT));
+    let (tor_client, onion_service, onion_request_stream) =
+        create_tor_client(&tor_dir, onion_nickname).await;
+    let onion_name = onion_service
+        .onion_name()
+        .expect("Failed to extract onion service name")
+        .to_string();
+    let onion_address = OnionAddress::new(format!(
+        "{}:{}",
+        onion_name,
+        insanity::coordinator::COORDINATOR_PORT
+    ));
 
     let sled_path = insanity_dir.join("data.sled");
     let db = sled::open(sled_path).unwrap();
@@ -115,21 +125,34 @@ async fn main() {
         }
     };
 
-    let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair).await.unwrap();
+    let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair)
+        .await
+        .unwrap();
     log::debug!("Connection info: {:?}", socket.connection_info());
-    let connection_manager = ConnectionManager::new(socket.connection_info(), tor_client, onion_address.clone(), db);
+    let connection_manager = ConnectionManager::new(
+        socket.connection_info(),
+        tor_client,
+        onion_address.clone(),
+        db,
+    );
     println!("Own address: {onion_address:?}");
     let connection_manager_arc = Arc::new(connection_manager);
 
     let connection_manager_arc_clone = connection_manager_arc.clone();
     let name_copy = display_name.clone();
     tokio::spawn(async move {
-        forward_onion_connections(onion_request_stream, connection_manager_arc_clone, name_copy).await;
+        forward_onion_connections(
+            onion_request_stream,
+            connection_manager_arc_clone,
+            name_copy,
+        )
+        .await;
     });
 
     let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
         let (x, y, z) = insanity_tui::start_tui().await.unwrap();
-        x.send(AppEvent::SetOwnAddress(onion_address.to_string())).unwrap();
+        x.send(AppEvent::SetOwnAddress(onion_address.to_string()))
+            .unwrap();
         x.send(AppEvent::SetOwnDisplayName(display_name)).unwrap();
         (Some(x), Some(y), Some(z))
     } else {
@@ -152,7 +175,16 @@ async fn main() {
                 |(peer, (socket, conn_manager, app_event_sender))| async move {
                     (
                         peer.clone().to_string(),
-                        ManagedPeer::new(peer, denoise, 100, socket, conn_manager, app_event_sender).await)
+                        ManagedPeer::new(
+                            peer,
+                            denoise,
+                            100,
+                            socket,
+                            conn_manager,
+                            app_event_sender,
+                        )
+                        .await,
+                    )
                 },
             )
             .collect::<FuturesUnordered<_>>()
