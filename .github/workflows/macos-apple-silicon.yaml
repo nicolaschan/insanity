@@ -1,4 +1,4 @@
-name: macOS x86
+name: macOS Apple Silicon
 
 on:
   push:
@@ -12,18 +12,18 @@ env:
 jobs:
   build:
 
-    runs-on: macos-latest-large
+    runs-on: macos-large
 
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
-      run: rustup toolchain install stable-x86_64-apple-darwin
+      run: rustup toolchain install stable-aarch64-apple-darwin
     - name: Rustup Target
-      run: rustup target add x86_64-apple-darwin
+      run: rustup target add aarch64-apple-darwin
     - name: Build
-      run: cargo +stable-x86_64-apple-darwin build --release --verbose --target x86_64-apple-darwin
+      run: cargo +stable-aarch64-apple-darwin build --release --verbose --target aarch64-apple-darwin
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
       with:
         name: insanity
-        path: target/x86_64-apple-darwin/release/insanity
+        path: target/aarch64-apple-darwin/release/insanity
