@@ -70,6 +70,10 @@ impl<R: AudioReceiver + Send> AudioReceiver for ResampledAudioReceiver<R> {
         if self.resampled_buffer.is_empty() {
             // First, try to fill the original_samples buffer with enough samples to resample
             let target_samples_count = AUDIO_CHUNK_SIZE * self.delegate.channels() as usize;
+            debug!(
+                "Audio chunk size: {}, channels: {}, target samples count: {}",
+                AUDIO_CHUNK_SIZE, channels, target_samples_count
+            );
             if self.original_samples_buffer.len() < target_samples_count {
                 for _ in 0..(self.original_samples_buffer.len() - target_samples_count) {
                     let next_sample = self.delegate.next().await;
@@ -82,8 +86,13 @@ impl<R: AudioReceiver + Send> AudioReceiver for ResampledAudioReceiver<R> {
             }
 
             // There are enough samples, so we can try to resample
+            debug!(
+                "Number of samples in original buffer: {}",
+                self.original_samples_buffer.len()
+            );
             let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
             let channels = separate_channels(&samples, self.delegate.channels() as usize);
+            debug!("Separated into {} channels", channels.len());
             let mut resampler_guard = self.resampler.lock().unwrap();
             let resampled_channels = resampler_guard.process(&channels).unwrap();
             let resampled_samples = interleave_channels(&resampled_channels);
