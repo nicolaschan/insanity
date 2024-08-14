@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, sync::Mutex};
 
+use log::debug;
 use rubato::{Resampler, SincFixedIn};
 
 use async_trait::async_trait;
@@ -72,7 +73,9 @@ impl<R: AudioReceiver + Send> AudioReceiver for ResampledAudioReceiver<R> {
             let target_samples_count = AUDIO_CHUNK_SIZE * self.delegate.channels() as usize;
             debug!(
                 "Audio chunk size: {}, channels: {}, target samples count: {}",
-                AUDIO_CHUNK_SIZE, channels, target_samples_count
+                AUDIO_CHUNK_SIZE,
+                self.delegate.channels(),
+                target_samples_count
             );
             if self.original_samples_buffer.len() < target_samples_count {
                 for _ in 0..(self.original_samples_buffer.len() - target_samples_count) {
