@@ -4,6 +4,7 @@
 [![Linux musl](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml)
 [![Windows MinGW](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml)
 [![Windows MSVC](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml)
+[![macOS Apple Silicon](https://github.com/nicolaschan/insanity/actions/workflows/macos-apple-silicon.yaml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/macos-apple-silicon.yaml)
 
 > All existing voice chat solutions are bad. This one is worse.
 
