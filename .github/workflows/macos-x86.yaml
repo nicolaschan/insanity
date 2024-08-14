@@ -1,4 +1,4 @@
-name: macOS
+name: macOS x86
 
 on:
   push:
@@ -12,7 +12,7 @@ env:
 jobs:
   build:
 
-    runs-on: macos-latest
+    runs-on: macos-latest-large
 
     steps:
     - uses: actions/checkout@v4

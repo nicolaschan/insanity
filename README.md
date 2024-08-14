@@ -1,4 +1,4 @@
-# insanity P2P voice chat
+# insanity peer-to-peer voice chat 🤯
 
 [![Linux GNU](https://github.com/nicolaschan/insanity/actions/workflows/linux-gnu.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux-gnu.yml)
 [![Linux musl](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml)
@@ -7,32 +7,26 @@
 
 > All existing voice chat solutions are bad. This one is worse.
 
+An experimental peer-to-peer voice chat application with a terminal UI. Written and intended for learning and fun, not recommended for serious use-cases.
+
 ## Usage
 
-You run
-```bash
-cargo run --release -- --peer-address $FRIENDS_IP:1337
-```
+Choose an option:
 
-Your friend runs
-```bash
-cargo run --release -- --peer-address $YOUR_IP:1337
-```
+1. **Binary download**: Click the badge above for your system. Go to the latest successful run and download the build artifact.
+2. **Nix**
+   ```
+   nix run github:nicolaschan/insanity
+   ```
+3. **Build from source**
+   ```
+   cargo run --release
+   ```
+   and keep installing missing system libraries until it works
 
-## To Do
-- [ ] Optimize for latency (low ping/pong delay)
-- [ ] Mesh networking (add peers automatically)
-- [ ] Encryption
-- [x] UDP/QUIC
-- [ ] Better interpolation for missing packets
-- [ ] Handle different sampling rates
-- [ ] Multi-channel and mono audio
-- [ ] Coordination server and channel rooms
-- [ ] User selectable audio device (input and output)
-- [ ] Add/remove peers from console UI
-- [ ] Adjust audio preferences per peer (volume and denoise options)
-- [ ] Expose compression options
-- [ ] Performance benchmarks
-- [ ] Full test coverage
-- [ ] Measure bandwidth and ping to peers (and show in console)
-- [ ] Set up CI to build binaries + Docker image on GitHub
+## Features
+- NAT holepunch connections
+- Encrypted with the noise protocol
+- Background noise suppression
+- No central server required, bootstraps connections over Tor 🥸
+
