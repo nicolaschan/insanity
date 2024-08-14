@@ -78,7 +78,7 @@ impl<R: AudioReceiver + Send> AudioReceiver for ResampledAudioReceiver<R> {
                 target_samples_count
             );
             if self.original_samples_buffer.len() < target_samples_count {
-                for _ in 0..(self.original_samples_buffer.len() - target_samples_count) {
+                for _ in 0..(target_samples_count - self.original_samples_buffer.len()) {
                     let next_sample = self.delegate.next().await;
                     if next_sample.is_none() {
                         // Not enough samples available right now, so return None
