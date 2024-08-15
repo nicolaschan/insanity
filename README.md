@@ -25,9 +25,26 @@ Choose an option:
    ```
    and keep installing missing system libraries until it works
 
+## Signaling Server
+
+Install the iroh-cli. E.g., with nix, do `nix shell nixpkgs#iroh`
+
+Then:
+```
+iroh start
+```
+In a seperate shell:
+```
+iroh console
+doc new --switch
+doc share write
+```
+Copy the output text. This is the `room`.
+
 ## Features
 - NAT holepunch connections
 - Encrypted with the noise protocol
 - Background noise suppression
 - No central server required, bootstraps connections over Tor 🥸
+
 
