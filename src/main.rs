@@ -125,7 +125,7 @@ async fn main() {
         }
     };
 
-    let socket = VeqSocket::bind_with_keypair(format!("0.0.0.0:{}", opts.listen_port), keypair)
+    let socket = VeqSocket::bind_with_keypair(format!("[::]:{}", opts.listen_port), keypair)
         .await
         .unwrap();
     log::debug!("Connection info: {:?}", socket.connection_info());
