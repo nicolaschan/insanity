@@ -10,6 +10,7 @@ use std::net::{SocketAddr, ToSocketAddrs};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use uuid::Uuid;
 use veq::veq::{ConnectionInfo, VeqSessionAlias, VeqSocket};
 
@@ -288,7 +289,8 @@ async fn wait_for_peer_info(sidechannel: &mut OnionSidechannel) -> AugmentedInfo
         match sidechannel.peer_info().await {
             Ok(info) => return info,
             Err(e) => {
-                log::debug!("Error receving peer info: {}", e);
+                log::debug!("Error receiving peer info: {}", e);
+                sleep(duration::from_secs(1)).await;
             }
         }
     }
