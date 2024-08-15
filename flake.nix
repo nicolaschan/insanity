@@ -17,6 +17,7 @@
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
+            iroh
             rustup
             gcc
             alsa-lib
