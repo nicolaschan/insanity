@@ -4,204 +4,237 @@ use std::sync::{
 };
 
 use insanity_tui::{AppEvent, Peer, PeerState};
-use itertools::Itertools;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 
-use crate::{
-    clerver::start_clerver,
-    protocol::{ConnectionManager, OnionAddress, ProtocolMessage},
-};
+use crate::{clerver::run_clerver, connection_manager::AugmentedInfo, protocol::ProtocolMessage};
 
+#[derive(Clone, Debug)]
+pub enum ConnectionStatus {
+    Disabled,
+    Connecting,
+    Connected,
+}
+
+#[derive(Clone)]
 pub struct ManagedPeer {
-    address: OnionAddress,
+    id: uuid::Uuid,
+    connection_info: veq::veq::ConnectionInfo,
+    socket: VeqSocket,
+    shutdown_tx: broadcast::Sender<()>,
+    peer_message_tx: broadcast::Sender<ProtocolMessage>,
+    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+    connection_status: Arc<Mutex<ConnectionStatus>>,
+    display_name: String,
     denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
-    socket: VeqSocket,
-    conn_manager: Arc<ConnectionManager>,
-    ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
-    peer_message_sender: broadcast::Sender<ProtocolMessage>,
-    shutdown_tx: broadcast::Sender<()>,
-    enabled: Arc<AtomicBool>,
 }
 
 impl ManagedPeer {
-    pub async fn new(
-        address: OnionAddress,
+    pub fn new(
+        id: uuid::Uuid,
+        connection_info: veq::veq::ConnectionInfo,
+        socket: VeqSocket,
+        app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+        display_name: String,
         denoise: bool,
         volume: usize,
-        socket: VeqSocket,
-        conn_manager: Arc<ConnectionManager>,
-        ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
-    ) -> Self {
+    ) -> ManagedPeer {
         let (shutdown_tx, _shutdown_rx) = broadcast::channel(10);
-        let (peer_message_sender, _) = broadcast::channel(10);
-        Self {
-            address,
+        let (peer_message_tx, _) = broadcast::channel(10);
+        ManagedPeer {
             denoise: Arc::new(AtomicBool::new(denoise)),
             volume: Arc::new(Mutex::new(volume)),
-            socket,
-            conn_manager,
-            ui_sender,
-            peer_message_sender,
+            connection_info,
+            display_name,
             shutdown_tx,
-            enabled: Arc::new(AtomicBool::new(false)),
+            peer_message_tx,
+            socket,
+            app_event_tx,
+            id,
+            connection_status: Arc::new(Mutex::new(ConnectionStatus::Disabled)),
         }
     }
 
-    pub async fn set_denoise(&self, denoise: bool) {
+    pub fn set_info(&mut self, info: AugmentedInfo) {
+        self.connection_info = info.connection_info;
+        self.display_name = info.display_name;
+    }
+
+    pub fn info(&self) -> AugmentedInfo {
+        AugmentedInfo {
+            connection_info: self.connection_info.clone(),
+            display_name: self.display_name.clone(),
+        }
+    }
+
+    pub fn connection_status(&self) -> ConnectionStatus {
+        let connection_status = self.connection_status.lock().unwrap();
+        connection_status.clone()
+    }
+
+    pub fn set_denoise(&self, denoise: bool) -> anyhow::Result<()> {
         self.denoise.store(denoise, Ordering::Relaxed);
-        if let Some(sender) = &self.ui_sender {
-            sender
-                .send(AppEvent::SetPeerDenoise(self.address.to_string(), denoise))
-                .unwrap();
+        if let &Some(ref app_event_tx) = &self.app_event_tx {
+            app_event_tx.send(AppEvent::SetPeerDenoise(self.id.to_string(), denoise))?;
         }
+        Ok(())
     }
 
-    pub async fn set_volume(&self, volume: usize) {
-        let ui_sender = self.ui_sender.clone();
-        let address = self.address.to_string();
+    pub fn set_volume(&self, volume: usize) -> anyhow::Result<()> {
         let mut volume_guard = self.volume.lock().unwrap();
         *volume_guard = volume;
-        if let Some(sender) = ui_sender {
-            sender
-                .send(AppEvent::SetPeerVolume(address, volume))
-                .unwrap();
+        if let &Some(ref app_event_tx) = &self.app_event_tx {
+            app_event_tx.send(AppEvent::SetPeerVolume(self.id.to_string(), volume))?;
         }
+        Ok(())
     }
 
-    pub fn send_message(&self, message: String) {
+    pub fn send_message(&self, message: String) -> anyhow::Result<()> {
         let protocol_message = ProtocolMessage::ChatMessage(message);
-        if self.peer_message_sender.receiver_count() > 0 {
-            self.peer_message_sender.send(protocol_message).unwrap();
+        if self.peer_message_tx.receiver_count() > 0 {
+            self.peer_message_tx.send(protocol_message)?;
         }
+        Ok(())
     }
 
-    pub async fn enable(&self) {
-        let address = self.address.clone();
-        let conn_manager = self.conn_manager.clone();
-        let ui_sender = self.ui_sender.clone();
-        let peer_message_sender = self.peer_message_sender.clone();
-        let denoise = self.denoise.clone();
-        let volume = self.volume.clone();
-        let display_name = conn_manager.cached_display_name(&address);
-
-        let peer = Peer::new(
-            address.to_string(),
-            display_name,
-            PeerState::Disconnected,
-            self.denoise.load(Ordering::Relaxed),
-            *self.volume.lock().unwrap(),
-        );
-
-        if let Some(sender) = &self.ui_sender {
-            sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
-        }
-
-        let socket = self.socket.clone();
-
+    pub fn enable(&self) {
+        let id = self.id.clone();
         let mut shutdown_rx = self.shutdown_tx.subscribe();
+        let peer = self.clone();
         tokio::spawn(async move {
-            let (inner_tx, _inner_rx) = broadcast::channel(10);
-            loop {
-                log::info!("Beginning connect loop to peer {}", address);
-                tokio::select! {
-                    _ = tokio::spawn(connect(address.clone(), conn_manager.clone(), ui_sender.clone(), peer_message_sender.subscribe(), denoise.clone(), volume.clone(), socket.clone(), inner_tx.subscribe())) => {},
-                    _ = shutdown_rx.recv() => {
-                        inner_tx.send(()).unwrap();
-                        break;
-                    }
-                }
-                log::info!("Lost connection to peer {}", address);
-                if let Some(sender) = &ui_sender {
-                    sender.send(AppEvent::AddPeer(peer.clone())).unwrap();
+            tokio::select! {
+                _ = run_connection_loop(peer) => {
+                    log::debug!("Connection loop to {id} ended early.");
+                },
+                _ = shutdown_rx.recv() => {
+                    log::debug!("Stopping connection loop to {id}.");
                 }
             }
         });
     }
 
-    pub async fn disable(&self) {
-        log::info!("Disable peer {:?}", self.address);
-        if self.shutdown_tx.send(()).is_ok() {
-            log::info!("Disabled peer {:?}", self.address);
-        } else {
-            log::info!(
-                "Failed to disable peer {:?}. Peer likely not running in the first place.",
-                self.address
-            );
+    pub fn disable(&self) -> anyhow::Result<()> {
+        self.shutdown_tx.send(())?;
+        log::info!("Disabled peer: {}", self.id);
+
+        if let Ok(mut connection_status) = self.connection_status.lock() {
+            *connection_status = ConnectionStatus::Disabled;
         }
-        self.enabled.store(false, Ordering::Relaxed);
-        if let Some(sender) = &self.ui_sender {
-            sender
-                .send(AppEvent::AddPeer(Peer::new(
-                    self.address.to_string(),
-                    self.conn_manager.cached_display_name(&self.address),
-                    PeerState::Disabled,
-                    self.denoise.load(Ordering::Relaxed),
-                    *self.volume.lock().unwrap(),
-                )))
-                .unwrap();
+
+        if let &Some(ref app_event_tx) = &self.app_event_tx {
+            if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                self.id.to_string(),
+                Some(self.display_name.clone()),
+                PeerState::Disabled,
+                self.denoise.load(Ordering::Relaxed),
+                *self.volume.lock().unwrap(),
+            ))) {
+                log::debug!("Failed to send app event: {:?}", e);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Should never terminate.
+async fn run_connection_loop(peer: ManagedPeer) {
+    let ip_addresses: Vec<String> = peer
+        .connection_info
+        .addresses
+        .iter()
+        .map(|ip_addr| ip_addr.to_string())
+        .collect();
+
+    loop {
+        log::info!("Beginning connect loop to peer {}", peer.id);
+
+        if let Ok(mut connection_status) = peer.connection_status.lock() {
+            *connection_status = ConnectionStatus::Connecting;
+        }
+
+        let mut socket = peer.socket.clone();
+        tokio::select! {
+            session = socket.connect(peer.id, peer.info().connection_info.clone()) => {
+                // Start and block on clerver.
+                if let Ok(session) = session {
+                    log::debug!("Connected to {}", peer.id);
+
+                    if let Ok(mut connection_status) = peer.connection_status.lock() {
+                        *connection_status = ConnectionStatus::Connected;
+                    }
+
+                    if let &Some(ref app_event_tx) = &peer.app_event_tx {
+                        if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                            peer.id.to_string(),
+                            Some(peer.display_name.clone()),
+                            PeerState::Connected(session.remote_addr().await.to_string()),
+                            peer.denoise.load(Ordering::Relaxed),
+                            *peer.volume.lock().unwrap(),
+                        ))) {
+                            log::debug!("Failed to send app event: {:?}", e);
+                        }
+                    }
+
+                    log::info!("Starting clerver for connection with {}.", peer.id);
+                    run_clerver(
+                        session,
+                        peer.app_event_tx.clone(),
+                        peer.peer_message_tx.subscribe(),
+                        peer.denoise.clone(),
+                        peer.volume.clone(),
+                        peer.id,
+                    )
+                    .await;
+                }
+            },
+            _ = update_app_connecting_status(
+                peer.id,
+                peer.display_name.clone(),
+                peer.denoise.clone(),
+                peer.volume.clone(),
+                ip_addresses.clone(),
+                peer.app_event_tx.clone()
+            ) => {
+                log::debug!("Connecting status updater ended early.");
+             },
         }
     }
 }
 
-async fn connect(
-    address: OnionAddress,
-    conn_manager: Arc<ConnectionManager>,
-    ui_sender: Option<mpsc::UnboundedSender<AppEvent>>,
-    peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
+/// Cycles through connection info and sends to app. Should never terminate.
+async fn update_app_connecting_status(
+    id: uuid::Uuid,
+    display_name: String,
     denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
-    mut socket: VeqSocket,
-    mut shutdown_receiver: broadcast::Receiver<()>,
+    ip_addresses: Vec<String>,
+    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
 ) {
-    log::info!("Connecting to peer {:?}", address);
-    if let Some((session, info)) = tokio::select! {
-        res = conn_manager.session(&mut socket, &address) => res,
-        _x = async {
-            if let Some(ref sender) = ui_sender {
-                let mut index = 0;
-                loop {
-                    if let Some(cached_peer_info) = conn_manager.cached_peer_info(&address) {
-                        let ip_addresses_sorted = cached_peer_info.conn_info.addresses.iter().sorted().collect::<Vec<_>>();
-                        let ip_address = ip_addresses_sorted.get(index).map(|x| x.to_string()).unwrap_or("".to_string());
-                        sender.send(AppEvent::AddPeer(Peer::new(
-                            address.clone().to_string(),
-                            Some(cached_peer_info.display_name.clone()),
-                            PeerState::Connecting(ip_address),
-                            denoise.load(Ordering::Relaxed),
-                            *volume.lock().unwrap(),
-                        ))).unwrap();
-                        index = (index + 1) % ip_addresses_sorted.len();
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
-            }
-        } => { return; },
-        _ = shutdown_receiver.recv() => { return; }
-    } {
-        log::info!("Connected to peer {:?}", address);
-        if let Some(ref sender) = ui_sender {
-            sender
-                .send(AppEvent::AddPeer(Peer::new(
-                    address.clone().to_string(),
-                    Some(info.display_name.clone()),
-                    PeerState::Connected(session.remote_addr().await.to_string()),
+    if ip_addresses.is_empty() {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
+        }
+    } else if let Some(app_event_tx) = app_event_tx {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            for ip_address in ip_addresses.iter() {
+                interval.tick().await;
+                if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                    id.to_string(),
+                    Some(display_name.clone()),
+                    PeerState::Connecting(ip_address.clone()),
                     denoise.load(Ordering::Relaxed),
                     *volume.lock().unwrap(),
-                )))
-                .unwrap();
+                ))) {
+                    log::debug!("Failed to send app event: {:?}", e);
+                }
+            }
         }
-        start_clerver(
-            session,
-            ui_sender,
-            peer_message_receiver,
-            denoise.clone(),
-            volume,
-            address.clone(),
-            shutdown_receiver,
-        )
-        .await;
-        log::info!("Connection closed with {}", address);
+    } else {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
+        }
     }
 }
