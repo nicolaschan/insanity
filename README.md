@@ -10,36 +10,27 @@
 
 An experimental peer-to-peer voice chat application with a terminal UI. Written and intended for learning and fun, not recommended for serious use-cases.
 
-## Usage
+## Running insanity
 
 Choose an option:
 
 1. **Binary download**: Click the badge above for your system. Go to the latest successful run and download the build artifact.
+   ```
+   insanity --bridge <BAYBRIDGE_SERVER> --room <ROOM>
+   ```
 2. **Nix**
    ```
-   nix run github:nicolaschan/insanity
+   nix run github:nicolaschan/insanity -- --bridge <BAYBRIDGE_SERVER> --room <ROOM>
    ```
 3. **Build from source**
    ```
-   cargo run --release
+   cargo run --release -- --bridge <BAYBRIDGE_SERVER> --room <ROOM>
    ```
    and keep installing missing system libraries until it works
 
-## Signaling Server
+## Running the Bay Bridge Server
 
-Install the iroh-cli. E.g., with nix, do `nix shell nixpkgs#iroh`
-
-Then:
-```
-iroh start
-```
-In a seperate shell:
-```
-iroh console
-doc new --switch
-doc share write
-```
-Copy the output text. This is the `room`.
+Install [Bay Bridge](https://github.com/nicolaschan/baybridge) and run `baybridge serve`.
 
 ## Features
 - NAT holepunch connections
