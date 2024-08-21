@@ -73,10 +73,10 @@ async fn main() -> anyhow::Result<()> {
 
     let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
         let (x, y, z) = insanity_tui::start_tui().await.unwrap();
-        // TODO: set this to a write doc token for the room.
-        x.send(AppEvent::SetOwnAddress(
-            opts.room.clone().unwrap_or("its me, roomless".to_string()),
-        ))?;
+        x.send(AppEvent::SetServer(opts.bridge.clone()))?;
+        if let Some(room) = opts.room.clone() {
+            x.send(AppEvent::SetRoom(room))?;
+        }
         x.send(AppEvent::SetOwnDisplayName(display_name.clone()))?;
         (Some(x), Some(y), Some(z))
     } else {

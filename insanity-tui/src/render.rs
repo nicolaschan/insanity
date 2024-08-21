@@ -9,10 +9,8 @@ use tui::{
 };
 
 use crate::{
-    App, Editor, Peer, 
-    TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, 
-    DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY,
-    TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
+    App, Editor, Peer, DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY, TAB_IDX_CHAT,
+    TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
 };
 
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
@@ -93,17 +91,13 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         Style::default()
     };
 
-    let denoise_symbol = if peer.denoised {
-        "🤫"
-    } else {
-        "🫨"
-    };
+    let denoise_symbol = if peer.denoised { "🤫" } else { "🫨" };
 
     let attributes = Cell::from(Spans::from(vec![Span::styled(
         format!("{}", peer.volume),
         Style::default().fg(match peer.state {
             crate::PeerState::Connected(_) => Color::White,
-            _ => Color::DarkGray
+            _ => Color::DarkGray,
         }),
     )]));
 
@@ -115,8 +109,9 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             Cell::from(Spans::from(vec![
                 Span::styled(display_name, style.fg(CONNECTED)),
                 Span::styled(" <-> ", style.fg(Color::DarkGray)),
-                Span::styled(format!("{}", address), style.fg(Color::Yellow))
-            ])).style(style)
+                Span::styled(format!("{}", address), style.fg(Color::Yellow)),
+            ]))
+            .style(style),
         ]),
         &crate::PeerState::Disconnected => Row::new(vec![
             Cell::from(denoise_symbol),
@@ -139,8 +134,9 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             Cell::from(Spans::from(vec![
                 Span::styled(display_name, style.fg(CONNECTING)),
                 Span::styled(" --> ", style.fg(Color::DarkGray)),
-                Span::styled(format!("{}", address), style.fg(Color::DarkGray))
-            ])).style(style)
+                Span::styled(format!("{}", address), style.fg(Color::DarkGray)),
+            ]))
+            .style(style),
         ]),
     }
 }
@@ -196,7 +192,8 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .iter()
         .map(|(key, help_str)| peer_command_help_entry(*key, help_str))
         .fold("   ".to_string(), |acc, x| acc + &x);
-    let commands = Paragraph::new(text).block(Block::default().style(Style::default().fg(Color::DarkGray)));
+    let commands =
+        Paragraph::new(text).block(Block::default().style(Style::default().fg(Color::DarkGray)));
     f.render_widget(commands, chunks[1]);
 }
 
@@ -327,7 +324,7 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         &app.chat_history,
         app.chat_offset,
         &app.peers,
-        &app.own_address,
+        &app.own_public_key,
         &app.own_display_name,
         &chunks[0],
     )
@@ -340,19 +337,56 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
 fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+        .constraints(
+            [
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ]
+            .as_ref(),
+        )
         .split(area);
-    let widget = Paragraph::new(vec![match app.own_address.as_ref() {
-        Some(addr) => Spans::from(vec![
-            Span::styled("Your address: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(addr.to_string(), Style::default().fg(Color::LightBlue)),
+
+    let server_widget = Paragraph::new(vec![match app.server.as_ref() {
+        Some(server) => Spans::from(vec![
+            Span::styled("Server: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(server.to_string(), Style::default().fg(Color::LightBlue)),
         ]),
         None => Spans::from(vec![Span::styled(
-            "Waiting for tor...".to_string(),
+            "Server: no server specified...".to_string(),
             Style::default().fg(Color::DarkGray),
         )]),
     }])
     .block(default_block())
     .style(Style::default().fg(Color::White));
-    f.render_widget(widget, chunks[0]);
+    f.render_widget(server_widget, chunks[0]);
+
+    let room_widget = Paragraph::new(vec![match app.room.as_ref() {
+        Some(room) => Spans::from(vec![
+            Span::styled("Room: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(room.to_string(), Style::default().fg(Color::LightBlue)),
+        ]),
+        None => Spans::from(vec![Span::styled(
+            "Room: no room specified...".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )]),
+    }])
+    .block(default_block())
+    .style(Style::default().fg(Color::White));
+    f.render_widget(room_widget, chunks[1]);
+
+    let public_key_widget = Paragraph::new(vec![match app.own_public_key.as_ref() {
+        Some(key) => Spans::from(vec![
+            Span::styled("Your public key: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(key.to_string(), Style::default().fg(Color::LightBlue)),
+        ]),
+        None => Spans::from(vec![Span::styled(
+            "Your public key: waiting to connect to server...".to_string(),
+            Style::default().fg(Color::DarkGray),
+        )]),
+    }])
+    .block(default_block())
+    .style(Style::default().fg(Color::White));
+    f.render_widget(public_key_widget, chunks[2]);
 }

@@ -5,7 +5,7 @@ use crate::connection_manager::AugmentedInfo;
 
 use baybridge::client::Actions;
 
-/// Find peer connection info on the Iroh document room_ticket
+/// Find peer connection info on the Bay Bridge room
 /// and send it over the conn_info_tx channel.
 pub async fn start_room_connection(
     action: Actions,
@@ -64,7 +64,7 @@ async fn retrieve_peers(
                 continue;
             }
             let Ok(info) = serde_json::from_str::<AugmentedInfo>(&info) else {
-                log::debug!("Failed to parse contents of Iroh entry into AugmentedInfo.");
+                log::debug!("Failed to parse contents of response into AugmentedInfo.");
                 continue;
             };
             log::debug!("Got info: {:?}", info);

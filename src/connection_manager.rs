@@ -65,19 +65,29 @@ impl ConnectionManager {
 
         let conn_info_tx = manage_peers(
             self.socket.clone(),
-            app_event_tx,
+            app_event_tx.clone(),
             user_action_rx,
             self.cancellation_token.clone(),
         );
 
         if let &Some(ref room_name) = &room_name {
-            log::debug!("Attempting to join room {room_name}.");
+            log::debug!("Attempting to join room {room_name} on server {bridge_server}.");
+
+            // Start up baybridge connection.
             let baybridge_datadir = base_dir.join("baybridge");
             let connection = Connection::Http(HttpConnection::new(bridge_server));
             let baybridge_config =
                 baybridge::configuration::Configuration::new(baybridge_datadir.clone(), connection);
             baybridge_config.init().await?;
             let action = Actions::new(baybridge_config);
+
+            // Query self and add to UI.
+            if let Some(app_event_tx) = app_event_tx {
+                let my_public_key = action.whoami().await;
+                app_event_tx.send(AppEvent::SetOwnPublicKey(my_public_key))?;
+            }
+
+            // Start connection to room on baybridge.
             room_handler::start_room_connection(
                 action,
                 room_name,

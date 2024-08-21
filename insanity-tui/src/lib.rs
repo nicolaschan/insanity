@@ -102,8 +102,10 @@ pub enum AppEvent {
     PreviousWord,
     NextWord,
     DeleteWord,
-    SetOwnAddress(String),
+    SetOwnPublicKey(String),
     SetOwnDisplayName(String),
+    SetServer(String),
+    SetRoom(String),
     Down,
     Up,
     TogglePeer,
@@ -128,8 +130,10 @@ pub struct App {
     pub tab_index: usize,
     pub killed: bool,
     pub peers: BTreeMap<String, Peer>, // (Onion Address, Peer)
-    pub own_address: Option<String>,
+    pub own_public_key: Option<String>,
     pub own_display_name: Option<String>,
+    pub server: Option<String>,
+    pub room: Option<String>,
     pub editor: Editor,
     pub peer_index: usize,
     pub chat_history: Vec<(String, String)>, // (Display Name, Message)
@@ -145,8 +149,10 @@ impl App {
             tab_index: 0,
             killed: false,
             peers: BTreeMap::new(),
-            own_address: None,
+            own_public_key: None,
             own_display_name: None,
+            server: None,
+            room: None,
             editor: Editor::new(),
             peer_index: 0,
             chat_history: vec![],
@@ -242,12 +248,18 @@ impl App {
             AppEvent::DeleteWord => {
                 self.editor.delete_word();
             }
-            AppEvent::SetOwnAddress(address) => {
-                self.own_address = Some(address);
+            AppEvent::SetOwnPublicKey(address) => {
+                self.own_public_key = Some(address);
             }
             AppEvent::SetOwnDisplayName(display_name) => {
                 self.own_display_name = Some(display_name);
             }
+            AppEvent::SetServer(server) => {
+                self.server = Some(server);
+            },
+            AppEvent::SetRoom(room) => {
+                self.room = Some(room);
+            },
             AppEvent::Down => match self.tab_index {
                 TAB_IDX_PEERS => {
                     self.peer_index = std::cmp::min(
@@ -326,7 +338,7 @@ impl App {
         if !self.editor.is_empty() {
             let message = self.editor.clear();
             let default = "Me".to_string();
-            let own_address = self.own_address.clone().unwrap_or(default);
+            let own_address = self.own_public_key.clone().unwrap_or(default);
             self.add_message((own_address, message.clone()));
             self.user_action_sender
                 .send(UserAction::SendMessage(message))
