@@ -12,6 +12,8 @@ use tokio_util::sync::CancellationToken;
 use crate::managed_peer::{ConnectionStatus, ManagedPeer};
 use veq::snow_types::SnowPublicKey;
 
+use baybridge::{client::Actions, connectors::{connection::Connection, http::HttpConnection}};
+
 use crate::room_handler;
 
 const DB_KEY_PRIVATE_KEY: &'static str = "private_key";
@@ -63,12 +65,17 @@ impl ConnectionManager {
 
         if let &Some(ref room_ticket) = &room_ticket {
             log::debug!("Attempting to join room {room_ticket}.");
-            let iroh_path = base_dir.join("iroh");
+            let baybridge_path = base_dir.join("baybridge");
+            let connection = Connection::Http(HttpConnection::new(room_ticket));
+            let baybridge_config = baybridge::configuration::Configuration::new(
+                baybridge_path.clone(), connection
+            );
+            baybridge_config.init().await?;
+            let action = Actions::new(baybridge_config);
             room_handler::start_room_connection(
-                room_ticket,
+                action,
                 connection_info,
                 display_name,
-                &iroh_path,
                 conn_info_tx,
                 self.cancellation_token.clone(),
             )
