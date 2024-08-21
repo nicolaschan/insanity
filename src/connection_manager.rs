@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
+    path::PathBuf,
+};
 
 use insanity_tui::{AppEvent, UserAction};
 
@@ -176,12 +180,10 @@ impl ConnectionManagerBuilder {
 
         // Create local socket.
         let keypair: SnowKeypair = get_or_make_keypair(&db)?;
-        let socket = VeqSocket::bind_with_keypair(
-            // (std::net::Ipv4Addr::UNSPECIFIED, self.listen_port),
-            (std::net::Ipv6Addr::UNSPECIFIED, self.listen_port),
-            keypair,
-        )
-        .await?;
+
+        let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.listen_port);
+        let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
+        let socket = VeqSocket::dualstack_with_keypair(v4_addr, v6_addr, keypair).await?;
 
         let (user_action_tx, user_action_rx) = mpsc::unbounded_channel();
         let mut connection_manager = ConnectionManager {
