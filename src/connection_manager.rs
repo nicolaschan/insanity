@@ -12,7 +12,10 @@ use tokio_util::sync::CancellationToken;
 use crate::managed_peer::{ConnectionStatus, ManagedPeer};
 use veq::snow_types::SnowPublicKey;
 
-use baybridge::{client::Actions, connectors::{connection::Connection, http::HttpConnection}};
+use baybridge::{
+    client::Actions,
+    connectors::{connection::Connection, http::HttpConnection},
+};
 
 use crate::room_handler;
 
@@ -26,14 +29,17 @@ pub struct AugmentedInfo {
 
 pub struct ConnectionManager {
     socket: VeqSocket,
-    db: sled::Db,
     cancellation_token: CancellationToken,
     user_action_tx: mpsc::UnboundedSender<UserAction>,
 }
 
 impl ConnectionManager {
-    pub fn builder(base_dir: PathBuf, listen_port: u16) -> ConnectionManagerBuilder {
-        return ConnectionManagerBuilder::new(base_dir, listen_port);
+    pub fn builder(
+        base_dir: PathBuf,
+        listen_port: u16,
+        bridge_server: &str,
+    ) -> ConnectionManagerBuilder {
+        return ConnectionManagerBuilder::new(base_dir, listen_port, bridge_server.to_string());
     }
 
     pub fn shutdown(&self) {
@@ -47,7 +53,8 @@ impl ConnectionManager {
 
     async fn start(
         &mut self,
-        room_ticket: Option<String>,
+        bridge_server: &str,
+        room_name: Option<String>,
         base_dir: PathBuf,
         display_name: Option<String>,
         app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
@@ -63,17 +70,17 @@ impl ConnectionManager {
             self.cancellation_token.clone(),
         );
 
-        if let &Some(ref room_ticket) = &room_ticket {
-            log::debug!("Attempting to join room {room_ticket}.");
-            let baybridge_path = base_dir.join("baybridge");
-            let connection = Connection::Http(HttpConnection::new(room_ticket));
-            let baybridge_config = baybridge::configuration::Configuration::new(
-                baybridge_path.clone(), connection
-            );
+        if let &Some(ref room_name) = &room_name {
+            log::debug!("Attempting to join room {room_name}.");
+            let baybridge_datadir = base_dir.join("baybridge");
+            let connection = Connection::Http(HttpConnection::new(bridge_server));
+            let baybridge_config =
+                baybridge::configuration::Configuration::new(baybridge_datadir.clone(), connection);
             baybridge_config.init().await?;
             let action = Actions::new(baybridge_config);
             room_handler::start_room_connection(
                 action,
+                room_name,
                 connection_info,
                 display_name,
                 conn_info_tx,
@@ -91,27 +98,33 @@ impl ConnectionManager {
 pub struct ConnectionManagerBuilder {
     base_dir: PathBuf,
     listen_port: u16,
-    room_ticket: Option<String>,
+    bridge_server: String,
+    room_name: Option<String>,
     display_name: Option<String>,
     cancellation_token: Option<CancellationToken>,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
 }
 
 impl ConnectionManagerBuilder {
-    pub fn new(base_dir: PathBuf, listen_port: u16) -> ConnectionManagerBuilder {
+    pub fn new(
+        base_dir: PathBuf,
+        listen_port: u16,
+        bridge_server: String,
+    ) -> ConnectionManagerBuilder {
         ConnectionManagerBuilder {
             base_dir,
             listen_port,
-            room_ticket: None,
+            bridge_server,
+            room_name: None,
             display_name: None,
             cancellation_token: None,
             app_event_sender: None,
         }
     }
 
-    pub fn room(self, room_ticket: String) -> ConnectionManagerBuilder {
+    pub fn room(self, room_name: String) -> ConnectionManagerBuilder {
         ConnectionManagerBuilder {
-            room_ticket: Some(room_ticket),
+            room_name: Some(room_name),
             ..self
         }
     }
@@ -163,13 +176,13 @@ impl ConnectionManagerBuilder {
         let (user_action_tx, user_action_rx) = mpsc::unbounded_channel();
         let mut connection_manager = ConnectionManager {
             socket,
-            db,
             cancellation_token,
             user_action_tx,
         };
         connection_manager
             .start(
-                self.room_ticket,
+                &self.bridge_server,
+                self.room_name,
                 self.base_dir,
                 self.display_name,
                 self.app_event_sender,
