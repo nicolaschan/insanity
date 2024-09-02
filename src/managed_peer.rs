@@ -3,6 +3,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
+use bon::bon;
 use insanity_tui::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
@@ -31,7 +32,9 @@ pub struct ManagedPeer {
     volume: Arc<Mutex<usize>>,
 }
 
+#[bon]
 impl ManagedPeer {
+    #[builder]
     pub fn new(
         id: uuid::Uuid,
         connection_info: veq::veq::ConnectionInfo,

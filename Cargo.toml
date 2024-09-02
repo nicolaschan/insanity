@@ -32,3 +32,4 @@ baybridge = { git = "https://github.com/nicolaschan/baybridge.git" }
 itertools = "0.12.1"
 anyhow = "1.0.82"
 tokio-util = { version = "0.7.10", features = ["full"] }
+bon = "2.1.0"

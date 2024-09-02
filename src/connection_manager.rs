@@ -290,16 +290,16 @@ fn update_peer_info(
         }
         None => {
             // If new peer, add to managed peers.
-            let managed_peer = ManagedPeer::new(
-                id,
-                new_info.connection_info,
-                socket,
-                app_event_tx,
-                new_info.display_name,
-                true,
-                100,
-                sender_is_muted,
-            );
+            let managed_peer = ManagedPeer::builder()
+                .id(id)
+                .connection_info(new_info.connection_info)
+                .socket(socket)
+                .maybe_app_event_tx(app_event_tx)
+                .display_name(new_info.display_name)
+                .denoise(false)
+                .volume(100)
+                .sender_is_muted(sender_is_muted)
+                .build();
             managed_peers.insert(id, managed_peer.clone());
             Some(managed_peer)
         }
