@@ -32,6 +32,7 @@ pub const MOVE_DOWN_PEER_LIST_KEY: char = 'j';
 pub const MOVE_UP_PEER_LIST_KEY: char = 'k';
 pub const MOVE_TOP_PEER_LIST_KEY: char = 'g';
 pub const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
+pub const MUTE_KEY: char = 'm';
 
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
@@ -113,6 +114,7 @@ pub enum AppEvent {
     ToggleDenoise,
     SetPeerDenoise(String, bool),
     SetPeerVolume(String, usize),
+    MuteSelf(bool),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -123,6 +125,7 @@ pub enum UserAction {
     EnableDenoise(String),
     SetVolume(String, usize),
     SendMessage(String),
+    SetMuteSelf(bool),
 }
 
 pub struct App {
@@ -141,6 +144,7 @@ pub struct App {
     pub chat_history: Vec<(String, String)>, // (Display Name, Message)
     pub unread_messages: bool,
     pub chat_offset: usize, // Offset from bottom of chat in full messages.
+    pub mute_self: bool,
 }
 
 impl App {
@@ -161,6 +165,7 @@ impl App {
             chat_history: vec![],
             unread_messages: false,
             chat_offset: 0,
+            mute_self: false,
         }
     }
 
@@ -207,6 +212,9 @@ impl App {
                     }
                     MOVE_BOTTOM_PEER_LIST_KEY => {
                         self.peer_index = self.peers.len() - 1;
+                    }
+                    MUTE_KEY => {
+                        self.toggle_mute_self();
                     }
                     _ => {}
                 },
@@ -259,13 +267,13 @@ impl App {
             }
             AppEvent::SetServer(server) => {
                 self.server = Some(server);
-            },
+            }
             AppEvent::SetRoom(room) => {
                 self.room = Some(room);
-            },
+            }
             AppEvent::SetRoomFingerprint(room_fingerprint) => {
                 self.room_fingerprint = Some(room_fingerprint);
-            },
+            }
             AppEvent::Down => match self.tab_index {
                 TAB_IDX_PEERS => {
                     self.peer_index = std::cmp::min(
@@ -305,6 +313,9 @@ impl App {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
                     peer.volume = volume;
                 }
+            }
+            AppEvent::MuteSelf(is_muted) => {
+                self.mute_self = is_muted;
             }
         }
     }
@@ -384,6 +395,13 @@ impl App {
         if self.tab_index == TAB_IDX_CHAT && self.chat_offset == 0 {
             self.unread_messages = false;
         }
+    }
+
+    fn toggle_mute_self(&mut self) {
+        self.mute_self = !self.mute_self;
+        self.user_action_sender
+            .send(UserAction::SetMuteSelf(self.mute_self))
+            .unwrap();
     }
 
     pub fn render<B: Backend>(&self, terminal: &mut Terminal<B>) -> io::Result<bool> {

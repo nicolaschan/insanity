@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use cpal::traits::{HostTrait, StreamTrait};
@@ -24,6 +25,7 @@ pub struct AudioFrame(u128, Vec<u8>);
 
 async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
     mut conn: VeqSessionAlias,
+    sender_is_muted: Arc<AtomicBool>,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
     let audio_receiver = make_receiver();
@@ -42,6 +44,10 @@ async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
             // .unwrap() is ok here because this type of audio receiver is "infinite"
             // and will delay on await instead of return None
             samples.push(audio_receiver.next().await.unwrap());
+        }
+
+        if sender_is_muted.load(Ordering::Relaxed) {
+            continue; // skip encoding and sending
         }
 
         // let samples: Vec<f32> = receiver.iter().take(AUDIO_CHUNK_SIZE * 2).collect();
@@ -117,11 +123,6 @@ async fn run_receiver(
         })
         .unwrap();
 
-    // println!(
-    //     "receiving sample_rate: {:?}, channels: {:?}",
-    //     config.sample_rate.0,
-    //     u16_to_channels(config.channels)
-    // );
     let mut decoder = Decoder::new(48000, u16_to_channels(config.channels)).unwrap();
 
     while let Ok(packet) = conn.recv().await {
@@ -156,6 +157,7 @@ async fn run_receiver(
 pub async fn run_clerver(
     conn: VeqSessionAlias,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
+    sender_is_muted: Arc<AtomicBool>,
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
@@ -164,6 +166,7 @@ pub async fn run_clerver(
     tokio::select! {
         _ = run_audio_sender(
             conn.clone(),
+            sender_is_muted,
             make_audio_receiver,
         ) => {
             log::debug!("Audio sender for {id} ended early.");

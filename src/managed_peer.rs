@@ -3,6 +3,7 @@ use std::sync::{
     Arc, Mutex,
 };
 
+use bon::bon;
 use insanity_tui::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
@@ -26,11 +27,14 @@ pub struct ManagedPeer {
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     connection_status: Arc<Mutex<ConnectionStatus>>,
     display_name: String,
+    sender_is_muted: Arc<AtomicBool>,
     denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
 }
 
+#[bon]
 impl ManagedPeer {
+    #[builder]
     pub fn new(
         id: uuid::Uuid,
         connection_info: veq::veq::ConnectionInfo,
@@ -39,12 +43,14 @@ impl ManagedPeer {
         display_name: String,
         denoise: bool,
         volume: usize,
+        sender_is_muted: Arc<AtomicBool>,
     ) -> ManagedPeer {
         let (shutdown_tx, _shutdown_rx) = broadcast::channel(10);
         let (peer_message_tx, _) = broadcast::channel(10);
         ManagedPeer {
             denoise: Arc::new(AtomicBool::new(denoise)),
             volume: Arc::new(Mutex::new(volume)),
+            sender_is_muted,
             connection_info,
             display_name,
             shutdown_tx,
@@ -181,6 +187,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                     run_clerver(
                         session,
                         peer.app_event_tx.clone(),
+                        peer.sender_is_muted.clone(),
                         peer.peer_message_tx.subscribe(),
                         peer.denoise.clone(),
                         peer.volume.clone(),
