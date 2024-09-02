@@ -107,6 +107,7 @@ pub enum AppEvent {
     SetOwnDisplayName(String),
     SetServer(String),
     SetRoom(String),
+    SetRoomFingerprint(String),
     Down,
     Up,
     TogglePeer,
@@ -137,6 +138,7 @@ pub struct App {
     pub own_display_name: Option<String>,
     pub server: Option<String>,
     pub room: Option<String>,
+    pub room_fingerprint: Option<String>,
     pub editor: Editor,
     pub peer_index: usize,
     pub chat_history: Vec<(String, String)>, // (Display Name, Message)
@@ -157,6 +159,7 @@ impl App {
             own_display_name: None,
             server: None,
             room: None,
+            room_fingerprint: None,
             editor: Editor::new(),
             peer_index: 0,
             chat_history: vec![],
@@ -267,6 +270,9 @@ impl App {
             }
             AppEvent::SetRoom(room) => {
                 self.room = Some(room);
+            }
+            AppEvent::SetRoomFingerprint(room_fingerprint) => {
+                self.room_fingerprint = Some(room_fingerprint);
             }
             AppEvent::Down => match self.tab_index {
                 TAB_IDX_PEERS => {
