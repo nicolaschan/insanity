@@ -25,4 +25,4 @@ tui = "0.17.0"
 textwrap = "0.15.0"
 
 [build-dependencies]
-built = { version = "0.7.4", features = ["git2"] }
+built = { version = "0.7.4", features = ["chrono", "git2"] }

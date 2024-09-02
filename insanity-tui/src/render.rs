@@ -355,7 +355,14 @@ mod built_info {
 fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(0)].as_ref())
+        .constraints(
+            [
+                Constraint::Length(5),
+                Constraint::Length(4),
+                Constraint::Min(0),
+            ]
+            .as_ref(),
+        )
         .split(area);
 
     let server_widget = Paragraph::new(vec![
@@ -389,15 +396,25 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
                 Style::default().fg(Color::DarkGray),
             )]),
         },
-        Spans::from(vec![
-            Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                built_info::GIT_VERSION.unwrap_or("unkown"),
-                Style::default().fg(Color::LightBlue),
-            ),
-        ]),
     ])
     .block(default_block())
     .style(Style::default().fg(Color::White));
     f.render_widget(server_widget, chunks[0]);
+
+    let version_widget = Paragraph::new(vec![
+        Spans::from(vec![
+            Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                built_info::GIT_VERSION.unwrap_or("unknown"),
+                Style::default().fg(Color::LightBlue),
+            ),
+        ]),
+        Spans::from(vec![
+            Span::styled("Target: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(built_info::TARGET, Style::default().fg(Color::LightBlue)),
+        ]),
+    ])
+    .block(default_block())
+    .style(Style::default().fg(Color::White));
+    f.render_widget(version_widget, chunks[1]);
 }
