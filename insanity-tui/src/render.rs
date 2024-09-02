@@ -132,8 +132,9 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             Cell::from(denoise_symbol),
             attributes,
             Cell::from(Spans::from(vec![
+                Span::styled("(DISCON) ", style.fg(Color::DarkGray)),
                 Span::styled(display_name, style.fg(CONNECTING)),
-                Span::styled(" (DISCON) --> ", style.fg(Color::DarkGray)),
+                Span::styled(" --> ", style.fg(Color::DarkGray)),
                 Span::styled(format!("{}", address), style.fg(Color::DarkGray)),
             ]))
             .style(style),
