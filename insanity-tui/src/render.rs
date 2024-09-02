@@ -357,7 +357,7 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Length(5),
+                Constraint::Length(6),
                 Constraint::Length(4),
                 Constraint::Min(0),
             ]
@@ -383,6 +383,19 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
             ]),
             None => Spans::from(vec![Span::styled(
                 "Room: no room specified...".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )]),
+        },
+        match app.room_fingerprint.as_ref() {
+            Some(room_fingerprint) => Spans::from(vec![
+                Span::styled("Room Fingerprint: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    room_fingerprint.to_string(),
+                    Style::default().fg(Color::LightBlue),
+                ),
+            ]),
+            None => Spans::from(vec![Span::styled(
+                "Room Fingerprint: no room fingerprint...".to_string(),
                 Style::default().fg(Color::DarkGray),
             )]),
         },

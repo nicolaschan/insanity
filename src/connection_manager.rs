@@ -86,9 +86,11 @@ impl ConnectionManager {
             let action = Actions::new(baybridge_config);
 
             // Query self and add to UI.
-            if let Some(app_event_tx) = app_event_tx {
+            if let Some(app_event_tx) = app_event_tx.clone() {
                 let my_public_key = action.whoami().await;
-                app_event_tx.send(AppEvent::SetOwnPublicKey(my_public_key))?;
+                if let Err(e) = app_event_tx.send(AppEvent::SetOwnPublicKey(my_public_key)) {
+                    log::debug!("Failed to write own public key to UI: {e}");
+                }
             }
 
             // Start connection to room on baybridge.
@@ -98,6 +100,7 @@ impl ConnectionManager {
                 connection_info,
                 display_name,
                 conn_info_tx,
+                app_event_tx.clone(),
                 self.cancellation_token.clone(),
             )
             .await?;
