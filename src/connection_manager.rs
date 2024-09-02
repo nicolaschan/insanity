@@ -23,7 +23,7 @@ use baybridge::{
 
 use crate::room_handler;
 
-const DB_KEY_PRIVATE_KEY: &'static str = "private_key";
+const DB_KEY_PRIVATE_KEY: &str = "private_key";
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AugmentedInfo {
@@ -43,7 +43,7 @@ impl ConnectionManager {
         listen_port: u16,
         bridge_server: &str,
     ) -> ConnectionManagerBuilder {
-        return ConnectionManagerBuilder::new(base_dir, listen_port, bridge_server.to_string());
+        ConnectionManagerBuilder::new(base_dir, listen_port, bridge_server.to_string())
     }
 
     pub fn shutdown(&self) {
@@ -74,7 +74,7 @@ impl ConnectionManager {
             self.cancellation_token.clone(),
         );
 
-        if let &Some(ref room_name) = &room_name {
+        if let Some(ref room_name) = &room_name {
             log::debug!("Attempting to join room {room_name} on server {bridge_server}.");
 
             // Start up baybridge connection.
@@ -172,7 +172,7 @@ impl ConnectionManagerBuilder {
 
     /// Creates the local socket, uploads connection info, and begins searching for connections.
     pub async fn start(self) -> anyhow::Result<ConnectionManager> {
-        let cancellation_token = self.cancellation_token.unwrap_or(CancellationToken::new());
+        let cancellation_token = self.cancellation_token.unwrap_or_default();
 
         // Create or open connection manager database.
         let sled_path = self.base_dir.join("connection_manager_data.sled");

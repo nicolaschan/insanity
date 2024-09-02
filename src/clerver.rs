@@ -5,8 +5,8 @@ use cpal::traits::{HostTrait, StreamTrait};
 use insanity_tui::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{broadcast, mpsc};
 use tokio::runtime::Handle;
+use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
 
 use crate::{
@@ -145,7 +145,7 @@ async fn run_receiver(
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
                 ProtocolMessage::ChatMessage(chat_message) => {
-                    if let &Some(ref app_event_sender) = &app_event_sender {
+                    if let Some(ref app_event_sender) = &app_event_sender {
                         app_event_sender
                             .send(AppEvent::NewMessage(id.clone(), chat_message))
                             .unwrap();

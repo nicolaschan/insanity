@@ -75,7 +75,7 @@ impl ManagedPeer {
 
     pub fn set_denoise(&self, denoise: bool) -> anyhow::Result<()> {
         self.denoise.store(denoise, Ordering::Relaxed);
-        if let &Some(ref app_event_tx) = &self.app_event_tx {
+        if let Some(ref app_event_tx) = &self.app_event_tx {
             app_event_tx.send(AppEvent::SetPeerDenoise(self.id.to_string(), denoise))?;
         }
         Ok(())
@@ -84,7 +84,7 @@ impl ManagedPeer {
     pub fn set_volume(&self, volume: usize) -> anyhow::Result<()> {
         let mut volume_guard = self.volume.lock().unwrap();
         *volume_guard = volume;
-        if let &Some(ref app_event_tx) = &self.app_event_tx {
+        if let Some(ref app_event_tx) = &self.app_event_tx {
             app_event_tx.send(AppEvent::SetPeerVolume(self.id.to_string(), volume))?;
         }
         Ok(())
@@ -99,7 +99,7 @@ impl ManagedPeer {
     }
 
     pub fn enable(&self) {
-        let id = self.id.clone();
+        let id = self.id;
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let peer = self.clone();
         tokio::spawn(async move {
@@ -122,7 +122,7 @@ impl ManagedPeer {
             *connection_status = ConnectionStatus::Disabled;
         }
 
-        if let &Some(ref app_event_tx) = &self.app_event_tx {
+        if let Some(ref app_event_tx) = &self.app_event_tx {
             if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
                 self.id.to_string(),
                 Some(self.display_name.clone()),
@@ -165,7 +165,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                         *connection_status = ConnectionStatus::Connected;
                     }
 
-                    if let &Some(ref app_event_tx) = &peer.app_event_tx {
+                    if let Some(ref app_event_tx) = &peer.app_event_tx {
                         if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
                             peer.id.to_string(),
                             Some(peer.display_name.clone()),
