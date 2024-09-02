@@ -135,7 +135,9 @@ fn renew_dir(dir: &PathBuf) -> anyhow::Result<()> {
 
     if version != BREAKING_CHANGE_VERSION {
         log::info!("Renewing insanity directory: found version {version} but code uses {BREAKING_CHANGE_VERSION}");
-        std::fs::remove_dir_all(dir)?;
+        if let Err(e) = std::fs::remove_dir_all(dir) {
+            log::debug!("Error on removing directory. Continuing anyway. Error {e}");
+        }
     }
 
     std::fs::create_dir_all(dir)?;
