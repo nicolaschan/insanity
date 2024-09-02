@@ -148,12 +148,9 @@ async fn run_receiver(
                     decoder
                         .decode_float(&packet[..], &mut buf[..], false)
                         .unwrap();
-                    // let audio_data = bincode::deserialize(&packet).unwrap();
                     let audio_format = AudioFormat::new(config.channels, config.sample_rate.0);
                     let chunk = AudioChunk::new(frame.0, audio_format, buf);
-                    // let chunk = AudioChunk::new(frame.0, audio_format, audio_data);
-                    let processor_clone = processor.clone();
-                    processor_clone.handle_incoming(chunk);
+                    processor.handle_incoming(chunk);
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
