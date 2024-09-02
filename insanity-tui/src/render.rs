@@ -356,66 +356,49 @@ mod built_info {
 fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ]
-            .as_ref(),
-        )
+        .constraints([Constraint::Length(6), Constraint::Min(0)].as_ref())
         .split(area);
 
-    let server_widget = Paragraph::new(vec![match app.server.as_ref() {
-        Some(server) => Spans::from(vec![
-            Span::styled("Server: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(server.to_string(), Style::default().fg(Color::LightBlue)),
+    let server_widget = Paragraph::new(vec![
+        match app.server.as_ref() {
+            Some(server) => Spans::from(vec![
+                Span::styled("Server: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(server.to_string(), Style::default().fg(Color::LightBlue)),
+            ]),
+            None => Spans::from(vec![Span::styled(
+                "Server: no server specified...".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )]),
+        },
+        match app.room.as_ref() {
+            Some(room) => Spans::from(vec![
+                Span::styled("Room: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(room.to_string(), Style::default().fg(Color::LightBlue)),
+            ]),
+            None => Spans::from(vec![Span::styled(
+                "Room: no room specified...".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )]),
+        },
+        match app.own_public_key.as_ref() {
+            Some(key) => Spans::from(vec![
+                Span::styled("Your public key: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(key.to_string(), Style::default().fg(Color::LightBlue)),
+            ]),
+            None => Spans::from(vec![Span::styled(
+                "Your public key: waiting to connect to server...".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )]),
+        },
+        Spans::from(vec![
+            Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                built_info::GIT_VERSION.unwrap_or("unkown"),
+                Style::default().fg(Color::LightBlue),
+            ),
         ]),
-        None => Spans::from(vec![Span::styled(
-            "Server: no server specified...".to_string(),
-            Style::default().fg(Color::DarkGray),
-        )]),
-    }])
+    ])
     .block(default_block())
     .style(Style::default().fg(Color::White));
     f.render_widget(server_widget, chunks[0]);
-
-    let room_widget = Paragraph::new(vec![match app.room.as_ref() {
-        Some(room) => Spans::from(vec![
-            Span::styled("Room: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(room.to_string(), Style::default().fg(Color::LightBlue)),
-        ]),
-        None => Spans::from(vec![Span::styled(
-            "Room: no room specified...".to_string(),
-            Style::default().fg(Color::DarkGray),
-        )]),
-    }])
-    .block(default_block())
-    .style(Style::default().fg(Color::White));
-    f.render_widget(room_widget, chunks[1]);
-
-    let public_key_widget = Paragraph::new(vec![match app.own_public_key.as_ref() {
-        Some(key) => Spans::from(vec![
-            Span::styled("Your public key: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(key.to_string(), Style::default().fg(Color::LightBlue)),
-        ]),
-        None => Spans::from(vec![Span::styled(
-            "Your public key: waiting to connect to server...".to_string(),
-            Style::default().fg(Color::DarkGray),
-        )]),
-    }])
-    .block(default_block())
-    .style(Style::default().fg(Color::White));
-    f.render_widget(public_key_widget, chunks[2]);
-
-    let version_text = built_info::GIT_VERSION.unwrap_or("unknown");
-    let version_widget = Paragraph::new(vec![Spans::from(vec![
-        Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(version_text, Style::default().fg(Color::LightBlue)),
-    ])])
-    .block(default_block())
-    .style(Style::default().fg(Color::White));
-    f.render_widget(version_widget, chunks[3]);
 }
