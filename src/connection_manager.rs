@@ -299,7 +299,7 @@ fn update_peer_info(
                 .socket(socket)
                 .maybe_app_event_tx(app_event_tx)
                 .display_name(new_info.display_name)
-                .denoise(false)
+                .denoise(true)
                 .volume(100)
                 .sender_is_muted(sender_is_muted)
                 .build();
