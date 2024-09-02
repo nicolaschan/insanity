@@ -349,11 +349,16 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     f.render_widget(editor_widget, chunks[1]);
 }
 
+mod built_info {
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}
+
 fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
+                Constraint::Length(3),
                 Constraint::Length(3),
                 Constraint::Length(3),
                 Constraint::Length(3),
@@ -404,4 +409,13 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     .block(default_block())
     .style(Style::default().fg(Color::White));
     f.render_widget(public_key_widget, chunks[2]);
+
+    let version_text = built_info::GIT_VERSION.unwrap_or("unknown");
+    let version_widget = Paragraph::new(vec![Spans::from(vec![
+        Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(version_text, Style::default().fg(Color::LightBlue)),
+    ])])
+    .block(default_block())
+    .style(Style::default().fg(Color::White));
+    f.render_widget(version_widget, chunks[3]);
 }
