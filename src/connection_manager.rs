@@ -340,6 +340,9 @@ fn handle_user_action(
                 }
             }
         }
+        UserAction::SetMuteSelf(_is_muted) => {
+            todo!()
+        }
     }
     Ok(())
 }
