@@ -193,7 +193,7 @@ pub struct AudioProcessor<'a> {
     volume: Arc<Mutex<usize>>,
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
-    audio_receiver: Mutex<ResampledAudioReceiver<RealtimeAudioReceiver>>,
+    audio_receiver: tokio::sync::Mutex<ResampledAudioReceiver<RealtimeAudioReceiver>>,
     handle: Handle,
 }
 
@@ -212,7 +212,7 @@ impl AudioProcessor<'_> {
             enable_denoise,
             volume,
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
-            audio_receiver: Mutex::new(audio_receiver),
+            audio_receiver: tokio::sync::Mutex::new(audio_receiver),
             chunk_buffer,
             handle,
         }
@@ -243,7 +243,7 @@ impl AudioProcessor<'_> {
         // LOL this is insane maybe we should use channels or something proper
         self.handle.block_on(async {
             for val in to_fill.iter_mut() {
-                let mut audio_receiver_guard = self.audio_receiver.lock().unwrap();
+                let mut audio_receiver_guard = self.audio_receiver.lock().await;
                 *val = match audio_receiver_guard.next().await {
                     None => Sample::from(&0.0), // cry b/c there's no packets
                     Some(sample) => Sample::from(&sample),
