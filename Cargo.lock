@@ -1801,6 +1801,7 @@ dependencies = [
  "clap 4.5.16",
  "cpal",
  "dirs",
+ "ecoji",
  "ed25519-dalek",
  "fern",
  "insanity-tui",

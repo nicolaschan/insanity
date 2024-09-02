@@ -61,8 +61,9 @@ async fn action_set(
     };
 
     // Set to key
-    let serialized_signed_value = serde_json::to_string(&signed_value)?;
-    if let Err(e) = action.set(key, serialized_signed_value).await {
+    let mut serialized_signed_value: &[u8] = &bincode::serialize(&signed_value)?;
+    let encoded_signed_value = ecoji::encode_to_string(&mut serialized_signed_value)?;
+    if let Err(e) = action.set(key, encoded_signed_value).await {
         anyhow::bail!("Failed to set value to baybridge with error: {e}");
     }
 
@@ -99,7 +100,8 @@ fn verify_and_decrypt(
     info: String,
 ) -> anyhow::Result<AugmentedInfo> {
     // Deserialize to SignedValue
-    let signed_value: SignedValue = serde_json::from_str(&info)?;
+    let serialized_signed_value = ecoji::decode_to_vec(&mut info.as_bytes())?;
+    let signed_value: SignedValue = bincode::deserialize(&serialized_signed_value)?;
 
     // Verify signature
     verifying_key.verify_strict(&signed_value.msg, &signed_value.signature)?;
