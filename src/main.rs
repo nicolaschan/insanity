@@ -66,8 +66,8 @@ async fn main() -> anyhow::Result<()> {
     log::info!("Starting insanity");
 
     let display_name = format!(
-        "{}@{}",
-        whoami::username(),
+        "{} [{}]",
+        whoami::realname(),
         whoami::fallible::hostname().unwrap_or(String::from("unknown"))
     );
 
