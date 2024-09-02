@@ -16,7 +16,6 @@ use crate::{
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
 const SELECTED: Color = Color::Rgb(80, 80, 80);
 const CONNECTED: Color = Color::Green; //Color::Rgb(0, 255, 0);
-const CONNECTING: Color = Color::Rgb(0, 255, 255);
 
 // Gruvbox (mostly) dark theme
 const COLOR_RED: Color = Color::Rgb(0xfb, 0x49, 0x34); // Color::Rgb(0xcc, 0x24, 0x1d);
@@ -109,7 +108,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             Cell::from(Spans::from(vec![
                 Span::styled(display_name, style.fg(CONNECTED)),
                 Span::styled(" <-> ", style.fg(Color::DarkGray)),
-                Span::styled(format!("{}", address), style.fg(Color::Yellow)),
+                Span::styled(format!("{}", address), style.fg(Color::Cyan)),
             ]))
             .style(style),
         ]),
