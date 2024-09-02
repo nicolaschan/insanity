@@ -5,6 +5,13 @@ use crate::connection_manager::AugmentedInfo;
 
 use baybridge::client::Actions;
 
+use chacha20poly1305::{ChaCha20Poly1305, Nonce, aead::OsRng, aead::KeyInit};
+
+use argon2::Argon2;
+
+const ENCRYPTION_KEY_SALT: [u8; 22] = *b"insanityencryptionsalt";
+const SIGNING_SALT: [u8; 23] = *b"insanityroomsigningsalt";
+
 /// Find peer connection info on the Bay Bridge room
 /// and send it over the conn_info_tx channel.
 pub async fn start_room_connection(
@@ -15,6 +22,26 @@ pub async fn start_room_connection(
     conn_info_tx: mpsc::UnboundedSender<AugmentedInfo>,
     cancellation_token: CancellationToken,
 ) -> anyhow::Result<()> {
+
+    // Set up room encryption cipher
+    let argon = Argon2::default();
+    let mut encryption_key = [0u8; 32];
+    if let Err(e) = argon.hash_password_into(room_name.as_bytes(), &ENCRYPTION_KEY_SALT, &mut encryption_key) {
+        anyhow::bail!(e);
+    }
+    let cipher = ChaCha20Poly1305::new(&encryption_key.into());
+
+
+
+
+    // let mut signing_key_material = [0u8; 32];
+    // if let Err(e) = argon.hash_password_into(room_name.as_bytes(), &SIGNING_SALT, &mut signing_key_material) {
+    //     anyhow::bail!(e);
+    // }
+
+
+
+
     // Write self to server.
     // TODO: handle default name better
     let info = AugmentedInfo {
@@ -22,6 +49,9 @@ pub async fn start_room_connection(
         display_name: display_name.clone().unwrap_or("missing_name".to_string()),
     };
     let json_info = serde_json::to_string(&info)?;
+
+
+
     let set_self_res = action.set(room_name.to_string(), json_info).await;
     // TODO: keep trying to write self and don't proceed otherwise.
     match set_self_res {
