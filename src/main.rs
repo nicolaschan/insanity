@@ -5,6 +5,10 @@ use insanity::connection_manager::ConnectionManager;
 use insanity_tui::AppEvent;
 use tokio_util::sync::CancellationToken;
 
+// Update this number if there is a breaking change.
+// This will cause the insanity directory to be renewed.
+static BREAKING_CHANGE_VERSION: &str = "1";
+
 #[derive(Parser, Debug)]
 #[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Opts {
@@ -44,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
             .expect("no data directory!?")
             .join("insanity"),
     };
-    std::fs::create_dir_all(&insanity_dir).expect("could not create insanity data directory");
+    renew_dir(&insanity_dir)?;
 
     let log_path = insanity_dir.join("insanity.log");
     println!("Logging to {:?}", log_path);
@@ -119,5 +123,22 @@ async fn main() -> anyhow::Result<()> {
     main_cancellation_token.cancel();
     tokio::time::sleep(Duration::from_millis(10)).await;
 
+    Ok(())
+}
+
+fn renew_dir(dir: &PathBuf) -> anyhow::Result<()> {
+    let version_file = dir.join("version");
+    let version = match std::fs::read_to_string(&version_file) {
+        Ok(v) => v,
+        Err(_) => String::from("0"),
+    };
+
+    if version != BREAKING_CHANGE_VERSION {
+        log::info!("Renewing insanity directory: found version {version} but code uses {BREAKING_CHANGE_VERSION}");
+        std::fs::remove_dir_all(dir)?;
+    }
+
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(&version_file, BREAKING_CHANGE_VERSION)?;
     Ok(())
 }
