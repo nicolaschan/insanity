@@ -113,6 +113,7 @@ pub enum AppEvent {
     ToggleDenoise,
     SetPeerDenoise(String, bool),
     SetPeerVolume(String, usize),
+    MuteSelf(bool),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -306,6 +307,9 @@ impl App {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
                     peer.volume = volume;
                 }
+            }
+            AppEvent::MuteSelf(is_muted) => {
+                self.mute_self = is_muted;
             }
         }
     }

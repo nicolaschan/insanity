@@ -158,13 +158,27 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
         .split(area);
 
+    let muted = if app.mute_self { "🔇" } else { "🔊" };
+    let you_text = if app.mute_self {
+        " (you: MUTED)"
+    } else {
+        " (you)"
+    };
+
+    let name_style = Style::default().fg(Color::Magenta);
+    let name_style = if app.mute_self {
+        name_style.add_modifier(Modifier::CROSSED_OUT)
+    } else {
+        name_style
+    };
+
     let self_row = match &app.own_display_name {
         Some(display_name) => vec![Row::new(vec![
             Cell::from(""),
-            Cell::from(""),
+            Cell::from(muted),
             Cell::from(Spans::from(vec![
-                Span::styled(display_name, Style::default().fg(Color::Magenta)),
-                Span::styled(" (you)", Style::default().fg(Color::DarkGray)),
+                Span::styled(display_name, name_style),
+                Span::styled(you_text, Style::default().fg(Color::DarkGray)),
             ])),
         ])],
         None => vec![],

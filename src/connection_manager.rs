@@ -2,6 +2,10 @@ use std::{
     collections::HashMap,
     net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
     path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use insanity_tui::{AppEvent, UserAction};
@@ -214,6 +218,7 @@ fn manage_peers(
 ) -> mpsc::UnboundedSender<AugmentedInfo> {
     // Channel for the manage_peers task to receive updated peers info.
     let (conn_info_tx, mut conn_info_rx) = mpsc::unbounded_channel::<AugmentedInfo>();
+    let sender_is_muted = Arc::new(AtomicBool::new(false));
     tokio::spawn(async move {
         let mut managed_peers: HashMap<uuid::Uuid, ManagedPeer> = HashMap::new();
         loop {
@@ -224,14 +229,15 @@ fn manage_peers(
                         continue;
                     }
                     let id = snow_public_keys_to_uuid(&socket.connection_info().public_key, &augmented_info.connection_info.public_key);
-                    if let Some(managed_peer) = update_peer_info(id, augmented_info, socket.clone(), app_event_tx.clone(), &mut managed_peers) {
+                    if let Some(managed_peer) = update_peer_info(
+                        id, augmented_info, socket.clone(), app_event_tx.clone(), &mut managed_peers, sender_is_muted.clone()) {
                         log::debug!("Updated peer info for {id} to: {:?}", managed_peer.info());
                         log::debug!("(Re)Connecting to peer {id}.");
                         reconnect(managed_peer);
                     }
                 },
                 Some(user_action) = user_action_rx.recv() => {
-                    if let Err(e) = handle_user_action(user_action, &mut managed_peers) {
+                    if let Err(e) = handle_user_action(user_action, sender_is_muted.clone(), app_event_tx.clone(), &mut managed_peers) {
                         log::debug!("Failed to handle user action: {:?}", e);
                     }
                 }
@@ -270,6 +276,7 @@ fn update_peer_info(
     socket: veq::veq::VeqSocket,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
+    sender_is_muted: Arc<AtomicBool>,
 ) -> Option<ManagedPeer> {
     match managed_peers.get_mut(&id) {
         Some(current_managed_peer) => {
@@ -291,6 +298,7 @@ fn update_peer_info(
                 new_info.display_name,
                 true,
                 100,
+                sender_is_muted,
             );
             managed_peers.insert(id, managed_peer.clone());
             Some(managed_peer)
@@ -300,6 +308,8 @@ fn update_peer_info(
 
 fn handle_user_action(
     user_action: UserAction,
+    sender_is_muted: Arc<AtomicBool>,
+    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {
     match user_action {
@@ -340,8 +350,13 @@ fn handle_user_action(
                 }
             }
         }
-        UserAction::SetMuteSelf(_is_muted) => {
-            todo!()
+        UserAction::SetMuteSelf(is_muted) => {
+            sender_is_muted.store(is_muted, Ordering::Relaxed);
+            if let Some(app_event_tx) = app_event_tx {
+                if let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted)) {
+                    log::debug!("Failed to send mute self event: {:?}", e);
+                }
+            }
         }
     }
     Ok(())

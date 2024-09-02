@@ -1,9 +1,9 @@
+use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
 use insanity_tui::AppEvent;
-use log::{debug, info};
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
@@ -25,7 +25,7 @@ pub struct AudioFrame(u128, Vec<u8>);
 
 async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
     mut conn: VeqSessionAlias,
-    mut set_muted: tokio::sync::mpsc::Receiver<bool>,
+    sender_is_muted: Arc<AtomicBool>,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
 ) {
     let audio_receiver = make_receiver();
@@ -37,8 +37,6 @@ async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
     let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
     let mut sequence_number = 0;
 
-    let mut is_muted = false;
-
     loop {
         let mut samples = Vec::new();
         let sample_count = AUDIO_CHUNK_SIZE * channels_count as usize;
@@ -48,12 +46,7 @@ async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
             samples.push(audio_receiver.next().await.unwrap());
         }
 
-        if let Ok(set_muted) = set_muted.try_recv() {
-            debug!("set_muted: {}", set_muted);
-            is_muted = set_muted;
-        }
-
-        if is_muted {
+        if sender_is_muted.load(Ordering::Relaxed) {
             continue; // skip encoding and sending
         }
 
@@ -130,11 +123,6 @@ async fn run_receiver(
         })
         .unwrap();
 
-    // println!(
-    //     "receiving sample_rate: {:?}, channels: {:?}",
-    //     config.sample_rate.0,
-    //     u16_to_channels(config.channels)
-    // );
     let mut decoder = Decoder::new(48000, u16_to_channels(config.channels)).unwrap();
 
     while let Ok(packet) = conn.recv().await {
@@ -169,7 +157,7 @@ async fn run_receiver(
 pub async fn run_clerver(
     conn: VeqSessionAlias,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
-    set_muted: tokio::sync::mpsc::Receiver<bool>,
+    sender_is_muted: Arc<AtomicBool>,
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
     enable_denoise: Arc<AtomicBool>,
     volume: Arc<Mutex<usize>>,
@@ -178,7 +166,7 @@ pub async fn run_clerver(
     tokio::select! {
         _ = run_audio_sender(
             conn.clone(),
-            set_muted,
+            sender_is_muted,
             make_audio_receiver,
         ) => {
             log::debug!("Audio sender for {id} ended early.");
