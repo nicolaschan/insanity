@@ -34,3 +34,5 @@ anyhow = "1.0.82"
 tokio-util = { version = "0.7.10", features = ["full"] }
 argon2 = "0.5.3"
 chacha20poly1305 = "0.10.1"
+blake3 = "1.5.4"
+ed25519-dalek = { version = "2.1.1", features = ["serde"] }
