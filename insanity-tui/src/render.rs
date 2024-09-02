@@ -159,12 +159,27 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
         .split(area);
 
+    let self_row = match &app.own_display_name {
+        Some(display_name) => vec![Row::new(vec![
+            Cell::from(""),
+            Cell::from(""),
+            Cell::from(Spans::from(vec![
+                Span::styled(display_name, Style::default().fg(Color::Magenta)),
+                Span::styled(" (you)", Style::default().fg(Color::DarkGray)),
+            ])),
+        ])],
+        None => vec![],
+    };
     let rows: Vec<Row> = app
         .peers
         .values()
         .enumerate()
         .map(|(i, peer)| peer_row(peer, i == app.peer_index))
         .collect();
+    let rows = self_row
+        .into_iter()
+        .chain(rows.into_iter())
+        .collect::<Vec<_>>();
     let peer_list = Table::new(rows)
         .style(Style::default().fg(Color::White))
         .widths(&[
