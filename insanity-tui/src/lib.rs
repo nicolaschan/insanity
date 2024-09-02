@@ -32,6 +32,7 @@ pub const MOVE_DOWN_PEER_LIST_KEY: char = 'j';
 pub const MOVE_UP_PEER_LIST_KEY: char = 'k';
 pub const MOVE_TOP_PEER_LIST_KEY: char = 'g';
 pub const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
+pub const MUTE_KEY: char = 'm';
 
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
@@ -256,10 +257,10 @@ impl App {
             }
             AppEvent::SetServer(server) => {
                 self.server = Some(server);
-            },
+            }
             AppEvent::SetRoom(room) => {
                 self.room = Some(room);
-            },
+            }
             AppEvent::Down => match self.tab_index {
                 TAB_IDX_PEERS => {
                     self.peer_index = std::cmp::min(
