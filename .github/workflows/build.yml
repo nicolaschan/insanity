@@ -10,8 +10,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: sudo apt-get install -y libasound2-dev
+    - name: Test
+      run: cargo test --verbose
+
   linux-gnu:
     runs-on: ubuntu-latest
+    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Install dependencies
@@ -28,6 +38,7 @@ jobs:
 
   linux-musl:
     runs-on: ubuntu-latest
+    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Docker Build
@@ -44,6 +55,7 @@ jobs:
 
   macos-apple-silicon:
     runs-on: macos-latest
+    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
@@ -60,6 +72,7 @@ jobs:
 
   windows-mingw:
     runs-on: windows-latest
+    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
@@ -76,6 +89,7 @@ jobs:
 
   windows-msvc:
     runs-on: windows-latest
+    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
@@ -92,13 +106,14 @@ jobs:
 
   nix:
     runs-on: ubuntu-latest
+    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Install Nix
       uses: cachix/install-nix-action@v13
       with:
         nix_path: nixpkgs=channel:nixos-unstable
-    - name: NixOS Build
+    - name: Nix Build
       run: nix --extra-experimental-features nix-command --extra-experimental-features flakes build
     - name: Upload build result
       uses: actions/upload-artifact@v4.3.1
