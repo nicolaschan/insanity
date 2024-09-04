@@ -1,0 +1,109 @@
+name: Build
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-gnu:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: sudo apt-get install -y libasound2-dev
+    - name: Build
+      run: cargo build --release --verbose
+    - name: Test
+      run: cargo test --verbose
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-gnu
+        path: target/release/insanity
+
+  linux-musl:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Docker Build
+      run: docker build -t insanity-musl -f Dockerfile.alpine .
+    - name: Copy artifact
+      run: |
+        docker create --name temp-container insanity-musl
+        docker cp temp-container:/usr/local/cargo/bin/insanity ./insanity
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-musl
+        path: insanity
+
+  macos-apple-silicon:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rustup Toolchain
+      run: rustup toolchain install stable-aarch64-apple-darwin
+    - name: Rustup Target
+      run: rustup target add aarch64-apple-darwin
+    - name: Build
+      run: cargo +stable-aarch64-apple-darwin build --release --verbose --target aarch64-apple-darwin
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-apple-silicon
+        path: target/aarch64-apple-darwin/release/insanity
+
+  windows-mingw:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rustup Toolchain
+      run: rustup toolchain install --force-non-host stable-x86_64-pc-windows-gnu
+    - name: Rustup Target
+      run: rustup target add x86_64-pc-windows-gnu
+    - name: Build
+      run: cargo +stable-x86_64-pc-windows-gnu build --release --verbose --target x86_64-pc-windows-gnu
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-mingw.exe
+        path: target/x86_64-pc-windows-gnu/release/insanity.exe
+
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rustup Toolchain
+      run: rustup toolchain install stable-x86_64-pc-windows-msvc
+    - name: Rustup Target
+      run: rustup target add x86_64-pc-windows-msvc
+    - name: Build
+      run: cargo +stable-x86_64-pc-windows-msvc build --release --verbose --target x86_64-pc-windows-msvc
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity.exe
+        path: target/x86_64-pc-windows-msvc/release/insanity.exe
+
+  freebsd:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: sudo apt-get install -y pkg-config libasound2-dev
+    - name: Rustup Toolchain
+      run: rustup toolchain install stable-x86_64-unknown-freebsd
+    - name: Rustup Target
+      run: rustup target add x86_64-unknown-freebsd
+    - name: Build
+      run: cargo +stable-x86_64-unknown-freebsd build --release --verbose --target x86_64-unknown-freebsd
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-freebsd
+        path: target/x86_64-unknown-freebsd/release/insanity
