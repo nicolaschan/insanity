@@ -485,7 +485,7 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 [[package]]
 name = "baybridge"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/baybridge.git#9f727b76a25a40e61b7d77f86aa8a8c7fa04a7e2"
+source = "git+https://github.com/nicolaschan/baybridge.git#ce0d9fff2075e547ad4db4148f3f3d90bde7c62a"
 dependencies = [
  "anyhow",
  "axum",
