@@ -3,9 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use insanity_core::audio_source::{AudioSource, SyncAudioSource};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-
-use async_trait::async_trait;
 
 use crate::processor::{AudioChunk, AUDIO_CHANNELS};
 use crate::realtime_buffer::RealTimeBuffer;
@@ -79,61 +78,6 @@ fn find_stereo_input(
     something
 }
 
-// async fn start_clerver_with_ui<R: AudioReceiver + Send + 'static>(
-//     mut conn: NewConnection,
-//     denoise: bool,
-//     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
-//     ui_message_sender: crossbeam::channel::Sender<TuiEvent>,
-// ) {
-//     let peer_address = conn.connection.remote_address();
-//     if let Some(Ok(mut recv)) = conn.uni_streams.next().await {
-//         let message = ProtocolMessage::read_from_stream(&mut recv).await.unwrap();
-//         if let ProtocolMessage::IdentityDeclaration(identity) = message {
-//             if ui_message_sender
-//                 .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-//                     identity.canonical_name.clone(),
-//                     Peer {
-//                         name: identity.canonical_name,
-//                         status: PeerStatus::Connected(peer_address),
-//                     },
-//                 )))
-//                 .is_ok()
-//             {}
-//         }
-//     }
-//     start_clerver(conn, denoise, make_receiver).await;
-//     if ui_message_sender
-//         .send(TuiEvent::Message(TuiMessage::UpdatePeer(
-//             peer_address.to_string(),
-//             Peer {
-//                 name: peer_address.to_string(),
-//                 status: PeerStatus::Disconnected,
-//             },
-//         )))
-//         .is_ok()
-//     {}
-// }
-
-// pub async fn start_server_with_receiver<R: AudioReceiver + Send + 'static>(
-//     socket: VeqSocket,
-//     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
-//     config: InsanityConfig,
-// ) {
-//     loop {
-//         var incoming
-//         let incoming_conn = incoming.next().await.expect("1");
-//         let conn = incoming_conn.await.expect("2");
-//         let make_receiver_clone = make_receiver.clone();
-//         let ui_message_sender_clone = config.ui_message_sender.clone();
-//         tokio::spawn(start_clerver_with_ui(
-//             conn,
-//             config.denoise,
-//             make_receiver_clone,
-//             ui_message_sender_clone,
-//         ));
-//     }
-// }
-
 pub struct CpalStreamReceiver {
     #[allow(dead_code)]
     input_stream: send_safe::SendWrapperThread<Stream>,
@@ -142,19 +86,7 @@ pub struct CpalStreamReceiver {
     channels: u16,
 }
 
-#[async_trait]
-pub trait AudioReceiver {
-    async fn next(&mut self) -> Option<f32>;
-    fn sample_rate(&self) -> u32;
-    fn channels(&self) -> u16;
-}
-
-pub trait SyncAudioReceiver: AudioReceiver {
-    fn next_sync(&mut self) -> Option<f32>;
-}
-
-#[async_trait]
-impl AudioReceiver for CpalStreamReceiver {
+impl AudioSource for CpalStreamReceiver {
     async fn next(&mut self) -> Option<f32> {
         self.input_receiver.recv().await
     }
@@ -233,20 +165,20 @@ pub fn make_audio_receiver() -> CpalStreamReceiver {
 //     }
 // }
 
-pub struct RealtimeAudioReceiver {
+pub struct RealtimeAudioSource {
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
     sample_buffer: VecDeque<f32>,
     sample_rate: u32,
     channels: u16,
 }
 
-impl RealtimeAudioReceiver {
+impl RealtimeAudioSource {
     pub fn new(
         chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
         sample_rate: u32,
         channels: u16,
-    ) -> RealtimeAudioReceiver {
-        RealtimeAudioReceiver {
+    ) -> RealtimeAudioSource {
+        RealtimeAudioSource {
             chunk_buffer,
             sample_buffer: VecDeque::new(),
             sample_rate,
@@ -255,8 +187,7 @@ impl RealtimeAudioReceiver {
     }
 }
 
-#[async_trait]
-impl AudioReceiver for RealtimeAudioReceiver {
+impl AudioSource for RealtimeAudioSource {
     async fn next(&mut self) -> Option<f32> {
         self.next_sync()
     }
@@ -268,7 +199,7 @@ impl AudioReceiver for RealtimeAudioReceiver {
     }
 }
 
-impl SyncAudioReceiver for RealtimeAudioReceiver {
+impl SyncAudioSource for RealtimeAudioSource {
     fn next_sync(&mut self) -> Option<f32> {
         if self.sample_buffer.is_empty() {
             let mut buffer = self.chunk_buffer.lock().unwrap();

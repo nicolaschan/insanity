@@ -1869,7 +1869,6 @@ version = "1.1.9"
 dependencies = [
  "anyhow",
  "argon2",
- "async-trait",
  "baybridge",
  "bincode",
  "blake3",

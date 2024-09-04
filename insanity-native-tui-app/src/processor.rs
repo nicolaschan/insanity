@@ -6,13 +6,13 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use cpal::{Sample, SampleRate};
+use insanity_core::audio_source::SyncAudioSource;
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
 
 use crate::realtime_buffer::RealTimeBuffer;
-use crate::resampler::ResampledAudioReceiver;
-use crate::server::RealtimeAudioReceiver;
-use crate::server::SyncAudioReceiver;
+use crate::resampler::ResampledAudioSource;
+use crate::server::RealtimeAudioSource;
 
 pub const AUDIO_CHUNK_SIZE: usize = 480;
 pub const AUDIO_CHANNELS: u16 = 2;
@@ -192,7 +192,7 @@ pub struct AudioProcessor<'a> {
     volume: Arc<Mutex<usize>>,
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
-    audio_receiver: Mutex<ResampledAudioReceiver<RealtimeAudioReceiver>>,
+    audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
 }
 
 impl AudioProcessor<'_> {
@@ -202,8 +202,8 @@ impl AudioProcessor<'_> {
         output_sample_rate: SampleRate,
     ) -> Self {
         let chunk_buffer = Arc::new(Mutex::new(RealTimeBuffer::new(10)));
-        let audio_receiver = RealtimeAudioReceiver::new(chunk_buffer.clone(), 48000, 2);
-        let audio_receiver = ResampledAudioReceiver::new(audio_receiver, output_sample_rate.0);
+        let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone(), 48000, 2);
+        let audio_receiver = ResampledAudioSource::new(audio_receiver, output_sample_rate.0);
 
         AudioProcessor {
             enable_denoise,

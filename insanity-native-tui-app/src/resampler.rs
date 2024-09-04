@@ -1,16 +1,12 @@
 use std::{collections::VecDeque, sync::Mutex};
 
+use insanity_core::audio_source::{AudioSource, SyncAudioSource};
 use log::trace;
 use rubato::{Resampler, SincFixedIn};
 
-use async_trait::async_trait;
+use crate::processor::AUDIO_CHUNK_SIZE;
 
-use crate::{
-    processor::AUDIO_CHUNK_SIZE,
-    server::{AudioReceiver, SyncAudioReceiver},
-};
-
-pub struct ResampledAudioReceiver<R: AudioReceiver> {
+pub struct ResampledAudioSource<R: AudioSource> {
     resampler: Mutex<SincFixedIn<f32>>,
     resampled_buffer: VecDeque<f32>,
     original_samples_buffer: VecDeque<f32>,
@@ -18,8 +14,8 @@ pub struct ResampledAudioReceiver<R: AudioReceiver> {
     sample_rate: u32,
 }
 
-impl<R: AudioReceiver + Send + Sync> ResampledAudioReceiver<R> {
-    pub fn new(delegate: R, sample_rate: u32) -> ResampledAudioReceiver<R> {
+impl<R: AudioSource + Send + Sync> ResampledAudioSource<R> {
+    pub fn new(delegate: R, sample_rate: u32) -> ResampledAudioSource<R> {
         let params = rubato::InterpolationParameters {
             sinc_len: 256,
             f_cutoff: 0.95,
@@ -33,7 +29,7 @@ impl<R: AudioReceiver + Send + Sync> ResampledAudioReceiver<R> {
             AUDIO_CHUNK_SIZE,
             delegate.channels() as usize,
         );
-        ResampledAudioReceiver {
+        ResampledAudioSource {
             resampler: Mutex::new(resampler),
             resampled_buffer: VecDeque::new(),
             original_samples_buffer: VecDeque::new(),
@@ -65,8 +61,7 @@ fn interleave_channels(channels: &[Vec<f32>]) -> Vec<f32> {
     samples
 }
 
-#[async_trait]
-impl<R: AudioReceiver + Send> AudioReceiver for ResampledAudioReceiver<R> {
+impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
     async fn next(&mut self) -> Option<f32> {
         if self.delegate.sample_rate() == self.sample_rate {
             return self.delegate.next().await;
@@ -113,7 +108,7 @@ impl<R: AudioReceiver + Send> AudioReceiver for ResampledAudioReceiver<R> {
     }
 }
 
-impl<R: SyncAudioReceiver + Send> SyncAudioReceiver for ResampledAudioReceiver<R> {
+impl<R: SyncAudioSource + Send> SyncAudioSource for ResampledAudioSource<R> {
     fn next_sync(&mut self) -> Option<f32> {
         if self.delegate.sample_rate() == self.sample_rate {
             return self.delegate.next_sync();

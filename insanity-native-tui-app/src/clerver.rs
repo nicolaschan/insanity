@@ -3,6 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
+use insanity_core::audio_source::AudioSource;
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -13,8 +14,8 @@ use crate::{
     client::{get_output_config, setup_output_stream},
     processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
     protocol::ProtocolMessage,
-    resampler::ResampledAudioReceiver,
-    server::{make_audio_receiver, AudioReceiver},
+    resampler::ResampledAudioSource,
+    server::make_audio_receiver,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -22,7 +23,7 @@ pub struct AudioFrame(u128, Vec<u8>);
 
 // A clerver is a CLient + sERVER.
 
-async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
+async fn run_audio_sender<R: AudioSource + Send + Sync + 'static>(
     mut conn: VeqSessionAlias,
     sender_is_muted: Arc<AtomicBool>,
     make_receiver: impl (FnOnce() -> R) + Send + Clone + 'static,
@@ -32,7 +33,7 @@ async fn run_audio_sender<R: AudioReceiver + Send + Sync + 'static>(
     let channels_count = audio_receiver.channels();
     let channels = u16_to_channels(channels_count);
 
-    let mut audio_receiver = ResampledAudioReceiver::new(audio_receiver, 48000);
+    let mut audio_receiver = ResampledAudioSource::new(audio_receiver, 48000);
     let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
     let mut sequence_number = 0;
 
