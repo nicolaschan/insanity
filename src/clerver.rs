@@ -6,7 +6,6 @@ use cpal::traits::{HostTrait, StreamTrait};
 use insanity_tui::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
-use tokio::runtime::Handle;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
 
@@ -102,7 +101,6 @@ async fn run_receiver(
     let output_device = host.default_output_device().unwrap();
     let (sample_format, config) = get_output_config(&output_device);
     let processor = Arc::new(AudioProcessor::new(
-        Handle::current(),
         enable_denoise,
         volume,
         config.sample_rate,

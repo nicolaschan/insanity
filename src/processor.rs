@@ -8,12 +8,11 @@ use std::sync::{Arc, Mutex};
 use cpal::{Sample, SampleRate};
 use nnnoiseless::DenoiseState;
 use serde::{Deserialize, Serialize};
-use tokio::runtime::Handle;
 
 use crate::realtime_buffer::RealTimeBuffer;
 use crate::resampler::ResampledAudioReceiver;
-use crate::server::AudioReceiver;
 use crate::server::RealtimeAudioReceiver;
+use crate::server::SyncAudioReceiver;
 
 pub const AUDIO_CHUNK_SIZE: usize = 480;
 pub const AUDIO_CHANNELS: u16 = 2;
@@ -193,13 +192,11 @@ pub struct AudioProcessor<'a> {
     volume: Arc<Mutex<usize>>,
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
-    audio_receiver: tokio::sync::Mutex<ResampledAudioReceiver<RealtimeAudioReceiver>>,
-    handle: Handle,
+    audio_receiver: Mutex<ResampledAudioReceiver<RealtimeAudioReceiver>>,
 }
 
 impl AudioProcessor<'_> {
     pub fn new(
-        handle: Handle,
         enable_denoise: Arc<AtomicBool>,
         volume: Arc<Mutex<usize>>,
         output_sample_rate: SampleRate,
@@ -212,9 +209,8 @@ impl AudioProcessor<'_> {
             enable_denoise,
             volume,
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
-            audio_receiver: tokio::sync::Mutex::new(audio_receiver),
+            audio_receiver: Mutex::new(audio_receiver),
             chunk_buffer,
-            handle,
         }
     }
 
@@ -229,7 +225,7 @@ impl AudioProcessor<'_> {
         if volume != 100 {
             let mut audio_data = chunk.audio_data;
             let a: f32 = 0.2;
-            let volume_multiplier = a*((1.0 + 1.0/a).powf(volume as f32 / 100.0) - 1.0);
+            let volume_multiplier = a * ((1.0 + 1.0 / a).powf(volume as f32 / 100.0) - 1.0);
             for sample in audio_data.iter_mut() {
                 *sample *= volume_multiplier;
             }
@@ -242,14 +238,12 @@ impl AudioProcessor<'_> {
 
     pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
         // LOL this is insane maybe we should use channels or something proper
-        self.handle.block_on(async {
-            for val in to_fill.iter_mut() {
-                let mut audio_receiver_guard = self.audio_receiver.lock().await;
-                *val = match audio_receiver_guard.next().await {
-                    None => Sample::from(&0.0), // cry b/c there's no packets
-                    Some(sample) => Sample::from(&sample),
-                };
-            }
-        });
+        for val in to_fill.iter_mut() {
+            let mut audio_receiver_guard = self.audio_receiver.lock().unwrap();
+            *val = match audio_receiver_guard.next_sync() {
+                None => Sample::from(&0.0), // cry b/c there's no packets
+                Some(sample) => Sample::from(&sample),
+            };
+        }
     }
 }

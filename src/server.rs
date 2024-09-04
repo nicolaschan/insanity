@@ -149,6 +149,10 @@ pub trait AudioReceiver {
     fn channels(&self) -> u16;
 }
 
+pub trait SyncAudioReceiver: AudioReceiver {
+    fn next_sync(&mut self) -> Option<f32>;
+}
+
 #[async_trait]
 impl AudioReceiver for CpalStreamReceiver {
     async fn next(&mut self) -> Option<f32> {
@@ -254,6 +258,18 @@ impl RealtimeAudioReceiver {
 #[async_trait]
 impl AudioReceiver for RealtimeAudioReceiver {
     async fn next(&mut self) -> Option<f32> {
+        self.next_sync()
+    }
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+}
+
+impl SyncAudioReceiver for RealtimeAudioReceiver {
+    fn next_sync(&mut self) -> Option<f32> {
         if self.sample_buffer.is_empty() {
             let mut buffer = self.chunk_buffer.lock().unwrap();
             if let Some(chunk) = buffer.next_item() {
@@ -261,11 +277,5 @@ impl AudioReceiver for RealtimeAudioReceiver {
             }
         }
         self.sample_buffer.pop_front()
-    }
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-    fn channels(&self) -> u16 {
-        self.channels
     }
 }
