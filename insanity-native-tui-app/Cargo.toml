@@ -1,6 +1,6 @@
 [package]
 name = "insanity-tui-app"
-version = "1.1.5"
+version = "1.1.6"
 authors = ["Nicolas Chan <nicolas@nicolaschan.com>"]
 edition = "2018"
 
