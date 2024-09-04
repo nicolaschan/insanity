@@ -1888,6 +1888,7 @@ dependencies = [
  "nnnoiseless",
  "opus",
  "rubato",
+ "rubato-audio-source",
  "send_safe",
  "serde",
  "serde_json",
@@ -3082,6 +3083,15 @@ dependencies = [
  "num-integer",
  "num-traits",
  "realfft",
+]
+
+[[package]]
+name = "rubato-audio-source"
+version = "0.1.0"
+dependencies = [
+ "insanity-core",
+ "log",
+ "rubato",
 ]
 
 [[package]]

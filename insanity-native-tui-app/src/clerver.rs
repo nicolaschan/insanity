@@ -6,6 +6,7 @@ use cpal::traits::{HostTrait, StreamTrait};
 use insanity_core::audio_source::AudioSource;
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
+use rubato_audio_source::ResampledAudioSource;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
@@ -14,7 +15,6 @@ use crate::{
     client::{get_output_config, setup_output_stream},
     processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
     protocol::ProtocolMessage,
-    resampler::ResampledAudioSource,
     server::make_audio_receiver,
 };
 
@@ -33,7 +33,7 @@ async fn run_audio_sender<R: AudioSource + Send + Sync + 'static>(
     let channels_count = audio_receiver.channels();
     let channels = u16_to_channels(channels_count);
 
-    let mut audio_receiver = ResampledAudioSource::new(audio_receiver, 48000);
+    let mut audio_receiver = ResampledAudioSource::new(audio_receiver, 48000, AUDIO_CHUNK_SIZE);
     let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
     let mut sequence_number = 0;
 

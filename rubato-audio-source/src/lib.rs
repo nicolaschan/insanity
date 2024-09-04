@@ -1,21 +1,20 @@
-use std::{collections::VecDeque, sync::Mutex};
+use std::collections::VecDeque;
 
 use insanity_core::audio_source::{AudioSource, SyncAudioSource};
 use log::trace;
 use rubato::{Resampler, SincFixedIn};
 
-use crate::processor::AUDIO_CHUNK_SIZE;
-
 pub struct ResampledAudioSource<R: AudioSource> {
-    resampler: Mutex<SincFixedIn<f32>>,
+    resampler: SincFixedIn<f32>,
     resampled_buffer: VecDeque<f32>,
     original_samples_buffer: VecDeque<f32>,
     delegate: R,
     sample_rate: u32,
+    chunk_size: usize,
 }
 
 impl<R: AudioSource + Send + Sync> ResampledAudioSource<R> {
-    pub fn new(delegate: R, sample_rate: u32) -> ResampledAudioSource<R> {
+    pub fn new(delegate: R, sample_rate: u32, chunk_size: usize) -> ResampledAudioSource<R> {
         let params = rubato::InterpolationParameters {
             sinc_len: 256,
             f_cutoff: 0.95,
@@ -26,15 +25,16 @@ impl<R: AudioSource + Send + Sync> ResampledAudioSource<R> {
         let resampler = SincFixedIn::<f32>::new(
             sample_rate as f64 / delegate.sample_rate() as f64,
             params,
-            AUDIO_CHUNK_SIZE,
+            chunk_size,
             delegate.channels() as usize,
         );
         ResampledAudioSource {
-            resampler: Mutex::new(resampler),
+            resampler,
             resampled_buffer: VecDeque::new(),
             original_samples_buffer: VecDeque::new(),
             delegate,
             sample_rate,
+            chunk_size,
         }
     }
 }
@@ -68,10 +68,10 @@ impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
         }
         if self.resampled_buffer.is_empty() {
             // First, try to fill the original_samples buffer with enough samples to resample
-            let target_samples_count = AUDIO_CHUNK_SIZE * self.delegate.channels() as usize;
+            let target_samples_count = self.chunk_size * self.delegate.channels() as usize;
             trace!(
                 "Audio chunk size: {}, channels: {}, target samples count: {}",
-                AUDIO_CHUNK_SIZE,
+                self.chunk_size,
                 self.delegate.channels(),
                 target_samples_count
             );
@@ -91,8 +91,7 @@ impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
             let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
             let channels = separate_channels(&samples, self.delegate.channels() as usize);
             trace!("Separated into {} channels", channels.len());
-            let mut resampler_guard = self.resampler.lock().unwrap();
-            let resampled_channels = resampler_guard.process(&channels).unwrap();
+            let resampled_channels = self.resampler.process(&channels).unwrap();
             let resampled_samples = interleave_channels(&resampled_channels);
             self.resampled_buffer = resampled_samples.into();
         }
@@ -115,10 +114,10 @@ impl<R: SyncAudioSource + Send> SyncAudioSource for ResampledAudioSource<R> {
         }
         if self.resampled_buffer.is_empty() {
             // First, try to fill the original_samples buffer with enough samples to resample
-            let target_samples_count = AUDIO_CHUNK_SIZE * self.delegate.channels() as usize;
+            let target_samples_count = self.chunk_size * self.delegate.channels() as usize;
             trace!(
                 "Audio chunk size: {}, channels: {}, target samples count: {}",
-                AUDIO_CHUNK_SIZE,
+                self.chunk_size,
                 self.delegate.channels(),
                 target_samples_count
             );
@@ -138,8 +137,7 @@ impl<R: SyncAudioSource + Send> SyncAudioSource for ResampledAudioSource<R> {
             let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
             let channels = separate_channels(&samples, self.delegate.channels() as usize);
             trace!("Separated into {} channels", channels.len());
-            let mut resampler_guard = self.resampler.lock().unwrap();
-            let resampled_channels = resampler_guard.process(&channels).unwrap();
+            let resampled_channels = self.resampler.process(&channels).unwrap();
             let resampled_samples = interleave_channels(&resampled_channels);
             self.resampled_buffer = resampled_samples.into();
         }

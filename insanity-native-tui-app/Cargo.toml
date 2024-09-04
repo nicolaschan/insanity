@@ -26,6 +26,7 @@ serde_json = "1.0.114"
 rubato = "0.10"
 insanity-core = { path = "../insanity-core" }
 insanity-tui-adapter = { path = "../insanity-tui-adapter" }
+rubato-audio-source = { path = "../rubato-audio-source" }
 sha2 = "0.10.8"
 whoami = "1.5.1"
 sled = "0.34.7"

@@ -5,6 +5,5 @@ pub mod managed_peer;
 pub mod processor;
 pub mod protocol;
 pub mod realtime_buffer;
-pub mod resampler;
 pub mod room_handler;
 pub mod server;

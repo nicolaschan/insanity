@@ -1,0 +1,9 @@
+[package]
+name = "rubato-audio-source"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+insanity-core = { path = "../insanity-core" }
+log = "0.4.22"
+rubato = "0.10"
