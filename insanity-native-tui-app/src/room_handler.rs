@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::connection_manager::AugmentedInfo;
 
 use baybridge::client::Actions;
+use baybridge::models::Value;
 
 use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
@@ -61,9 +62,8 @@ async fn action_set(
     };
 
     // Set to key
-    let mut serialized_signed_value: &[u8] = &bincode::serialize(&signed_value)?;
-    let encoded_signed_value = ecoji::encode_to_string(&mut serialized_signed_value)?;
-    if let Err(e) = action.set(key, encoded_signed_value).await {
+    let serialized_signed_value: Vec<u8> = bincode::serialize(&signed_value)?;
+    if let Err(e) = action.set(key, serialized_signed_value.into()).await {
         anyhow::bail!("Failed to set value to baybridge with error: {e}");
     }
 
@@ -97,11 +97,10 @@ async fn set_own_info(
 fn verify_and_decrypt(
     cipher: &ChaCha20Poly1305,
     verifying_key: &VerifyingKey,
-    info: String,
+    info: Value,
 ) -> anyhow::Result<AugmentedInfo> {
     // Deserialize to SignedValue
-    let serialized_signed_value = ecoji::decode_to_vec(&mut info.as_bytes())?;
-    let signed_value: SignedValue = bincode::deserialize(&serialized_signed_value)?;
+    let signed_value: SignedValue = bincode::deserialize(info.as_bytes())?;
 
     // Verify signature
     verifying_key.verify_strict(&signed_value.msg, &signed_value.signature)?;
