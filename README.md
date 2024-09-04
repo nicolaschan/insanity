@@ -10,7 +10,7 @@ An experimental peer-to-peer voice chat application with a terminal UI. Written 
 
 Choose an option:
 
-1. **Binary download**: [Go to the latest release](https://github.com/nicolaschan/insanity/releases/) and download the build artifact for your system.
+1. **Binary download**: [Go to the latest release](https://github.com/nicolaschan/insanity/releases/) and download the binary for your system.
    ```
    insanity --bridge <BAYBRIDGE_SERVER> --room <ROOM>
    ```
