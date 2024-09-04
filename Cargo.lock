@@ -1846,11 +1846,11 @@ dependencies = [
 
 [[package]]
 name = "insanity-core"
-version = "1.1.4"
+version = "1.1.5"
 
 [[package]]
 name = "insanity-tui-adapter"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "built",
  "crossterm 0.23.2",
@@ -1861,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "insanity-tui-app"
-version = "1.1.4"
+version = "1.1.5"
 dependencies = [
  "anyhow",
  "argon2",

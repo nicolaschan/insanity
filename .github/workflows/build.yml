@@ -33,7 +33,7 @@ jobs:
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-gnu
+        name: insanity-linux-gnu
         path: target/release/insanity
 
   linux-musl:
@@ -50,7 +50,7 @@ jobs:
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-musl
+        name: insanity-linux-musl
         path: insanity
 
   macos-apple-silicon:
