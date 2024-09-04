@@ -31,6 +31,5 @@ COPY --from=opus-build /usr/local /usr/local
 RUN apk add --no-cache alsa-lib-dev opus-dev
 WORKDIR /usr/src/insanity
 COPY . .
-RUN cargo install --path .
+RUN cargo install --path insanity-native-tui-app
 ENTRYPOINT ["insanity"]
-
