@@ -101,7 +101,7 @@ impl<R: AudioReceiver + Send> AudioReceiver for ResampledAudioReceiver<R> {
             let resampled_samples = interleave_channels(&resampled_channels);
             self.resampled_buffer = resampled_samples.into();
         }
-        return self.resampled_buffer.pop_front();
+        self.resampled_buffer.pop_front()
     }
 
     fn sample_rate(&self) -> u32 {
@@ -148,6 +148,6 @@ impl<R: SyncAudioReceiver + Send> SyncAudioReceiver for ResampledAudioReceiver<R
             let resampled_samples = interleave_channels(&resampled_channels);
             self.resampled_buffer = resampled_samples.into();
         }
-        return self.resampled_buffer.pop_front();
+        self.resampled_buffer.pop_front()
     }
 }
