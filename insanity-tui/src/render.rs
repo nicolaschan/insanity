@@ -10,7 +10,7 @@ use tui::{
 
 use crate::{
     App, Editor, Peer, DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY, TAB_IDX_CHAT,
-    TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
+    TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY, MUTE_KEY
 };
 
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
@@ -211,6 +211,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         (TOGGLE_PEER_DENOISE_KEY, "toggle denoise"),
         (INCREMENT_PEER_VOLUME_KEY, "volume up"),
         (DECREMENT_PEER_VOLUME_KEY, "volume down"),
+        (MUTE_KEY, "toggle self mute"),
         // (MOVE_DOWN_PEER_LIST_KEY, "move down"),
         // (MOVE_UP_PEER_LIST_KEY, "move up"),
         // (MOVE_TOP_PEER_LIST_KEY, "move to top"),
