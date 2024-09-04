@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,7 +21,6 @@ jobs:
 
   linux-gnu:
     runs-on: ubuntu-latest
-    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Install dependencies
@@ -38,7 +37,6 @@ jobs:
 
   linux-musl:
     runs-on: ubuntu-latest
-    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Docker Build
@@ -55,7 +53,6 @@ jobs:
 
   macos-apple-silicon:
     runs-on: macos-latest
-    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
@@ -72,7 +69,6 @@ jobs:
 
   windows-mingw:
     runs-on: windows-latest
-    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
@@ -89,7 +85,6 @@ jobs:
 
   windows-msvc:
     runs-on: windows-latest
-    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
@@ -106,7 +101,6 @@ jobs:
 
   nix:
     runs-on: ubuntu-latest
-    needs: [test]
     steps:
     - uses: actions/checkout@v4
     - name: Install Nix
