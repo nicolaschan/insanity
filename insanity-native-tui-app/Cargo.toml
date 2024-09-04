@@ -3,6 +3,7 @@ name = "insanity-tui-app"
 version = "1.1.9"
 authors = ["Nicolas Chan <nicolas@nicolaschan.com>"]
 edition = "2018"
+default-run = "insanity"
 
 [[bin]]
 name = "insanity"
@@ -24,6 +25,7 @@ uuid = { version = "1.7", features = ["serde", "v4"] }
 dirs = "5.0.1"
 serde_json = "1.0.114"
 rubato = "0.10"
+insanity-core = { path = "../insanity-core" }
 insanity-tui-adapter = { path = "../insanity-tui-adapter" }
 sha2 = "0.10.8"
 whoami = "1.5.1"

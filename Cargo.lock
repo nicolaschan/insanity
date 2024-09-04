@@ -1847,6 +1847,9 @@ dependencies = [
 [[package]]
 name = "insanity-core"
 version = "1.1.9"
+dependencies = [
+ "bon",
+]
 
 [[package]]
 name = "insanity-tui-adapter"
@@ -1854,6 +1857,7 @@ version = "1.1.9"
 dependencies = [
  "built",
  "crossterm 0.23.2",
+ "insanity-core",
  "textwrap 0.15.2",
  "tokio",
  "tui",
@@ -1878,6 +1882,7 @@ dependencies = [
  "ecoji",
  "ed25519-dalek",
  "fern",
+ "insanity-core",
  "insanity-tui-adapter",
  "itertools",
  "log",

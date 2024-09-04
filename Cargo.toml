@@ -1,4 +1,3 @@
 [workspace]
 members = ["insanity-core", "insanity-native-tui-app", "insanity-tui-adapter"]
-default-members = ["insanity-native-tui-app"]
 resolver = "2"

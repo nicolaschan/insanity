@@ -3,6 +3,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use insanity_core::user_input_event::UserInputEvent;
 use std::collections::BTreeMap;
 use std::{error::Error, io, io::Stdout};
 use tokio::{
@@ -117,19 +118,8 @@ pub enum AppEvent {
     MuteSelf(bool),
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum UserAction {
-    DisablePeer(String),
-    EnablePeer(String),
-    DisableDenoise(String),
-    EnableDenoise(String),
-    SetVolume(String, usize),
-    SendMessage(String),
-    SetMuteSelf(bool),
-}
-
 pub struct App {
-    pub user_action_sender: UnboundedSender<UserAction>,
+    pub user_action_sender: UnboundedSender<UserInputEvent>,
     pub tabs: [&'static str; NUM_TABS],
     pub tab_index: usize,
     pub killed: bool,
@@ -148,7 +138,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(sender: UnboundedSender<UserAction>) -> App {
+    pub fn new(sender: UnboundedSender<UserInputEvent>) -> App {
         App {
             user_action_sender: sender,
             tabs: TAB_NAMES,
@@ -331,11 +321,11 @@ impl App {
         if let Some(peer) = self.selected_peer() {
             if peer.state == PeerState::Disabled {
                 self.user_action_sender
-                    .send(UserAction::EnablePeer(peer.id.clone()))
+                    .send(UserInputEvent::EnablePeer(peer.id.clone()))
                     .unwrap();
             } else {
                 self.user_action_sender
-                    .send(UserAction::DisablePeer(peer.id.clone()))
+                    .send(UserInputEvent::DisablePeer(peer.id.clone()))
                     .unwrap();
             }
         }
@@ -357,7 +347,7 @@ impl App {
             let own_address = self.own_public_key.clone().unwrap_or(default);
             self.add_message((own_address, message.clone()));
             self.user_action_sender
-                .send(UserAction::SendMessage(message))
+                .send(UserInputEvent::SendMessage(message))
                 .unwrap();
         }
     }
@@ -366,11 +356,11 @@ impl App {
         if let Some(peer) = self.selected_peer() {
             if peer.denoised {
                 self.user_action_sender
-                    .send(UserAction::DisableDenoise(peer.id.clone()))
+                    .send(UserInputEvent::DisableDenoise(peer.id.clone()))
                     .unwrap();
             } else {
                 self.user_action_sender
-                    .send(UserAction::EnableDenoise(peer.id.clone()))
+                    .send(UserInputEvent::EnableDenoise(peer.id.clone()))
                     .unwrap();
             }
         }
@@ -379,7 +369,7 @@ impl App {
     fn adjust_volume(&mut self, delta: isize) {
         if let Some(peer) = self.selected_peer() {
             self.user_action_sender
-                .send(UserAction::SetVolume(
+                .send(UserInputEvent::SetVolume(
                     peer.id.clone(),
                     add_in_bounds(peer.volume, 0, 999, delta),
                 ))
@@ -399,7 +389,7 @@ impl App {
     fn toggle_mute_self(&mut self) {
         self.mute_self = !self.mute_self;
         self.user_action_sender
-            .send(UserAction::SetMuteSelf(self.mute_self))
+            .send(UserInputEvent::SetMuteSelf(self.mute_self))
             .unwrap();
     }
 
@@ -506,7 +496,7 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
 pub async fn start_tui() -> Result<
     (
         UnboundedSender<AppEvent>,
-        UnboundedReceiver<UserAction>,
+        UnboundedReceiver<UserInputEvent>,
         JoinHandle<Terminal<CrosstermBackend<Stdout>>>,
     ),
     Box<dyn Error>,

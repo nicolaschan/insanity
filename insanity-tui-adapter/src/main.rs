@@ -1,4 +1,5 @@
-use insanity_tui_adapter::{start_tui, stop_tui, AppEvent, Peer, PeerState, UserAction};
+use insanity_core::user_input_event::UserInputEvent;
+use insanity_tui_adapter::{start_tui, stop_tui, AppEvent, Peer, PeerState};
 use std::{collections::BTreeMap, error::Error};
 
 #[tokio::main]
@@ -47,17 +48,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         while let Some(event) = user_action_receiver.recv().await {
             match event {
-                UserAction::EnableDenoise(peer_id) => {
+                UserInputEvent::EnableDenoise(peer_id) => {
                     sender
                         .send(AppEvent::SetPeerDenoise(peer_id, true))
                         .unwrap();
                 }
-                UserAction::DisableDenoise(peer_id) => {
+                UserInputEvent::DisableDenoise(peer_id) => {
                     sender
                         .send(AppEvent::SetPeerDenoise(peer_id, false))
                         .unwrap();
                 }
-                UserAction::DisablePeer(peer_id) => {
+                UserInputEvent::DisablePeer(peer_id) => {
                     sender
                         .send(AppEvent::AddPeer(
                             peers
@@ -68,7 +69,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         ))
                         .unwrap();
                 }
-                UserAction::EnablePeer(peer_id) => {
+                UserInputEvent::EnablePeer(peer_id) => {
                     sender
                         .send(AppEvent::AddPeer(
                             peers
@@ -79,13 +80,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         ))
                         .unwrap();
                 }
-                UserAction::SetVolume(peer_id, volume) => {
+                UserInputEvent::SetVolume(peer_id, volume) => {
                     sender
                         .send(AppEvent::SetPeerVolume(peer_id, volume))
                         .unwrap();
                 }
-                UserAction::SendMessage(_message) => {}
-                UserAction::SetMuteSelf(_) => todo!(),
+                UserInputEvent::SendMessage(_message) => {}
+                UserInputEvent::SetMuteSelf(_) => todo!(),
             }
         }
     });

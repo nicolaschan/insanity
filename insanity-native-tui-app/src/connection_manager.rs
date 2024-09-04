@@ -8,7 +8,8 @@ use std::{
     },
 };
 
-use insanity_tui_adapter::{AppEvent, UserAction};
+use insanity_core::user_input_event::UserInputEvent;
+use insanity_tui_adapter::AppEvent;
 
 use sha2::{Digest, Sha256};
 use veq::{snow_types::SnowKeypair, veq::VeqSocket};
@@ -38,7 +39,7 @@ pub struct AugmentedInfo {
 pub struct ConnectionManager {
     socket: VeqSocket,
     cancellation_token: CancellationToken,
-    user_action_tx: mpsc::UnboundedSender<UserAction>,
+    user_action_tx: mpsc::UnboundedSender<UserInputEvent>,
 }
 
 impl ConnectionManager {
@@ -54,7 +55,7 @@ impl ConnectionManager {
         self.cancellation_token.cancel();
     }
 
-    pub fn send_user_action(&self, action: UserAction) -> anyhow::Result<()> {
+    pub fn send_user_action(&self, action: UserInputEvent) -> anyhow::Result<()> {
         self.user_action_tx.send(action)?;
         Ok(())
     }
@@ -66,7 +67,7 @@ impl ConnectionManager {
         base_dir: PathBuf,
         display_name: Option<String>,
         app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
-        user_action_rx: mpsc::UnboundedReceiver<UserAction>,
+        user_action_rx: mpsc::UnboundedReceiver<UserInputEvent>,
     ) -> anyhow::Result<()> {
         let connection_info = self.socket.connection_info();
         log::debug!("Connection info: {:?}", connection_info);
@@ -216,7 +217,7 @@ impl ConnectionManagerBuilder {
 fn manage_peers(
     socket: veq::veq::VeqSocket,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
-    mut user_action_rx: mpsc::UnboundedReceiver<UserAction>,
+    mut user_action_rx: mpsc::UnboundedReceiver<UserInputEvent>,
     cancellation_token: CancellationToken,
 ) -> mpsc::UnboundedSender<AugmentedInfo> {
     // Channel for the manage_peers task to receive updated peers info.
@@ -310,50 +311,50 @@ fn update_peer_info(
 }
 
 fn handle_user_action(
-    user_action: UserAction,
+    user_action: UserInputEvent,
     sender_is_muted: Arc<AtomicBool>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {
     match user_action {
-        UserAction::DisableDenoise(id) => {
+        UserInputEvent::DisableDenoise(id) => {
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
                 peer.set_denoise(false)?;
             }
         }
-        UserAction::EnableDenoise(id) => {
+        UserInputEvent::EnableDenoise(id) => {
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
                 peer.set_denoise(true)?;
             }
         }
-        UserAction::DisablePeer(id) => {
+        UserInputEvent::DisablePeer(id) => {
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
                 peer.disable()?;
             }
         }
-        UserAction::EnablePeer(id) => {
+        UserInputEvent::EnablePeer(id) => {
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
                 peer.enable();
             }
         }
-        UserAction::SetVolume(id, volume) => {
+        UserInputEvent::SetVolume(id, volume) => {
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
                 peer.set_volume(volume)?;
             }
         }
-        UserAction::SendMessage(message) => {
+        UserInputEvent::SendMessage(message) => {
             for (_, peer) in managed_peers.iter() {
                 if let Err(e) = peer.send_message(message.clone()) {
                     log::debug!("Failed to send message to a peer: {:?}", e);
                 }
             }
         }
-        UserAction::SetMuteSelf(is_muted) => {
+        UserInputEvent::SetMuteSelf(is_muted) => {
             sender_is_muted.store(is_muted, Ordering::Relaxed);
             if let Some(app_event_tx) = app_event_tx {
                 if let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted)) {
