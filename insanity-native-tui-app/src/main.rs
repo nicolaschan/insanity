@@ -1,8 +1,8 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use clap::Parser;
-use insanity::connection_manager::ConnectionManager;
-use insanity_tui::AppEvent;
+use insanity_tui_adapter::AppEvent;
+use insanity_tui_app::connection_manager::ConnectionManager;
 use tokio_util::sync::CancellationToken;
 
 // Update this number if there is a breaking change.
@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let (app_event_sender, user_action_receiver, handle) = if !opts.no_tui {
-        let (x, y, z) = insanity_tui::start_tui().await.unwrap();
+        let (x, y, z) = insanity_tui_adapter::start_tui().await.unwrap();
         x.send(AppEvent::SetServer(opts.bridge.clone()))?;
         if let Some(room) = opts.room.clone() {
             x.send(AppEvent::SetRoom(room))?;
@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if let Some(handle) = handle {
-        insanity_tui::stop_tui(handle).await.unwrap();
+        insanity_tui_adapter::stop_tui(handle).await.unwrap();
     } else {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;

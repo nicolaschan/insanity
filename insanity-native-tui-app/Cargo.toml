@@ -1,0 +1,44 @@
+[package]
+name = "insanity-tui-app"
+version = "0.1.0"
+authors = ["Nicolas Chan <nicolas@nicolaschan.com>"]
+edition = "2018"
+
+[[bin]]
+name = "insanity"
+path = "src/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = "0.1.77"
+bincode = "1.3.3"
+clap = { version = "^4.5.3", features = ["derive"] }
+cpal = "0.13.5"
+nnnoiseless = "=0.3.0"
+serde = { version = "1.0.197", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+opus = "0.3.0"
+send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
+uuid = { version = "1.7", features = ["serde", "v4"] }
+dirs = "5.0.1"
+serde_json = "1.0.114"
+rubato = "0.10"
+insanity-tui-adapter = { path = "../insanity-tui-adapter" }
+sha2 = "0.10.8"
+whoami = "1.5.1"
+sled = "0.34.7"
+log = "0.4"
+fern = "0.6.2"
+chrono = "0.4"
+veq = { git = "https://github.com/nicolaschan/udpp.git" }
+baybridge = { git = "https://github.com/nicolaschan/baybridge.git" }
+itertools = "0.12.1"
+anyhow = "1.0.82"
+tokio-util = { version = "0.7.10", features = ["full"] }
+bon = "2.1.0"
+argon2 = "0.5.3"
+chacha20poly1305 = "0.10.1"
+blake3 = "1.5.4"
+ed25519-dalek = { version = "2.1.1", features = ["serde"] }
+ecoji = "1.0.0"

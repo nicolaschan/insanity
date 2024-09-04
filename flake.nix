@@ -38,10 +38,12 @@
             lockFile = ./Cargo.lock;
             allowBuiltinFetchGit = true;
           };
+          cargoBuildFlags = [
+            "--bin" "insanity"
+          ];
 
           nativeBuildInputs = [pkgs.pkg-config pkgs.perl pkgs.cmake];
           buildInputs = [
-            # Add your build dependencies here, for example:
             pkgs.openssl
             pkgs.libopus
             pkgs.alsa-lib

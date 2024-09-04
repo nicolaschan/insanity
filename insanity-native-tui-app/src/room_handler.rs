@@ -129,7 +129,7 @@ pub async fn start_room_connection(
     connection_info: veq::veq::ConnectionInfo,
     display_name: Option<String>,
     conn_info_tx: mpsc::UnboundedSender<AugmentedInfo>,
-    app_event_tx: Option<mpsc::UnboundedSender<insanity_tui::AppEvent>>,
+    app_event_tx: Option<mpsc::UnboundedSender<insanity_tui_adapter::AppEvent>>,
     cancellation_token: CancellationToken,
 ) -> anyhow::Result<()> {
     let argon = Argon2::default();
@@ -162,7 +162,7 @@ pub async fn start_room_connection(
     };
     log::debug!("Room fingerprint: {room_fingerprint}");
     if let Some(app_event_tx) = app_event_tx.clone() {
-        if let Err(e) = app_event_tx.send(insanity_tui::AppEvent::SetRoomFingerprint(
+        if let Err(e) = app_event_tx.send(insanity_tui_adapter::AppEvent::SetRoomFingerprint(
             room_fingerprint.clone(),
         )) {
             log::debug!("Failed to write room fingerprint to UI: {e}");

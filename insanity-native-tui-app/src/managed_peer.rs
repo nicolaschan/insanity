@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use bon::bon;
-use insanity_tui::{AppEvent, Peer, PeerState};
+use insanity_tui_adapter::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 

@@ -1,4 +1,4 @@
-use insanity_tui::{start_tui, stop_tui, AppEvent, Peer, PeerState, UserAction};
+use insanity_tui_adapter::{start_tui, stop_tui, AppEvent, Peer, PeerState, UserAction};
 use std::{collections::BTreeMap, error::Error};
 
 #[tokio::main]
@@ -85,6 +85,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .unwrap();
                 }
                 UserAction::SendMessage(_message) => {}
+                UserAction::SetMuteSelf(_) => todo!(),
             }
         }
     });

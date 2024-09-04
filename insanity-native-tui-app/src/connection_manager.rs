@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use insanity_tui::{AppEvent, UserAction};
+use insanity_tui_adapter::{AppEvent, UserAction};
 
 use sha2::{Digest, Sha256};
 use veq::{snow_types::SnowKeypair, veq::VeqSocket};

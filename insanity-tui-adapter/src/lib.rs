@@ -223,12 +223,11 @@ impl App {
                 }
                 _ => {}
             },
-            AppEvent::Enter => match self.tab_index {
-                TAB_IDX_CHAT => {
+            AppEvent::Enter => {
+                if self.tab_index == TAB_IDX_CHAT {
                     self.send_message();
                 }
-                _ => {}
-            },
+            }
             AppEvent::NewMessage(sender_name, message) => {
                 self.add_message((sender_name, message));
                 if self.tab_index != TAB_IDX_CHAT || self.chat_offset > 0 {

@@ -3,7 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
-use insanity_tui::AppEvent;
+use insanity_tui_adapter::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};

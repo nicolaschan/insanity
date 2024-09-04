@@ -9,8 +9,8 @@ use tui::{
 };
 
 use crate::{
-    App, Editor, Peer, DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY, TAB_IDX_CHAT,
-    TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY, MUTE_KEY
+    App, Editor, Peer, DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY,
+    TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
 };
 
 const BG_GRAY: Color = Color::Rgb(50, 50, 50);
@@ -101,24 +101,24 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
     )]));
 
     let display_name = peer.display_name.as_ref().unwrap_or(&peer.id).to_string();
-    match &peer.state {
-        &crate::PeerState::Connected(ref address) => Row::new(vec![
+    match peer.state {
+        crate::PeerState::Connected(ref address) => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
             Cell::from(Spans::from(vec![
                 Span::styled(display_name, style.fg(CONNECTED)),
                 Span::styled(" <-> ", style.fg(Color::DarkGray)),
-                Span::styled(format!("{}", address), style.fg(Color::Cyan)),
+                Span::styled(address.clone(), style.fg(Color::Cyan)),
             ]))
             .style(style),
         ]),
-        &crate::PeerState::Disconnected => Row::new(vec![
+        crate::PeerState::Disconnected => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
             Cell::from(display_name).style(style),
         ])
         .style(Style::default().fg(Color::DarkGray)),
-        &crate::PeerState::Disabled => Row::new(vec![
+        crate::PeerState::Disabled => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
             Cell::from(Span::styled(
@@ -127,13 +127,13 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             ))
             .style(style.fg(Color::DarkGray)),
         ]),
-        &crate::PeerState::Connecting(ref address) => Row::new(vec![
+        crate::PeerState::Connecting(ref address) => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
             Cell::from(Spans::from(vec![
                 Span::styled(display_name, style.fg(Color::DarkGray)),
                 Span::styled(" --> ", style.fg(Color::DarkGray)),
-                Span::styled(format!("{}", address), style.fg(Color::DarkGray)),
+                Span::styled(address.clone(), style.fg(Color::DarkGray)),
             ]))
             .style(style),
         ]),
@@ -189,10 +189,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, peer)| peer_row(peer, i == app.peer_index))
         .collect();
-    let rows = self_row
-        .into_iter()
-        .chain(rows.into_iter())
-        .collect::<Vec<_>>();
+    let rows = self_row.into_iter().chain(rows).collect::<Vec<_>>();
     let peer_list = Table::new(rows)
         .style(Style::default().fg(Color::White))
         .widths(&[
@@ -309,8 +306,7 @@ fn render_chat_history<'a>(
 
         // Style the line that is part display name and part message content.
         let (name_part, text_part) = lines
-            .iter()
-            .nth(display_name_num_wraps)
+            .get(display_name_num_wraps)
             .unwrap()
             .split_at(display_name.len() - name_count);
         let split_line = vec![Spans::from(vec![
