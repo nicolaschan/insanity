@@ -1,10 +1,6 @@
 # insanity peer-to-peer voice chat 🤯
 
-[![Linux GNU](https://github.com/nicolaschan/insanity/actions/workflows/linux-gnu.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux-gnu.yml)
-[![Linux musl](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/linux-musl.yml)
-[![Windows MinGW](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-mingw.yml)
-[![Windows MSVC](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/windows-msvc.yml)
-[![macOS Apple Silicon](https://github.com/nicolaschan/insanity/actions/workflows/macos-apple-silicon.yaml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/macos-apple-silicon.yaml)
+[![Build](https://github.com/nicolaschan/insanity/actions/workflows/build.yml/badge.svg)](https://github.com/nicolaschan/insanity/actions/workflows/build.yml)
 
 > All existing voice chat solutions are bad. This one is worse.
 
@@ -14,7 +10,7 @@ An experimental peer-to-peer voice chat application with a terminal UI. Written 
 
 Choose an option:
 
-1. **Binary download**: Click the badge above for your system. Go to the latest successful run and download the build artifact.
+1. **Binary download**: [Go to the latest release](https://github.com/nicolaschan/insanity/releases/) and download the build artifact for your system.
    ```
    insanity --bridge <BAYBRIDGE_SERVER> --room <ROOM>
    ```
@@ -33,9 +29,8 @@ Choose an option:
 Install [Bay Bridge](https://github.com/nicolaschan/baybridge) and run `baybridge serve`.
 
 ## Features
-- NAT holepunch connections
+- NAT holepunch connections for direct P2P audio
 - Encrypted with the noise protocol
 - Background noise suppression
-- No central server required, bootstraps connections over Tor 🥸
-
-
+- Text chat messages
+- Terminal UI
