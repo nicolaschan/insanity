@@ -1,5 +1,3 @@
-// extern crate test;
-
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
@@ -59,54 +57,6 @@ impl AudioChunk {
         }
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use test::Bencher;
-
-//     #[test]
-//     fn read_write_protocol_works() {
-//         let mut output: Vec<u8> = Vec::new();
-//         let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.5; 4800].to_vec());
-//         // chunk.write_to_stream(&mut output).unwrap();
-//         // let received = AudioChunk::read_from_stream(&mut &output[..]).unwrap();
-//         // assert_eq!(chunk, received);
-//     }
-
-//     #[bench]
-//     fn bench_write_to_stream(b: &mut Bencher) {
-//         let mut output: Vec<u8> = Vec::new();
-//         let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-//         // b.iter(|| chunk.write_to_stream(&mut output))
-//     }
-
-//     #[bench]
-//     fn bench_read_from_stream(b: &mut Bencher) {
-//         let mut output: Vec<u8> = Vec::new();
-//         let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-//         // chunk.write_to_stream(&mut output).unwrap();
-//         // b.iter(|| AudioChunk::read_from_stream(&mut &output[..]).unwrap())
-//     }
-
-//     #[bench]
-//     fn bench_processor_handle_incoming(b: &mut Bencher) {
-//         let mut processor = AudioProcessor::new(false);
-//         b.iter(move || {
-//             let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-//             processor.handle_incoming(chunk)
-//         });
-//     }
-
-//     #[bench]
-//     fn bench_processor_handle_incoming_denoised(b: &mut Bencher) {
-//         let mut processor = AudioProcessor::new(true);
-//         b.iter(|| {
-//             let chunk = AudioChunk::new(0, AudioFormat::new(0, 0), [0.0; 4800].to_vec());
-//             processor.handle_incoming(chunk)
-//         });
-//     }
-// }
 
 pub struct MultiChannelDenoiser<'a> {
     channels: u16,
