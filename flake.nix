@@ -19,6 +19,7 @@
           buildInputs = with pkgs; [
             rustup
             rust-analyzer
+            cargo-edit
             gcc
             alsa-lib
             cmake
@@ -32,7 +33,7 @@
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "insanity";
-          version = "0.1.0";
+          version = "1.1.0";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
