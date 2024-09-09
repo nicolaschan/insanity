@@ -105,6 +105,8 @@ async fn run_receiver(
         enable_denoise,
         volume,
         config.sample_rate,
+        app_event_sender.clone(),
+        id.clone(),
     ));
     let processor_clone = processor.clone();
     let config_clone = config.clone();

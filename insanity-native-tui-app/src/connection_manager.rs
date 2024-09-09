@@ -234,7 +234,11 @@ fn manage_peers(
                     }
                     let id = snow_public_keys_to_uuid(&socket.connection_info().public_key, &augmented_info.connection_info.public_key);
                     if let Some(managed_peer) = update_peer_info(
-                        id, augmented_info, socket.clone(), app_event_tx.clone(), &mut managed_peers, sender_is_muted.clone()) {
+                        id, augmented_info,
+                        socket.clone(),
+                        app_event_tx.clone(),
+                        &mut managed_peers,
+                        sender_is_muted.clone()) {
                         log::debug!("Updated peer info for {id} to: {:?}", managed_peer.info());
                         log::debug!("(Re)Connecting to peer {id}.");
                         reconnect(managed_peer);

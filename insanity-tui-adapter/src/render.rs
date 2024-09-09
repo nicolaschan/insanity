@@ -101,17 +101,31 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
     )]));
 
     let display_name = peer.display_name.as_ref().unwrap_or(&peer.id).to_string();
+
     match peer.state {
-        crate::PeerState::Connected(ref address) => Row::new(vec![
-            Cell::from(denoise_symbol),
-            attributes,
-            Cell::from(Spans::from(vec![
-                Span::styled(display_name, style.fg(CONNECTED)),
-                Span::styled(" <-> ", style.fg(Color::DarkGray)),
-                Span::styled(address.clone(), style.fg(Color::Cyan)),
-            ]))
-            .style(style),
-        ]),
+        crate::PeerState::Connected(ref address) => {
+            let loudness_length = (display_name.len() as f64 * peer.loudness) as usize;
+            let display_name_with_loudness_bg = display_name
+                .chars()
+                .take(loudness_length)
+                .collect::<String>();
+            let display_name_normal_bg = display_name
+                .chars()
+                .skip(loudness_length)
+                .collect::<String>();
+
+            Row::new(vec![
+                Cell::from(denoise_symbol),
+                attributes,
+                Cell::from(Spans::from(vec![
+                    Span::styled(display_name_with_loudness_bg, style.fg(Color::Yellow)),
+                    Span::styled(display_name_normal_bg, style.fg(CONNECTED)),
+                    Span::styled(" <-> ", style.fg(Color::DarkGray)),
+                    Span::styled(address.clone(), style.fg(Color::Cyan)),
+                ]))
+                .style(style),
+            ])
+        }
         crate::PeerState::Disconnected => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
