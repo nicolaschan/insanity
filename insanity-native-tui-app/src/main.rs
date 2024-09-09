@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use insanity_tui_adapter::AppEvent;
 use insanity_tui_app::connection_manager::ConnectionManager;
 use tokio_util::sync::CancellationToken;
@@ -10,10 +10,22 @@ use tokio_util::sync::CancellationToken;
 static BREAKING_CHANGE_VERSION: &str = "1";
 
 #[derive(Parser, Debug)]
-#[clap(version = "0.1.0", author = "Nicolas Chan <nicolas@nicolaschan.com>")]
-struct Opts {
+#[clap(author = "Nicolas Chan <nicolas@nicolaschan.com>")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Run(RunOptions),
+    Update,
+}
+
+#[derive(Parser, Debug)]
+struct RunOptions {
     #[clap(short, long, default_value = "1337")]
-    listen_port: u16,
+    port: u16,
 
     /// Address of peer to connect to.
     #[clap(short, long)]
@@ -38,8 +50,30 @@ struct Opts {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let opts: Opts = Opts::parse();
+    let opts: Cli = Cli::parse();
 
+    match opts.command {
+        Commands::Run(run_opts) => run(run_opts).await,
+        Commands::Update => update().await,
+    }
+}
+
+async fn update() -> anyhow::Result<()> {
+    let insanity_dir = dirs::data_local_dir()
+        .expect("no data directory!?")
+        .join("insanity");
+    let version_path = insanity_dir.join("version");
+    let version = std::fs::read_to_string(&version_path).unwrap_or_default();
+    if version != BREAKING_CHANGE_VERSION {
+        log::info!("Renewing insanity directory");
+        std::fs::remove_dir_all(&insanity_dir)?;
+        std::fs::create_dir_all(&insanity_dir)?;
+        std::fs::write(&version_path, BREAKING_CHANGE_VERSION)?;
+    }
+    Ok(())
+}
+
+async fn run(opts: RunOptions) -> anyhow::Result<()> {
     let main_cancellation_token = CancellationToken::new();
 
     let insanity_dir = match opts.dir {
@@ -89,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start connection manager
     let mut conn_manager_builder =
-        ConnectionManager::builder(insanity_dir, opts.listen_port, &opts.bridge)
+        ConnectionManager::builder(insanity_dir, opts.port, &opts.bridge)
             .display_name(display_name)
             .cancellation_token(main_cancellation_token.clone());
     if let Some(room) = opts.room {
