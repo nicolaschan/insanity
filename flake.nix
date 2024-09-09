@@ -28,6 +28,9 @@
             autoconf
             perl
             pkg-config
+
+            # web app
+            nodejs_22
           ];
         };
 
