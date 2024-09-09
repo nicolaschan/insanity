@@ -5,9 +5,13 @@ use std::sync::{Arc, Mutex};
 
 use cpal::{Sample, SampleRate};
 use insanity_core::audio_source::SyncAudioSource;
+use insanity_core::loudness::calculate_loudness;
+use insanity_tui_adapter::AppEvent;
+use log::error;
 use nnnoiseless::DenoiseState;
 use rubato_audio_source::ResampledAudioSource;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::realtime_buffer::RealTimeBuffer;
 use crate::server::RealtimeAudioSource;
@@ -143,6 +147,8 @@ pub struct AudioProcessor<'a> {
     denoiser: Mutex<MultiChannelDenoiser<'a>>,
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
     audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
+    app_event_sender: Option<UnboundedSender<AppEvent>>,
+    peer_id: String,
 }
 
 impl AudioProcessor<'_> {
@@ -150,6 +156,8 @@ impl AudioProcessor<'_> {
         enable_denoise: Arc<AtomicBool>,
         volume: Arc<Mutex<usize>>,
         output_sample_rate: SampleRate,
+        app_event_sender: Option<UnboundedSender<AppEvent>>,
+        peer_id: String,
     ) -> Self {
         let chunk_buffer = Arc::new(Mutex::new(RealTimeBuffer::new(10)));
         let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone(), 48000, 2);
@@ -162,6 +170,8 @@ impl AudioProcessor<'_> {
             denoiser: Mutex::new(MultiChannelDenoiser::new()),
             audio_receiver: Mutex::new(audio_receiver),
             chunk_buffer,
+            app_event_sender,
+            peer_id,
         }
     }
 
@@ -181,6 +191,14 @@ impl AudioProcessor<'_> {
                 *sample *= volume_multiplier;
             }
             chunk.audio_data = audio_data;
+        }
+
+        if let Some(app_event_sender) = &self.app_event_sender {
+            let loudness = calculate_loudness(&chunk.audio_data[..]);
+            let loudness_event = AppEvent::Loudness(self.peer_id.clone(), loudness);
+            if let Err(e) = app_event_sender.send(loudness_event) {
+                error!("Failed to send loudness event: {:?}", e);
+            }
         }
 
         let mut guard = self.chunk_buffer.lock().unwrap();

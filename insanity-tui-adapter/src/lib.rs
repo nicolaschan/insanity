@@ -53,6 +53,7 @@ pub struct Peer {
     state: PeerState,
     denoised: bool,
     volume: usize,
+    loudness: f64,
 }
 
 impl Peer {
@@ -69,6 +70,7 @@ impl Peer {
             state,
             denoised,
             volume,
+            loudness: 0.0,
         }
     }
 
@@ -116,6 +118,7 @@ pub enum AppEvent {
     SetPeerDenoise(String, bool),
     SetPeerVolume(String, usize),
     MuteSelf(bool),
+    Loudness(String, f64),
 }
 
 pub struct App {
@@ -305,6 +308,11 @@ impl App {
             }
             AppEvent::MuteSelf(is_muted) => {
                 self.mute_self = is_muted;
+            }
+            AppEvent::Loudness(peer_id, loudness) => {
+                if let Some(peer) = self.peers.get_mut(&peer_id) {
+                    peer.loudness = loudness;
+                }
             }
         }
     }
