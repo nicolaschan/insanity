@@ -59,18 +59,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn update() -> anyhow::Result<()> {
-    let insanity_dir = dirs::data_local_dir()
-        .expect("no data directory!?")
-        .join("insanity");
-    let version_path = insanity_dir.join("version");
-    let version = std::fs::read_to_string(&version_path).unwrap_or_default();
-    if version != BREAKING_CHANGE_VERSION {
-        log::info!("Renewing insanity directory");
-        std::fs::remove_dir_all(&insanity_dir)?;
-        std::fs::create_dir_all(&insanity_dir)?;
-        std::fs::write(&version_path, BREAKING_CHANGE_VERSION)?;
-    }
-    Ok(())
+    todo!()
 }
 
 async fn run(opts: RunOptions) -> anyhow::Result<()> {
