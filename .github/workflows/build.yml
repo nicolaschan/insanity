@@ -83,7 +83,7 @@ jobs:
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-mingw.exe
+        name: insanity-windows-mingw
         path: target/x86_64-pc-windows-gnu/release/insanity.exe
 
   windows-msvc:
@@ -99,7 +99,7 @@ jobs:
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity.exe
+        name: insanity-windows-msvc
         path: target/x86_64-pc-windows-msvc/release/insanity.exe
 
   nix:
@@ -125,6 +125,7 @@ jobs:
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
+        merge-multiple: true
       - name: Zip artifacts
         run: |
           for f in *; do
