@@ -36,7 +36,7 @@
 
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "insanity";
-          version = "1.2.2";
+          version = "1.2.3";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
