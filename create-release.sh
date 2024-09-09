@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Usage: create-release.sh v1.x.x
+# Usage: create-release.sh 1.x.x
 
 # Use semantic versioning:
 # - MAJOR version when you make incompatible API changes,
