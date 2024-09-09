@@ -125,7 +125,8 @@ jobs:
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
-        merge-multiple: true
+        with:
+          merge-multiple: true
       - name: Zip artifacts
         run: |
           for f in *; do
