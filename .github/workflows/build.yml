@@ -67,7 +67,7 @@ jobs:
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-apple-silicon
+        name: insanity-macos-apple-silicon
         path: target/aarch64-apple-darwin/release/insanity
 
   windows-mingw:
