@@ -1930,19 +1930,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "insanity-tui-adapter"
-version = "1.2.7"
-dependencies = [
- "built",
- "crossterm 0.23.2",
- "insanity-core",
- "textwrap 0.15.2",
- "tokio",
- "tui",
-]
-
-[[package]]
-name = "insanity-tui-app"
+name = "insanity-native-tui-app"
 version = "1.2.7"
 dependencies = [
  "anyhow",
@@ -1981,6 +1969,18 @@ dependencies = [
  "veq",
  "whoami",
  "zip",
+]
+
+[[package]]
+name = "insanity-tui-adapter"
+version = "1.2.7"
+dependencies = [
+ "built",
+ "crossterm 0.23.2",
+ "insanity-core",
+ "textwrap 0.15.2",
+ "tokio",
+ "tui",
 ]
 
 [[package]]

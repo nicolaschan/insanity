@@ -2,8 +2,8 @@ use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use clap::{Parser, Subcommand};
 use insanity_core::built_info;
+use insanity_native_tui_app::{connection_manager::ConnectionManager, update};
 use insanity_tui_adapter::AppEvent;
-use insanity_tui_app::{connection_manager::ConnectionManager, update};
 use tokio_util::sync::CancellationToken;
 
 // Update this number if there is a breaking change.
