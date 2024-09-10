@@ -12,21 +12,27 @@ Choose an option:
 
 1. **Binary download**: [Go to the latest release](https://github.com/nicolaschan/insanity/releases/) and download the binary for your system.
    ```
-   insanity --bridge <BAYBRIDGE_SERVER> --room <ROOM>
+   insanity run --bridge <BAYBRIDGE_SERVER> --room <ROOM>
    ```
 2. **Nix**
    ```
-   nix run github:nicolaschan/insanity -- --bridge <BAYBRIDGE_SERVER> --room <ROOM>
+   nix run github:nicolaschan/insanity -- run --bridge <BAYBRIDGE_SERVER> --room <ROOM>
    ```
 3. **Build from source**
    ```
-   cargo run --release -- --bridge <BAYBRIDGE_SERVER> --room <ROOM>
+   cargo run --release -- run --bridge <BAYBRIDGE_SERVER> --room <ROOM>
    ```
    and keep installing missing system libraries until it works
+
+### Update
+
+If you use the insanity binary, you can update it in place with `insanity update`.
 
 ## Running the Bay Bridge Server
 
 Install [Bay Bridge](https://github.com/nicolaschan/baybridge) and run `baybridge serve`.
+
+The bridge server is used to bootstrap peer-to-peer connections. All audio and chat is peer-to-peer, not through the bridge server.
 
 ## Features
 - NAT holepunch connections for direct P2P audio
