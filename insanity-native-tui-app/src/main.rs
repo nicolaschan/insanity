@@ -1,8 +1,9 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use clap::{Parser, Subcommand};
+use insanity_core::built_info;
 use insanity_tui_adapter::AppEvent;
-use insanity_tui_app::connection_manager::ConnectionManager;
+use insanity_tui_app::{connection_manager::ConnectionManager, update};
 use tokio_util::sync::CancellationToken;
 
 // Update this number if there is a breaking change.
@@ -10,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 static BREAKING_CHANGE_VERSION: &str = "1";
 
 #[derive(Parser, Debug)]
-#[clap(author = "Nicolas Chan <nicolas@nicolaschan.com>")]
+#[clap(version = built_info::GIT_VERSION, author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -19,7 +20,13 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Run(RunOptions),
-    Update,
+    Update {
+        #[clap(long, default_value = "false")]
+        dry_run: bool,
+
+        #[clap(long, default_value = "false")]
+        force: bool,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -54,12 +61,8 @@ async fn main() -> anyhow::Result<()> {
 
     match opts.command {
         Commands::Run(run_opts) => run(run_opts).await,
-        Commands::Update => update().await,
+        Commands::Update { dry_run, force } => update::update(dry_run, force).await,
     }
-}
-
-async fn update() -> anyhow::Result<()> {
-    todo!()
 }
 
 async fn run(opts: RunOptions) -> anyhow::Result<()> {

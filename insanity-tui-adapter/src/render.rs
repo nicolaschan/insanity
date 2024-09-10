@@ -1,3 +1,4 @@
+use insanity_core::built_info;
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -371,10 +372,6 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let editor_widget = render_editor(&app.editor, &chunks[1]).block(default_block());
     f.render_widget(chat_history_widget, chunks[0]);
     f.render_widget(editor_widget, chunks[1]);
-}
-
-mod built_info {
-    include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
 
 fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
