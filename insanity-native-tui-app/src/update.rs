@@ -1,5 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
-
 use insanity_core::built_info;
 use log::{info, warn};
 use tokio::{fs::create_dir_all, io::AsyncWriteExt};
@@ -157,11 +155,27 @@ pub async fn update(dry_run: bool, force: bool) -> anyhow::Result<()> {
             current_exe.display(),
             new_exe_path.display(),
         );
-        tokio::fs::rename(&new_exe_path, &current_exe).await?;
+        match tokio::fs::rename(&new_exe_path, &current_exe).await {
+            Ok(_) => info!(
+                "Replaced {} with {}",
+                current_exe.display(),
+                new_exe_path.display()
+            ),
+            Err(e) => {
+                warn!(
+                    "Failed to replace {} with {}: {}",
+                    current_exe.display(),
+                    new_exe_path.display(),
+                    e
+                );
+                return Err(e.into());
+            }
+        }
     }
 
     #[cfg(unix)]
     {
+        use std::os::unix::fs::PermissionsExt;
         let current_exe_file = tokio::fs::File::open(&current_exe).await?;
         let mut perms = current_exe_file.metadata().await?.permissions();
         perms.set_mode(perms.mode() | 0o111); // Add execute permission
