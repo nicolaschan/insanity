@@ -149,6 +149,7 @@ pub struct AudioProcessor<'a> {
     audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
     app_event_sender: Option<UnboundedSender<AppEvent>>,
     peer_id: String,
+    last_sample: Mutex<f32>,
 }
 
 impl AudioProcessor<'_> {
@@ -172,6 +173,7 @@ impl AudioProcessor<'_> {
             chunk_buffer,
             app_event_sender,
             peer_id,
+            last_sample: Mutex::new(0.0),
         }
     }
 
@@ -206,13 +208,24 @@ impl AudioProcessor<'_> {
     }
 
     pub fn fill_buffer<T: Sample>(&self, to_fill: &mut [T]) {
+        let mut last_sample = {
+            let last_sample_guard = self.last_sample.lock().unwrap();
+            *last_sample_guard
+        };
+
         // LOL this is insane maybe we should use channels or something proper
         for val in to_fill.iter_mut() {
             let mut audio_receiver_guard = self.audio_receiver.lock().unwrap();
             *val = match audio_receiver_guard.next_sync() {
-                None => Sample::from(&0.0), // cry b/c there's no packets
-                Some(sample) => Sample::from(&sample),
+                None => Sample::from(&last_sample), // cry b/c there's no packets
+                Some(sample) => {
+                    last_sample = sample;
+                    Sample::from(&sample)
+                }
             };
         }
+
+        let mut last_sample_guard = self.last_sample.lock().unwrap();
+        *last_sample_guard = last_sample;
     }
 }
