@@ -48,7 +48,7 @@ struct RunOptions {
 
     /// Bridge server.
     #[clap(long)]
-    bridge: String,
+    bridge: Vec<String>,
 
     /// Room name to join.
     #[clap(long)]
@@ -114,10 +114,9 @@ async fn run(opts: RunOptions) -> anyhow::Result<()> {
     };
 
     // Start connection manager
-    let mut conn_manager_builder =
-        ConnectionManager::builder(insanity_dir, opts.port, &opts.bridge)
-            .display_name(display_name)
-            .cancellation_token(main_cancellation_token.clone());
+    let mut conn_manager_builder = ConnectionManager::builder(insanity_dir, opts.port, opts.bridge)
+        .display_name(display_name)
+        .cancellation_token(main_cancellation_token.clone());
     if let Some(room) = opts.room {
         conn_manager_builder = conn_manager_builder.room(room);
     }

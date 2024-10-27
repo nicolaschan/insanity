@@ -388,16 +388,13 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .split(area);
 
     let server_widget = Paragraph::new(vec![
-        match app.server.as_ref() {
-            Some(server) => Spans::from(vec![
-                Span::styled("Server: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(server.to_string(), Style::default().fg(Color::LightBlue)),
-            ]),
-            None => Spans::from(vec![Span::styled(
-                "Server: no server specified...".to_string(),
-                Style::default().fg(Color::DarkGray),
-            )]),
-        },
+        Spans::from(vec![
+            Span::styled("Bridge servers: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                app.servers.join(", "),
+                Style::default().fg(Color::LightBlue),
+            ),
+        ]),
         match app.room.as_ref() {
             Some(room) => Spans::from(vec![
                 Span::styled("Room: ", Style::default().fg(Color::DarkGray)),
@@ -410,14 +407,14 @@ fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         },
         match app.room_fingerprint.as_ref() {
             Some(room_fingerprint) => Spans::from(vec![
-                Span::styled("Room Fingerprint: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Room fingerprint: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     room_fingerprint.to_string(),
                     Style::default().fg(Color::LightBlue),
                 ),
             ]),
             None => Spans::from(vec![Span::styled(
-                "Room Fingerprint: no room fingerprint...".to_string(),
+                "Room fingerprint: no room fingerprint...".to_string(),
                 Style::default().fg(Color::DarkGray),
             )]),
         },

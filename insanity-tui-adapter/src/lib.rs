@@ -108,7 +108,7 @@ pub enum AppEvent {
     DeleteWord,
     SetOwnPublicKey(String),
     SetOwnDisplayName(String),
-    SetServer(String),
+    SetServer(Vec<String>),
     SetRoom(String),
     SetRoomFingerprint(String),
     Down,
@@ -129,7 +129,7 @@ pub struct App {
     pub peers: BTreeMap<String, Peer>, // (Onion Address, Peer)
     pub own_public_key: Option<String>,
     pub own_display_name: Option<String>,
-    pub server: Option<String>,
+    pub servers: Vec<String>,
     pub room: Option<String>,
     pub room_fingerprint: Option<String>,
     pub editor: Editor,
@@ -150,7 +150,7 @@ impl App {
             peers: BTreeMap::new(),
             own_public_key: None,
             own_display_name: None,
-            server: None,
+            servers: vec![],
             room: None,
             room_fingerprint: None,
             editor: Editor::new(),
@@ -258,7 +258,7 @@ impl App {
                 self.own_display_name = Some(display_name);
             }
             AppEvent::SetServer(server) => {
-                self.server = Some(server);
+                self.servers = server;
             }
             AppEvent::SetRoom(room) => {
                 self.room = Some(room);

@@ -46,9 +46,9 @@ impl ConnectionManager {
     pub fn builder(
         base_dir: PathBuf,
         listen_port: u16,
-        bridge_server: &str,
+        bridge_servers: Vec<String>,
     ) -> ConnectionManagerBuilder {
-        ConnectionManagerBuilder::new(base_dir, listen_port, bridge_server.to_string())
+        ConnectionManagerBuilder::new(base_dir, listen_port, bridge_servers)
     }
 
     pub fn shutdown(&self) {
@@ -62,7 +62,7 @@ impl ConnectionManager {
 
     async fn start(
         &mut self,
-        bridge_server: &str,
+        bridge_servers: Vec<String>,
         room_name: Option<String>,
         base_dir: PathBuf,
         display_name: Option<String>,
@@ -80,13 +80,18 @@ impl ConnectionManager {
         );
 
         if let Some(ref room_name) = &room_name {
-            log::debug!("Attempting to join room {room_name} on server {bridge_server}.");
+            log::debug!("Attempting to join room {room_name} on server {bridge_servers:?}.");
 
             // Start up baybridge connection.
             let baybridge_datadir = base_dir.join("baybridge");
-            let connection = Connection::Http(HttpConnection::new(bridge_server));
-            let baybridge_config =
-                baybridge::configuration::Configuration::new(baybridge_datadir.clone(), connection);
+            let connections = bridge_servers
+                .iter()
+                .map(|s| Connection::Http(HttpConnection::new(s)))
+                .collect();
+            let baybridge_config = baybridge::configuration::Configuration::new(
+                baybridge_datadir.clone(),
+                connections,
+            );
             baybridge_config.init().await?;
             let action = Actions::new(baybridge_config);
 
@@ -120,7 +125,7 @@ impl ConnectionManager {
 pub struct ConnectionManagerBuilder {
     base_dir: PathBuf,
     listen_port: u16,
-    bridge_server: String,
+    bridge_servers: Vec<String>,
     room_name: Option<String>,
     display_name: Option<String>,
     cancellation_token: Option<CancellationToken>,
@@ -131,12 +136,12 @@ impl ConnectionManagerBuilder {
     pub fn new(
         base_dir: PathBuf,
         listen_port: u16,
-        bridge_server: String,
+        bridge_servers: Vec<String>,
     ) -> ConnectionManagerBuilder {
         ConnectionManagerBuilder {
             base_dir,
             listen_port,
-            bridge_server,
+            bridge_servers,
             room_name: None,
             display_name: None,
             cancellation_token: None,
@@ -201,7 +206,7 @@ impl ConnectionManagerBuilder {
         };
         connection_manager
             .start(
-                &self.bridge_server,
+                self.bridge_servers,
                 self.room_name,
                 self.base_dir,
                 self.display_name,

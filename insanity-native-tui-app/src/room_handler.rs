@@ -63,7 +63,18 @@ async fn action_set(
 
     // Set to key
     let serialized_signed_value: Vec<u8> = bincode::serialize(&signed_value)?;
-    if let Err(e) = action.set(key, serialized_signed_value.into()).await {
+    let expires_in_one_day = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs()
+        + 60 * 60 * 24;
+    if let Err(e) = action
+        .set_with_expires_at(
+            key.into(),
+            serialized_signed_value.into(),
+            expires_in_one_day,
+        )
+        .await
+    {
         anyhow::bail!("Failed to set value to baybridge with error: {e}");
     }
 
