@@ -47,8 +47,9 @@ impl ConnectionManager {
         base_dir: PathBuf,
         listen_port: u16,
         bridge_servers: Vec<String>,
+        ip_version: IpVersion,
     ) -> ConnectionManagerBuilder {
-        ConnectionManagerBuilder::new(base_dir, listen_port, bridge_servers)
+        ConnectionManagerBuilder::new(base_dir, listen_port, bridge_servers, ip_version)
     }
 
     pub fn shutdown(&self) {
@@ -122,10 +123,18 @@ impl ConnectionManager {
     }
 }
 
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum IpVersion {
+    Ipv4,
+    Ipv6,
+    Dualstack
+}
+
 pub struct ConnectionManagerBuilder {
     base_dir: PathBuf,
     listen_port: u16,
     bridge_servers: Vec<String>,
+    ip_version: IpVersion,
     room_name: Option<String>,
     display_name: Option<String>,
     cancellation_token: Option<CancellationToken>,
@@ -137,11 +146,13 @@ impl ConnectionManagerBuilder {
         base_dir: PathBuf,
         listen_port: u16,
         bridge_servers: Vec<String>,
+        ip_version: IpVersion,
     ) -> ConnectionManagerBuilder {
         ConnectionManagerBuilder {
             base_dir,
             listen_port,
             bridge_servers,
+            ip_version,
             room_name: None,
             display_name: None,
             cancellation_token: None,
@@ -183,6 +194,7 @@ impl ConnectionManagerBuilder {
         }
     }
 
+
     /// Creates the local socket, uploads connection info, and begins searching for connections.
     pub async fn start(self) -> anyhow::Result<ConnectionManager> {
         let cancellation_token = self.cancellation_token.unwrap_or_default();
@@ -194,9 +206,21 @@ impl ConnectionManagerBuilder {
         // Create local socket.
         let keypair: SnowKeypair = get_or_make_keypair(&db)?;
 
-        let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.listen_port);
-        let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
-        let socket = VeqSocket::dualstack_with_keypair(v4_addr, v6_addr, keypair).await?;
+        let socket = match self.ip_version {
+            IpVersion::Ipv4 => {
+                let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.listen_port);
+                VeqSocket::bind_with_keypair(&v4_addr.to_string(), keypair).await?
+            },
+            IpVersion::Ipv6 => {
+                let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
+                VeqSocket::bind_with_keypair(&v6_addr.to_string(), keypair).await?
+            },
+            IpVersion::Dualstack => {
+                let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.listen_port);
+                let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
+                VeqSocket::dualstack_with_keypair(v4_addr, v6_addr, keypair).await?
+            },
+        };
 
         let (user_action_tx, user_action_rx) = mpsc::unbounded_channel();
         let mut connection_manager = ConnectionManager {

@@ -2,7 +2,7 @@ use std::{path::PathBuf, str::FromStr, time::Duration};
 
 use clap::{Parser, Subcommand};
 use insanity_core::built_info;
-use insanity_native_tui_app::{connection_manager::ConnectionManager, update};
+use insanity_native_tui_app::{connection_manager::ConnectionManager, update, connection_manager::IpVersion};
 use insanity_tui_adapter::AppEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -29,14 +29,12 @@ enum Commands {
     },
 }
 
+
+
 #[derive(Parser, Debug)]
 struct RunOptions {
     #[clap(short, long, default_value = "1337")]
     port: u16,
-
-    /// Address of peer to connect to.
-    #[clap(short, long)]
-    peer: Vec<String>,
 
     /// Disables the terminal user interface.
     #[clap(long)]
@@ -53,6 +51,10 @@ struct RunOptions {
     /// Room name to join.
     #[clap(long)]
     room: Option<String>,
+
+    /// IPV4, IPV6, or dualstack
+    #[clap(long, value_enum, default_value_t = IpVersion::Ipv4)]
+    ip_version: IpVersion
 }
 
 #[tokio::main]
@@ -114,7 +116,7 @@ async fn run(opts: RunOptions) -> anyhow::Result<()> {
     };
 
     // Start connection manager
-    let mut conn_manager_builder = ConnectionManager::builder(insanity_dir, opts.port, opts.bridge)
+    let mut conn_manager_builder = ConnectionManager::builder(insanity_dir, opts.port, opts.bridge, opts.ip_version)
         .display_name(display_name)
         .cancellation_token(main_cancellation_token.clone());
     if let Some(room) = opts.room {
