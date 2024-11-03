@@ -33,7 +33,7 @@ enum Commands {
 
 #[derive(Parser, Debug)]
 struct RunOptions {
-    #[clap(short, long, default_value = "1337")]
+    #[clap(short, long, default_value = "0")]
     port: u16,
 
     /// Disables the terminal user interface.
