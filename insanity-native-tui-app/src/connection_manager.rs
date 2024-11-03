@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use base64::{prelude::BASE64_URL_SAFE, Engine};
 use insanity_core::user_input_event::UserInputEvent;
 use insanity_tui_adapter::AppEvent;
 
@@ -99,7 +100,8 @@ impl ConnectionManager {
             // Query self and add to UI.
             if let Some(app_event_tx) = app_event_tx.clone() {
                 let my_public_key = action.whoami().await;
-                if let Err(e) = app_event_tx.send(AppEvent::SetOwnPublicKey(my_public_key)) {
+                let my_public_key_base64 = BASE64_URL_SAFE.encode(my_public_key.as_bytes());
+                if let Err(e) = app_event_tx.send(AppEvent::SetOwnPublicKey(my_public_key_base64)) {
                     log::debug!("Failed to write own public key to UI: {e}");
                 }
             }
@@ -127,7 +129,7 @@ impl ConnectionManager {
 pub enum IpVersion {
     Ipv4,
     Ipv6,
-    Dualstack
+    Dualstack,
 }
 
 pub struct ConnectionManagerBuilder {
@@ -194,7 +196,6 @@ impl ConnectionManagerBuilder {
         }
     }
 
-
     /// Creates the local socket, uploads connection info, and begins searching for connections.
     pub async fn start(self) -> anyhow::Result<ConnectionManager> {
         let cancellation_token = self.cancellation_token.unwrap_or_default();
@@ -210,16 +211,16 @@ impl ConnectionManagerBuilder {
             IpVersion::Ipv4 => {
                 let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.listen_port);
                 VeqSocket::bind_with_keypair(&v4_addr.to_string(), keypair).await?
-            },
+            }
             IpVersion::Ipv6 => {
                 let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
                 VeqSocket::bind_with_keypair(&v6_addr.to_string(), keypair).await?
-            },
+            }
             IpVersion::Dualstack => {
                 let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.listen_port);
                 let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
                 VeqSocket::dualstack_with_keypair(v4_addr, v6_addr, keypair).await?
-            },
+            }
         };
 
         let (user_action_tx, user_action_rx) = mpsc::unbounded_channel();
