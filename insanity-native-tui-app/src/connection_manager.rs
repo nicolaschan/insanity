@@ -213,12 +213,14 @@ impl ConnectionManagerBuilder {
                 VeqSocket::bind_with_keypair(&v4_addr.to_string(), keypair).await?
             }
             IpVersion::Ipv6 => {
-                let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
+                let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port, 0, 0);
                 VeqSocket::bind_with_keypair(&v6_addr.to_string(), keypair).await?
             }
             IpVersion::Dualstack => {
                 let v4_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, self.listen_port);
-                let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, self.listen_port + 1, 0, 0);
+                // TODO: maybe have a better way for specifying both ipv4 and ipv6 listen ports simultaneously.
+                let ipv6_listen_port = if self.listen_port == 0 { 0 } else { self.listen_port + 1 };
+                let v6_addr = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, ipv6_listen_port, 0, 0);
                 VeqSocket::dualstack_with_keypair(v4_addr, v6_addr, keypair).await?
             }
         };

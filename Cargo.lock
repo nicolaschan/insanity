@@ -450,7 +450,7 @@ checksum = "8c3c1a368f70d6cf7302d78f8f7093da241fb8e8807c05cc9e51a125895a6d5b"
 [[package]]
 name = "baybridge"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/baybridge.git#2daedf1840777b3dd95950ec186e408fda96da25"
+source = "git+https://github.com/nicolaschan/baybridge.git#b9abf87256f93bc412a4f0abc24377576552fff9"
 dependencies = [
  "anyhow",
  "axum",
@@ -4087,7 +4087,7 @@ checksum = "f1bddf1187be692e79c5ffeab891132dfb0f236ed36a43c7ed39f1165ee20191"
 [[package]]
 name = "veq"
 version = "0.1.0"
-source = "git+https://github.com/nicolaschan/udpp.git#16ced1b4a5a7d1e0ae0f2d694e727674db04e40d"
+source = "git+https://github.com/nicolaschan/udpp.git#569535bbfefe20a803157bff8b5fcebe2b064c21"
 dependencies = [
  "anyhow",
  "async-std",
