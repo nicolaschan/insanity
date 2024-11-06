@@ -125,7 +125,7 @@ impl ConnectionManager {
     }
 }
 
-#[derive(clap::ValueEnum, Clone, Debug)]
+#[derive(clap::ValueEnum, Clone, Debug, serde::Deserialize)]
 pub enum IpVersion {
     Ipv4,
     Ipv6,

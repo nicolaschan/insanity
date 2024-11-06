@@ -1,11 +1,12 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
-use clap::{Parser, Subcommand};
+use clap::{parser::ValueSource, ArgMatches, CommandFactory, Parser, Subcommand};
 use insanity_core::built_info;
 use insanity_native_tui_app::{
     connection_manager::ConnectionManager, connection_manager::IpVersion, update,
 };
 use insanity_tui_adapter::AppEvent;
+use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 // Update this number if there is a breaking change.
@@ -23,17 +24,17 @@ struct Cli {
 enum Commands {
     Run(RunOptions),
     Update {
-        #[clap(long, default_value = "false")]
+        #[clap(long, default_value_t = false)]
         dry_run: bool,
 
-        #[clap(long, default_value = "false")]
+        #[clap(long, default_value_t = false)]
         force: bool,
     },
 }
 
 #[derive(Parser, Debug)]
 struct RunOptions {
-    #[clap(short, long, default_value = "0")]
+    #[clap(short, long, default_value_t = 0)]
     port: u16,
 
     /// Disables the terminal user interface.
@@ -44,6 +45,10 @@ struct RunOptions {
     #[clap(long)]
     dir: Option<String>,
 
+    /// Path to config file.
+    #[clap(long)]
+    config_file: Option<String>,
+
     /// Bridge server.
     #[clap(long)]
     bridge: Vec<String>,
@@ -53,8 +58,57 @@ struct RunOptions {
     room: Option<String>,
 
     /// IPV4, IPV6, or dualstack
-    #[clap(long, value_enum, default_value_t = IpVersion::Ipv4)]
+    #[clap(long, value_enum, default_value_t = IpVersion::Dualstack)]
     ip_version: IpVersion,
+}
+
+// RunOptions that can be specified via config file
+// Has to exclude: config file path, dir
+#[derive(Deserialize, Debug, Default)]
+struct OptionalRunOptions {
+    port: Option<u16>,
+    no_tui: Option<bool>,
+    bridge: Option<Vec<String>>,
+    room: Option<Option<String>>,
+    ip_version: Option<IpVersion>,
+}
+
+fn merge_values<T>(primary: T, secondary: Option<T>, value_source: Option<ValueSource>) -> T {
+    match (value_source, secondary) {
+        (_, Option::None) => primary,
+        (Option::None | Option::Some(ValueSource::DefaultValue), Some(value)) => value,
+        (Option::Some(_), _) => primary,
+    }
+}
+
+// TODO: Can this be cleaned up using a macro?
+fn merge_configs(
+    primary: RunOptions,
+    secondary: OptionalRunOptions,
+    matches: &ArgMatches,
+) -> RunOptions {
+    log::debug!("Room: {:?}", matches.value_source("room"));
+    RunOptions {
+        port: merge_values(primary.port, secondary.port, matches.value_source("port")),
+        no_tui: merge_values(
+            primary.no_tui,
+            secondary.no_tui,
+            matches.value_source("no_tui"),
+        ),
+        bridge: merge_values(
+            primary.bridge,
+            secondary.bridge,
+            matches.value_source("bridge"),
+        ),
+        room: merge_values(primary.room, secondary.room, matches.value_source("room")),
+        ip_version: merge_values(
+            primary.ip_version,
+            secondary.ip_version,
+            matches.value_source("ip_version"),
+        ),
+        dir: None,
+        config_file: None,
+    }
 }
 
 #[tokio::main]
@@ -67,17 +121,19 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn run(opts: RunOptions) -> anyhow::Result<()> {
+async fn run(unprocessed_opts: RunOptions) -> anyhow::Result<()> {
     let main_cancellation_token = CancellationToken::new();
 
-    let insanity_dir = match opts.dir {
-        Some(dir) => PathBuf::from_str(&dir).unwrap(),
+    // Configure insanity data directory
+    let insanity_dir = match unprocessed_opts.dir {
+        Some(ref dir) => PathBuf::from_str(&dir).unwrap(),
         None => dirs::data_local_dir()
             .expect("no data directory!?")
             .join("insanity"),
     };
     renew_dir(&insanity_dir)?;
 
+    // Setup logging
     let log_path = insanity_dir.join("insanity.log");
     println!("Logging to {:?}", log_path);
     fern::Dispatch::new()
@@ -96,6 +152,30 @@ async fn run(opts: RunOptions) -> anyhow::Result<()> {
         .expect("could not setup logging");
 
     log::info!("Starting insanity");
+
+    // Read config file.
+
+    let config_file_path = match unprocessed_opts.config_file {
+        Some(ref path) => PathBuf::from_str(&path).unwrap(),
+        None => dirs::config_local_dir()
+            .expect("No config directory!?")
+            .join("insanity.toml"),
+    };
+
+    let config_file: OptionalRunOptions = match std::fs::read_to_string(config_file_path) {
+        Ok(string) => toml::from_str(&string).expect("Failed to deserialize config file."),
+        Err(e) => {
+            log::debug!("Error reading config file: {e}");
+            OptionalRunOptions::default()
+        }
+    };
+
+    // Merge configs
+    let opts = merge_configs(
+        unprocessed_opts,
+        config_file,
+        Cli::command().get_matches().subcommand().unwrap().1,
+    );
 
     let display_name = format!(
         "{} [{}]",
