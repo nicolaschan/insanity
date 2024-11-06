@@ -17,23 +17,9 @@ static BREAKING_CHANGE_VERSION: &str = "1";
 #[clap(version = built_info::GIT_VERSION, author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
-}
+    command: Option<Commands>,
 
-#[derive(Subcommand, Debug)]
-enum Commands {
-    Run(RunOptions),
-    Update {
-        #[clap(long, default_value_t = false)]
-        dry_run: bool,
-
-        #[clap(long, default_value_t = false)]
-        force: bool,
-    },
-}
-
-#[derive(Parser, Debug)]
-struct RunOptions {
+    /// Listen port.
     #[clap(short, long, default_value_t = 0)]
     port: u16,
 
@@ -62,6 +48,26 @@ struct RunOptions {
     ip_version: IpVersion,
 }
 
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Update {
+        #[clap(long, default_value_t = false)]
+        dry_run: bool,
+
+        #[clap(long, default_value_t = false)]
+        force: bool,
+    },
+}
+
+#[derive(Debug)]
+struct RunOptions {
+    port: u16,
+    no_tui: bool,
+    bridge: Vec<String>,
+    room: Option<String>,
+    ip_version: IpVersion,
+}
+
 // RunOptions that can be specified via config file
 // Has to exclude: config file path, dir
 #[derive(Deserialize, Debug, Default)]
@@ -82,11 +88,7 @@ fn merge_values<T>(primary: T, secondary: Option<T>, value_source: Option<ValueS
 }
 
 // TODO: Can this be cleaned up using a macro?
-fn merge_configs(
-    primary: RunOptions,
-    secondary: OptionalRunOptions,
-    matches: &ArgMatches,
-) -> RunOptions {
+fn merge_configs(primary: Cli, secondary: OptionalRunOptions, matches: &ArgMatches) -> RunOptions {
     log::debug!("Room: {:?}", matches.value_source("room"));
     RunOptions {
         port: merge_values(primary.port, secondary.port, matches.value_source("port")),
@@ -106,22 +108,20 @@ fn merge_configs(
             secondary.ip_version,
             matches.value_source("ip_version"),
         ),
-        dir: None,
-        config_file: None,
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let opts: Cli = Cli::parse();
+    let cli_opts: Cli = Cli::parse();
 
-    match opts.command {
-        Commands::Run(run_opts) => run(run_opts).await,
-        Commands::Update { dry_run, force } => update::update(dry_run, force).await,
+    match cli_opts.command {
+        None => run(cli_opts).await,
+        Some(Commands::Update { dry_run, force }) => update::update(dry_run, force).await,
     }
 }
 
-async fn run(unprocessed_opts: RunOptions) -> anyhow::Result<()> {
+async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
     let main_cancellation_token = CancellationToken::new();
 
     // Configure insanity data directory
@@ -171,11 +171,7 @@ async fn run(unprocessed_opts: RunOptions) -> anyhow::Result<()> {
     };
 
     // Merge configs
-    let opts = merge_configs(
-        unprocessed_opts,
-        config_file,
-        Cli::command().get_matches().subcommand().unwrap().1,
-    );
+    let opts = merge_configs(unprocessed_opts, config_file, &Cli::command().get_matches());
 
     let display_name = format!(
         "{} [{}]",
