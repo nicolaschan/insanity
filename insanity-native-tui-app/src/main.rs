@@ -11,7 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 // Update this number if there is a breaking change.
 // This will cause the insanity directory to be renewed.
-static BREAKING_CHANGE_VERSION: &str = "1";
+const BREAKING_CHANGE_VERSION: &str = "1";
+
+const INSANITY_CONFIG_LOCATION: &str = "insanity/config.toml";
 
 #[derive(Parser, Debug)]
 #[clap(version = built_info::GIT_VERSION, author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -57,6 +59,7 @@ enum Commands {
         #[clap(long, default_value_t = false)]
         force: bool,
     },
+    PrintConfigFile,
 }
 
 #[derive(Debug)]
@@ -118,7 +121,29 @@ async fn main() -> anyhow::Result<()> {
     match cli_opts.command {
         None => run(cli_opts).await,
         Some(Commands::Update { dry_run, force }) => update::update(dry_run, force).await,
+        Some(Commands::PrintConfigFile) => Ok(print_config_file(cli_opts.config_file)),
     }
+}
+
+fn get_config_file_path(config_file_path_arg: Option<&String>) -> PathBuf {
+    match config_file_path_arg {
+        Some(ref path) => PathBuf::from_str(&path).unwrap(),
+        None => dirs::config_local_dir()
+            .expect("No config directory!?")
+            .join(INSANITY_CONFIG_LOCATION),
+    }
+}
+
+fn print_config_file(config_file_path: Option<String>) {
+    let config_file_path = get_config_file_path(config_file_path.as_ref());
+    match std::fs::read_to_string(config_file_path) {
+        Ok(string) => {
+            println!("{}", string);
+        }
+        Err(e) => {
+            println!("Error reading config file: {e}");
+        }
+    };
 }
 
 async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
@@ -154,14 +179,8 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
     log::info!("Starting insanity");
 
     // Read config file.
-
-    let config_file_path = match unprocessed_opts.config_file {
-        Some(ref path) => PathBuf::from_str(&path).unwrap(),
-        None => dirs::config_local_dir()
-            .expect("No config directory!?")
-            .join("insanity/config.toml"),
-    };
-
+    let config_file_path = get_config_file_path(unprocessed_opts.config_file.as_ref());
+    log::debug!("Config file path: {:?}", config_file_path);
     let config_file: OptionalRunOptions = match std::fs::read_to_string(config_file_path) {
         Ok(string) => toml::from_str(&string).expect("Failed to deserialize config file."),
         Err(e) => {
@@ -169,6 +188,7 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
             OptionalRunOptions::default()
         }
     };
+    log::debug!("{:?}", config_file);
 
     // Merge configs
     let opts = merge_configs(unprocessed_opts, config_file, &Cli::command().get_matches());
