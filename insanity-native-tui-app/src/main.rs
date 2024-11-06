@@ -159,7 +159,7 @@ async fn run(unprocessed_opts: RunOptions) -> anyhow::Result<()> {
         Some(ref path) => PathBuf::from_str(&path).unwrap(),
         None => dirs::config_local_dir()
             .expect("No config directory!?")
-            .join("insanity.toml"),
+            .join("insanity/config.toml"),
     };
 
     let config_file: OptionalRunOptions = match std::fs::read_to_string(config_file_path) {
