@@ -82,17 +82,18 @@ struct OptionalRunOptions {
     ip_version: Option<IpVersion>,
 }
 
+/// Merges two configuration options, with priority as follows:
+/// 1. Explicitly specified options in primary; 2. Secondary; 3. Default value (stored in primary)
 fn merge_values<T>(primary: T, secondary: Option<T>, value_source: Option<ValueSource>) -> T {
     match (value_source, secondary) {
-        (_, Option::None) => primary,
-        (Option::None | Option::Some(ValueSource::DefaultValue), Some(value)) => value,
-        (Option::Some(_), _) => primary,
+        (_, None) => primary,
+        (None | Some(ValueSource::DefaultValue), Some(value)) => value,
+        (Some(_), _) => primary,
     }
 }
 
 // TODO: Can this be cleaned up using a macro?
 fn merge_configs(primary: Cli, secondary: OptionalRunOptions, matches: &ArgMatches) -> RunOptions {
-    log::debug!("Room: {:?}", matches.value_source("room"));
     RunOptions {
         port: merge_values(primary.port, secondary.port, matches.value_source("port")),
         no_tui: merge_values(
@@ -188,7 +189,6 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
             OptionalRunOptions::default()
         }
     };
-    log::debug!("{:?}", config_file);
 
     // Merge configs
     let opts = merge_configs(unprocessed_opts, config_file, &Cli::command().get_matches());

@@ -68,11 +68,11 @@ async fn action_set(
         .as_secs()
         + 60 * 60 * 12;
     if let Err(e) = action
-        .set_with_expires_at(
-            key.into(),
-            serialized_signed_value.into(),
-            expires_in_12_hours,
-        )
+        .set()
+        .name(key.into())
+        .value(serialized_signed_value.into())
+        .expiry(baybridge::client::Expiry::ExpiresAt(expires_in_12_hours))
+        .call()
         .await
     {
         anyhow::bail!("Failed to set value to baybridge with error: {e}");
