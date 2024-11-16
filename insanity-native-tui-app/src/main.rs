@@ -45,13 +45,16 @@ struct Cli {
     #[clap(long)]
     room: Option<String>,
 
-    /// IPV4, IPV6, or dualstack
+    /// ipv4, ipv6, or dualstack
     #[clap(long, value_enum, default_value_t = IpVersion::Dualstack)]
     ip_version: IpVersion,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Connect to room [default]
+    Run,
+    /// Update insanity.
     Update {
         #[clap(long, default_value_t = false)]
         dry_run: bool,
@@ -59,6 +62,7 @@ enum Commands {
         #[clap(long, default_value_t = false)]
         force: bool,
     },
+    /// Print contents of the file (if any) being used for configuration.
     PrintConfigFile,
 }
 
@@ -120,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
     let cli_opts: Cli = Cli::parse();
 
     match cli_opts.command {
-        None => run(cli_opts).await,
+        None | Some(Commands::Run) => run(cli_opts).await,
         Some(Commands::Update { dry_run, force }) => update::update(dry_run, force).await,
         Some(Commands::PrintConfigFile) => Ok(print_config_file(cli_opts.config_file)),
     }
