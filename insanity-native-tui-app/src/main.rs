@@ -34,7 +34,7 @@ struct Cli {
     dir: Option<String>,
 
     /// Path to config file.
-    #[clap(long)]
+    #[clap(short, long)]
     config_file: Option<String>,
 
     /// Bridge server.
