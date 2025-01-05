@@ -208,8 +208,8 @@ pub async fn start_room_connection(
     tokio::spawn(async move {
         let verifying_key = signing_key.verifying_key();
         tokio::select! {
-            _ = retrieve_peers(action, &cipher, &verifying_key, &room_fingerprint, conn_info_tx) => {
-                log::error!("Retrieve peers loop failed");
+            e = retrieve_peers(action, &cipher, &verifying_key, &room_fingerprint, conn_info_tx) => {
+                log::error!("Retrieve peers loop failed: {:?}", e);
             },
             _ = cancellation_token.cancelled() => {
                 log::debug!("Baybridge-related tasks shutdown.");

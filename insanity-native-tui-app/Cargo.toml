@@ -50,3 +50,4 @@ indicatif = { version = "0.17.8", features = ["tokio"] }
 zip = "2.2.0"
 base64 = "0.22.1"
 toml = "0.8.19"
+url = "2.5.4"

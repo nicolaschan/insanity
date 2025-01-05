@@ -86,9 +86,13 @@ impl ConnectionManager {
 
             // Start up baybridge connection.
             let baybridge_datadir = base_dir.join("baybridge");
-            let connections = bridge_servers
+            let bridge_server_urls = bridge_servers
                 .iter()
-                .map(|s| Connection::Http(HttpConnection::new(s)))
+                .map(|s| url::Url::parse(s))
+                .collect::<Result<Vec<_>, _>>()?;
+            let connections = bridge_server_urls
+                .into_iter()
+                .map(|url| Connection::Http(HttpConnection::new(url)))
                 .collect();
             let baybridge_config = baybridge::configuration::Configuration::new(
                 baybridge_datadir.clone(),
