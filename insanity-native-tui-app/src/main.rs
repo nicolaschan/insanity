@@ -127,13 +127,16 @@ async fn main() -> anyhow::Result<()> {
     match cli_opts.command {
         None | Some(Commands::Run) => run(cli_opts).await,
         Some(Commands::Update { dry_run, force }) => update::update(dry_run, force).await,
-        Some(Commands::PrintConfigFile) => Ok(print_config_file(cli_opts.config_file)),
+        Some(Commands::PrintConfigFile) => {
+            print_config_file(cli_opts.config_file);
+            Ok(())
+        }
     }
 }
 
 fn get_config_file_path(config_file_path_arg: Option<&String>) -> PathBuf {
     match config_file_path_arg {
-        Some(ref path) => PathBuf::from_str(&path).unwrap(),
+        Some(path) => PathBuf::from_str(path).unwrap(),
         None => dirs::config_local_dir()
             .expect("No config directory!?")
             .join(INSANITY_CONFIG_LOCATION.iter().collect::<PathBuf>()),
@@ -157,7 +160,7 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
 
     // Configure insanity data directory
     let insanity_dir = match unprocessed_opts.dir {
-        Some(ref dir) => PathBuf::from_str(&dir).unwrap(),
+        Some(ref dir) => PathBuf::from_str(dir).unwrap(),
         None => dirs::data_local_dir()
             .expect("no data directory!?")
             .join("insanity"),
