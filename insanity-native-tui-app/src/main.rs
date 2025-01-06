@@ -13,7 +13,8 @@ use tokio_util::sync::CancellationToken;
 // This will cause the insanity directory to be renewed.
 const BREAKING_CHANGE_VERSION: &str = "1";
 
-const INSANITY_CONFIG_LOCATION: &str = "insanity/config.toml";
+// Use INSANITY_CONFIG_LOCATION.iter().collect::<PathBuf>() to create cross-platform path.
+const INSANITY_CONFIG_LOCATION: [&str; 2] = ["insanity", "config.toml"];
 
 #[derive(Parser, Debug)]
 #[clap(version = built_info::GIT_VERSION, author = "Nicolas Chan <nicolas@nicolaschan.com>")]
@@ -135,7 +136,7 @@ fn get_config_file_path(config_file_path_arg: Option<&String>) -> PathBuf {
         Some(ref path) => PathBuf::from_str(&path).unwrap(),
         None => dirs::config_local_dir()
             .expect("No config directory!?")
-            .join(INSANITY_CONFIG_LOCATION),
+            .join(INSANITY_CONFIG_LOCATION.iter().collect::<PathBuf>()),
     }
 }
 
