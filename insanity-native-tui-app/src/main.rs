@@ -243,13 +243,13 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
         });
     }
 
-    if let Some(handle) = handle {
+    match handle { Some(handle) => {
         insanity_tui_adapter::stop_tui(handle).await.unwrap();
-    } else {
+    } _ => {
         loop {
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
-    }
+    }}
 
     // TODO: Maybe should wait for tasks to shutdown, but who cares?
     main_cancellation_token.cancel();

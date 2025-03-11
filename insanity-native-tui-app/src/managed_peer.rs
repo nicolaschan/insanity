@@ -81,7 +81,7 @@ impl ManagedPeer {
 
     pub fn set_denoise(&self, denoise: bool) -> anyhow::Result<()> {
         self.denoise.store(denoise, Ordering::Relaxed);
-        if let Some(ref app_event_tx) = &self.app_event_tx {
+        if let Some(app_event_tx) = &self.app_event_tx {
             app_event_tx.send(AppEvent::SetPeerDenoise(self.id.to_string(), denoise))?;
         }
         Ok(())
@@ -90,7 +90,7 @@ impl ManagedPeer {
     pub fn set_volume(&self, volume: usize) -> anyhow::Result<()> {
         let mut volume_guard = self.volume.lock().unwrap();
         *volume_guard = volume;
-        if let Some(ref app_event_tx) = &self.app_event_tx {
+        if let Some(app_event_tx) = &self.app_event_tx {
             app_event_tx.send(AppEvent::SetPeerVolume(self.id.to_string(), volume))?;
         }
         Ok(())
@@ -128,7 +128,7 @@ impl ManagedPeer {
             *connection_status = ConnectionStatus::Disabled;
         }
 
-        if let Some(ref app_event_tx) = &self.app_event_tx {
+        if let Some(app_event_tx) = &self.app_event_tx {
             if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
                 self.id.to_string(),
                 Some(self.display_name.clone()),
@@ -171,7 +171,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                         *connection_status = ConnectionStatus::Connected;
                     }
 
-                    if let Some(ref app_event_tx) = &peer.app_event_tx {
+                    if let Some(app_event_tx) = &peer.app_event_tx {
                         if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
                             peer.id.to_string(),
                             Some(peer.display_name.clone()),
@@ -223,7 +223,7 @@ async fn update_app_connecting_status(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
         }
-    } else if let Some(app_event_tx) = app_event_tx {
+    } else { match app_event_tx { Some(app_event_tx) => {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
         loop {
             for ip_address in ip_addresses.iter() {
@@ -239,9 +239,9 @@ async fn update_app_connecting_status(
                 }
             }
         }
-    } else {
+    } _ => {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
         }
-    }
+    }}}
 }

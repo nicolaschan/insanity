@@ -81,7 +81,7 @@ impl ConnectionManager {
             self.cancellation_token.clone(),
         );
 
-        if let Some(ref room_name) = &room_name {
+        if let Some(room_name) = &room_name {
             log::debug!("Attempting to join room {room_name} on server {bridge_servers:?}.");
 
             // Start up baybridge connection.

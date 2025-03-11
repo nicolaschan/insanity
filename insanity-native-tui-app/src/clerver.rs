@@ -144,7 +144,7 @@ async fn run_receiver(
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
                 ProtocolMessage::ChatMessage(chat_message) => {
-                    if let Some(ref app_event_sender) = &app_event_sender {
+                    if let Some(app_event_sender) = &app_event_sender {
                         app_event_sender
                             .send(AppEvent::NewMessage(id.clone(), chat_message))
                             .unwrap();

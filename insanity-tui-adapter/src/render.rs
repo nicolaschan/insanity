@@ -58,7 +58,7 @@ pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     }
 }
 
-fn tab_list(app: &App) -> impl Widget {
+fn tab_list(app: &App) -> impl Widget + use<> {
     let titles = app
         .tabs
         .iter()
