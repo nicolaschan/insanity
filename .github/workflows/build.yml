@@ -102,8 +102,24 @@ jobs:
         name: insanity-windows-msvc
         path: target/x86_64-pc-windows-msvc/release/insanity.exe
 
-  nix:
+  linux-nix:
     runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+    - name: Nix Build
+      run: nix --extra-experimental-features nix-command --extra-experimental-features flakes build
+    - name: Upload build result
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-nix
+        path: result
+
+  macos-nix:
+    runs-on: macos-latest
     steps:
     - uses: actions/checkout@v4
     - name: Install Nix
