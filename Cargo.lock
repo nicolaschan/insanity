@@ -2178,7 +2178,7 @@ dependencies = [
 
 [[package]]
 name = "insanity-core"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "bon",
  "built",
@@ -2186,7 +2186,7 @@ dependencies = [
 
 [[package]]
 name = "insanity-native-tui-app"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2231,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "insanity-tui-adapter"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "built",
  "crossterm 0.23.2",
@@ -3383,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "rubato-audio-source"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "insanity-core",
  "log",

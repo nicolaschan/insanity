@@ -1,6 +1,6 @@
 [package]
 name = "insanity-tui-adapter"
-version = "1.5.8"
+version = "1.5.9"
 edition = "2024"
 
 [lib]
