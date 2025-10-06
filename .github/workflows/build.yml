@@ -63,6 +63,8 @@ jobs:
     - name: Rustup Target
       run: rustup target add aarch64-apple-darwin
     - name: Build
+      env:
+        CMAKE_ARGS: "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
       run: cargo +stable-aarch64-apple-darwin build --release --verbose --target aarch64-apple-darwin
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v4.3.1
