@@ -26,7 +26,7 @@
         
         # Platform-specific dependencies
         audioLibs = if pkgs.stdenv.isDarwin
-          then with pkgs.darwin.apple_sdk.frameworks; [
+          then with pkgs.darwin.apple_sdk_11_0.frameworks; [
             AudioToolbox
             AudioUnit
             CoreAudio
