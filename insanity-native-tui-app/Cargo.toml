@@ -19,7 +19,6 @@ nnnoiseless = "=0.3.0"
 serde = { version = "1.0.197", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 opus = "0.3.0"
-audiopus = "0.2.0"
 send_safe = { git = "https://github.com/nicolaschan/send_safe.git" }
 uuid = { version = "1.7", features = ["serde", "v4"] }
 dirs = "5.0.1"
