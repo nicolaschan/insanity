@@ -115,7 +115,7 @@ jobs:
     - name: Upload build result
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-nix
+        name: insanity-linux-nix
         path: result
 
   macos-nix:
@@ -131,7 +131,7 @@ jobs:
     - name: Upload build result
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-nix
+        name: insanity-macos-nix
         path: result
 
   release:
