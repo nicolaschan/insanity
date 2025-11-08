@@ -23,16 +23,6 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = ["rust-src"];
         };
-        
-        # Platform-specific dependencies
-        audioLibs = if pkgs.stdenv.isDarwin
-          then with pkgs.darwin.apple_sdk.frameworks; [
-            AudioToolbox
-            AudioUnit
-            CoreAudio
-            CoreFoundation
-          ]
-          else [ pkgs.alsa-lib ];
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
@@ -47,15 +37,16 @@
             pkg-config
             # web app
             nodejs_22
-          ] ++ audioLibs ++ (if stdenv.isDarwin then [
-            libiconv
+          ] ++ (if stdenv.isDarwin then [
+            # SDK automatically includes audio libs
           ] else [
+            alsa-lib
             gcc
           ]);
         };
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "insanity";
-          version = "1.5.9";
+          version = "1.5.13";
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
@@ -69,9 +60,11 @@
           buildInputs = [
             pkgs.openssl
             pkgs.libopus
-          ] ++ audioLibs ++ (if pkgs.stdenv.isDarwin then [
-            pkgs.libiconv
-          ] else []);
+          ] ++ (if pkgs.stdenv.isDarwin then [
+            # SDK automatically includes audio libs
+          ] else [
+            pkgs.alsa-lib
+          ]);
           # If you have any runtime dependencies, add them here:
           # propagatedBuildInputs = [ ... ];
         };

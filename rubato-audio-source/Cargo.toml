@@ -1,6 +1,6 @@
 [package]
 name = "rubato-audio-source"
-version = "1.5.9"
+version = "1.5.13"
 edition = "2024"
 
 [dependencies]

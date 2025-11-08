@@ -55,13 +55,20 @@ jobs:
         path: insanity
 
   macos-apple-silicon:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
     - uses: actions/checkout@v4
     - name: Rustup Toolchain
       run: rustup toolchain install stable-aarch64-apple-darwin
     - name: Rustup Target
       run: rustup target add aarch64-apple-darwin
+    - name: Install CMake 3.29
+      run: |
+        brew uninstall cmake --ignore-dependencies || true
+        brew tap-new $USER/local-cmake
+        brew extract --version=3.29.6 cmake $USER/local-cmake
+        brew install $USER/local-cmake/cmake@3.29.6
+        echo "/usr/local/opt/cmake@3.29.6/bin" >> $GITHUB_PATH
     - name: Build
       run: cargo +stable-aarch64-apple-darwin build --release --verbose --target aarch64-apple-darwin
     - name: Upload a Build Artifact
@@ -115,7 +122,7 @@ jobs:
     - name: Upload build result
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-nix
+        name: insanity-linux-nix
         path: result
 
   macos-nix:
@@ -131,7 +138,7 @@ jobs:
     - name: Upload build result
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-nix
+        name: insanity-macos-nix
         path: result
 
   release:
