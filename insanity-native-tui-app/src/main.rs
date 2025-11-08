@@ -1,6 +1,6 @@
 use std::{path::PathBuf, str::FromStr, time::Duration};
 
-use clap::{parser::ValueSource, ArgMatches, CommandFactory, Parser, Subcommand};
+use clap::{ArgMatches, CommandFactory, Parser, Subcommand, parser::ValueSource};
 use insanity_core::built_info;
 use insanity_native_tui_app::{
     connection_manager::ConnectionManager, connection_manager::IpVersion, update,
@@ -64,7 +64,10 @@ enum Commands {
         force: bool,
     },
     /// Print contents of the file (if any) being used for configuration.
-    PrintConfigFile,
+    #[clap(name = "+print-config")]
+    DebugConfigFile,
+    #[clap(name = "+config-path")]
+    DebugConfigLocation,
 }
 
 #[derive(Debug)]
@@ -127,8 +130,17 @@ async fn main() -> anyhow::Result<()> {
     match cli_opts.command {
         None | Some(Commands::Run) => run(cli_opts).await,
         Some(Commands::Update { dry_run, force }) => update::update(dry_run, force).await,
-        Some(Commands::PrintConfigFile) => {
+        Some(Commands::DebugConfigFile) => {
             print_config_file(cli_opts.config_file);
+            Ok(())
+        }
+        Some(Commands::DebugConfigLocation) => {
+            let config_file_path = get_config_file_path(cli_opts.config_file.as_ref());
+            if let Some(path) = config_file_path.to_str() {
+                println!("{}", path);
+            } else {
+                println!("{:?}", config_file_path);
+            }
             Ok(())
         }
     }
@@ -243,13 +255,14 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
         });
     }
 
-    match handle { Some(handle) => {
-        insanity_tui_adapter::stop_tui(handle).await.unwrap();
-    } _ => {
-        loop {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+    match handle {
+        Some(handle) => {
+            insanity_tui_adapter::stop_tui(handle).await.unwrap();
         }
-    }}
+        _ => loop {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        },
+    }
 
     // TODO: Maybe should wait for tasks to shutdown, but who cares?
     main_cancellation_token.cancel();
@@ -266,7 +279,9 @@ fn renew_dir(dir: &PathBuf) -> anyhow::Result<()> {
     };
 
     if version != BREAKING_CHANGE_VERSION {
-        log::info!("Renewing insanity directory: found version {version} but code uses {BREAKING_CHANGE_VERSION}");
+        log::info!(
+            "Renewing insanity directory: found version {version} but code uses {BREAKING_CHANGE_VERSION}"
+        );
         if let Err(e) = std::fs::remove_dir_all(dir) {
             log::debug!("Error on removing directory. Continuing anyway. Error {e}");
         }
