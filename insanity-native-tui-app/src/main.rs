@@ -63,11 +63,8 @@ enum Commands {
         #[clap(long, default_value_t = false)]
         force: bool,
     },
-    /// Print contents of the file (if any) being used for configuration.
-    #[clap(name = "+print-config")]
-    DebugConfigFile,
-    #[clap(name = "+config-path")]
-    DebugConfigLocation,
+    PrintConfig,
+    PrintConfigPath,
 }
 
 #[derive(Debug)]
@@ -130,11 +127,11 @@ async fn main() -> anyhow::Result<()> {
     match cli_opts.command {
         None | Some(Commands::Run) => run(cli_opts).await,
         Some(Commands::Update { dry_run, force }) => update::update(dry_run, force).await,
-        Some(Commands::DebugConfigFile) => {
+        Some(Commands::PrintConfig) => {
             print_config_file(cli_opts.config_file);
             Ok(())
         }
-        Some(Commands::DebugConfigLocation) => {
+        Some(Commands::PrintConfigPath) => {
             let config_file_path = get_config_file_path(cli_opts.config_file.as_ref());
             if let Some(path) = config_file_path.to_str() {
                 println!("{}", path);
