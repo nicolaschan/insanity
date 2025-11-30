@@ -46,7 +46,7 @@
         };
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "insanity";
-          version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+          version = (builtins.fromTOML (builtins.readFile ./insanity-native-tui-app/Cargo.toml)).package.version;
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
