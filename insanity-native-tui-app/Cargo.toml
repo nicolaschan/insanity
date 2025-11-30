@@ -1,6 +1,6 @@
 [package]
 name = "insanity-native-tui-app"
-version = "1.5.14"
+version = "1.5.15"
 authors = ["Nicolas Chan <nicolas@nicolaschan.com>"]
 edition = "2024"
 default-run = "insanity"
