@@ -171,13 +171,12 @@ pub async fn start_room_connection(
         fingerprint.to_string()
     };
     log::debug!("Room fingerprint: {room_fingerprint}");
-    if let Some(app_event_tx) = app_event_tx.clone() {
-        if let Err(e) = app_event_tx.send(insanity_tui_adapter::AppEvent::SetRoomFingerprint(
+    if let Some(app_event_tx) = app_event_tx.clone()
+        && let Err(e) = app_event_tx.send(insanity_tui_adapter::AppEvent::SetRoomFingerprint(
             room_fingerprint.clone(),
         )) {
             log::debug!("Failed to write room fingerprint to UI: {e}");
         }
-    }
 
     let signing_key = {
         let mut signing_key_material = [0u8; 32];

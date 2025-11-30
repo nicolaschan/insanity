@@ -75,11 +75,10 @@ impl Editor {
                     self.cursor = i;
                     return;
                 }
-            } else if let Some(c) = chars.get(i) {
-                if c != &' ' {
+            } else if let Some(c) = chars.get(i)
+                && c != &' ' {
                     found = true;
                 }
-            }
         }
         self.cursor = self.buffer.chars().count();
     }
@@ -92,11 +91,10 @@ impl Editor {
                 if let Some(' ') = chars.get(i) {
                     return i + 1;
                 }
-            } else if let Some(c) = chars.get(i) {
-                if c != &' ' {
+            } else if let Some(c) = chars.get(i)
+                && c != &' ' {
                     found = true;
                 }
-            }
         }
         0
     }

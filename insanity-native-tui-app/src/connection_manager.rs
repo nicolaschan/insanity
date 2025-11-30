@@ -400,11 +400,10 @@ fn handle_user_action(
         }
         UserInputEvent::SetMuteSelf(is_muted) => {
             sender_is_muted.store(is_muted, Ordering::Relaxed);
-            if let Some(app_event_tx) = app_event_tx {
-                if let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted)) {
+            if let Some(app_event_tx) = app_event_tx
+                && let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted)) {
                     log::debug!("Failed to send mute self event: {:?}", e);
                 }
-            }
         }
     }
     Ok(())

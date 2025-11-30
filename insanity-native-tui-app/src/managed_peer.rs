@@ -128,8 +128,8 @@ impl ManagedPeer {
             *connection_status = ConnectionStatus::Disabled;
         }
 
-        if let Some(app_event_tx) = &self.app_event_tx {
-            if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+        if let Some(app_event_tx) = &self.app_event_tx
+            && let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
                 self.id.to_string(),
                 Some(self.display_name.clone()),
                 PeerState::Disabled,
@@ -138,7 +138,6 @@ impl ManagedPeer {
             ))) {
                 log::debug!("Failed to send app event: {:?}", e);
             }
-        }
 
         Ok(())
     }
@@ -171,8 +170,8 @@ async fn run_connection_loop(peer: ManagedPeer) {
                         *connection_status = ConnectionStatus::Connected;
                     }
 
-                    if let Some(app_event_tx) = &peer.app_event_tx {
-                        if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                    if let Some(app_event_tx) = &peer.app_event_tx
+                        && let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
                             peer.id.to_string(),
                             Some(peer.display_name.clone()),
                             PeerState::Connected(session.remote_addr().await.to_string()),
@@ -181,7 +180,6 @@ async fn run_connection_loop(peer: ManagedPeer) {
                         ))) {
                             log::debug!("Failed to send app event: {:?}", e);
                         }
-                    }
 
                     log::info!("Starting clerver for connection with {}.", peer.id);
                     run_clerver(
