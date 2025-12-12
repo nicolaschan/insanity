@@ -109,7 +109,7 @@ jobs:
         name: insanity-windows-msvc
         path: target/x86_64-pc-windows-msvc/release/insanity.exe
 
-  linux-nix:
+  nix-x86_64-linux:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -122,10 +122,26 @@ jobs:
     - name: Upload build result
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-linux-nix
+        name: insanity-nix-x86_64-linux
         path: result
 
-  macos-nix:
+  nix-aarch64-linux:
+    runs-on: ubuntu-24.04-arm
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Nix
+      uses: cachix/install-nix-action@v31
+      with:
+        nix_path: nixpkgs=channel:nixos-unstable
+    - name: Nix Build
+      run: nix --extra-experimental-features nix-command --extra-experimental-features flakes build
+    - name: Upload build result
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: insanity-nix-aarch64-linux
+        path: result
+
+  nix-aarch64-darwin:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v4
@@ -138,7 +154,7 @@ jobs:
     - name: Upload build result
       uses: actions/upload-artifact@v4.3.1
       with:
-        name: insanity-macos-nix
+        name: insanity-nix-aarch64-darwin
         path: result
 
   release:

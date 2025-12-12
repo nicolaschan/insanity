@@ -23,6 +23,9 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = ["rust-src"];
         };
+        packageMetadata = builtins.fromTOML (builtins.readFile ./insanity-native-tui-app/Cargo.toml);
+        pname = packageMetadata.package.name;
+        version = packageMetadata.package.version;
       in {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
@@ -44,9 +47,9 @@
             gcc
           ]);
         };
+
         packages.default = pkgs.rustPlatform.buildRustPackage {
-          pname = "insanity";
-          version = (builtins.fromTOML (builtins.readFile ./insanity-native-tui-app/Cargo.toml)).package.version;
+          inherit pname version;
           src = ./.;
           cargoLock = {
             lockFile = ./Cargo.lock;
@@ -65,8 +68,14 @@
           ] else [
             pkgs.alsa-lib
           ]);
-          # If you have any runtime dependencies, add them here:
-          # propagatedBuildInputs = [ ... ];
+        };
+
+        packages.docker = pkgs.dockerTools.buildLayeredImage {
+          name = pname;
+          tag = version;
+          config = {
+            Entrypoint = ["${self.packages.${system}.default}/bin/insanity"];
+          };
         };
       }
     );
