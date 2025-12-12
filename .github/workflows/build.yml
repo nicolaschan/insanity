@@ -1,186 +1,177 @@
 name: Build
-
 on:
-    push:
-        branches: ["master"]
-        tags:
-            - "v[0-9]+.[0-9]+.[0-9]+*" # Matches version tags like v1.0.0, v2.1.3-rc1, etc.
-    pull_request:
-        branches: ["master"]
-    workflow_dispatch:
+  push:
+    branches: ["master"]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*" # Matches version tags like v1.0.0, v2.1.3-rc1, etc.
+  pull_request:
+    branches: ["master"]
+  workflow_dispatch:
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
 
 jobs:
-    test:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Install dependencies
-              run: sudo apt-get install -y libasound2-dev
-            - name: Test
-              run: cargo test --verbose
-
-    linux-gnu:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Install dependencies
-              run: sudo apt-get install -y libasound2-dev
-            - name: Build
-              run: cargo build --release --verbose
-            - name: Test
-              run: cargo test --verbose
-            - name: Upload a Build Artifact
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-linux-gnu
-                  path: target/release/insanity
-
-    linux-musl:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Docker Build
-              run: docker build -t insanity-musl -f Dockerfile.alpine .
-            - name: Copy artifact
-              run: |
-                  docker create --name temp-container insanity-musl
-                  docker cp temp-container:/usr/local/cargo/bin/insanity ./insanity
-            - name: Upload a Build Artifact
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-linux-musl
-                  path: insanity
-
-    macos-apple-silicon:
-        runs-on: macos-15
-        steps:
-            - uses: actions/checkout@v4
-            - name: Rustup Toolchain
-              run: rustup toolchain install stable-aarch64-apple-darwin
-            - name: Rustup Target
-              run: rustup target add aarch64-apple-darwin
-            - name: Install CMake 3.29
-              run: |
-                  brew uninstall cmake --ignore-dependencies || true
-                  brew tap-new $USER/local-cmake
-                  brew extract --version=3.29.6 cmake $USER/local-cmake
-                  brew install $USER/local-cmake/cmake@3.29.6
-                  echo "/usr/local/opt/cmake@3.29.6/bin" >> $GITHUB_PATH
-            - name: Build
-              run: cargo +stable-aarch64-apple-darwin build --release --verbose --target aarch64-apple-darwin
-            - name: Upload a Build Artifact
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-macos-apple-silicon
-                  path: target/aarch64-apple-darwin/release/insanity
-
-    windows-mingw:
-        runs-on: windows-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Rustup Toolchain
-              run: rustup toolchain install --force-non-host stable-x86_64-pc-windows-gnu
-            - name: Rustup Target
-              run: rustup target add x86_64-pc-windows-gnu
-            - name: Build
-              run: cargo +stable-x86_64-pc-windows-gnu build --release --verbose --target x86_64-pc-windows-gnu
-            - name: Upload a Build Artifact
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-windows-mingw
-                  path: target/x86_64-pc-windows-gnu/release/insanity.exe
-
-    windows-msvc:
-        runs-on: windows-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Rustup Toolchain
-              run: rustup toolchain install stable-x86_64-pc-windows-msvc
-            - name: Rustup Target
-              run: rustup target add x86_64-pc-windows-msvc
-            - name: Build
-              run: cargo +stable-x86_64-pc-windows-msvc build --release --verbose --target x86_64-pc-windows-msvc
-            - name: Upload a Build Artifact
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-windows-msvc
-                  path: target/x86_64-pc-windows-msvc/release/insanity.exe
-
-    nix-x86_64-linux:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Install Nix
-              uses: cachix/install-nix-action@v31
-              with:
-                  nix_path: nixpkgs=channel:nixos-unstable
-            - name: Nix Build
-              run: nix build
-            - name: Upload build result
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-nix-x86_64-linux
-                  path: result
-
-    nix-aarch64-linux:
-        runs-on: ubuntu-24.04-arm
-        steps:
-            - uses: actions/checkout@v4
-            - name: Install Nix
-              uses: cachix/install-nix-action@v31
-              with:
-                  nix_path: nixpkgs=channel:nixos-unstable
-            - name: Nix Build
-              run: nix build
-            - name: Upload build result
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-nix-aarch64-linux
-                  path: result
-
-    nix-aarch64-darwin:
-        runs-on: macos-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Install Nix
-              uses: cachix/install-nix-action@v31
-              with:
-                  nix_path: nixpkgs=channel:nixos-unstable
-            - name: Nix Build
-              run: nix build
-            - name: Upload build result
-              uses: actions/upload-artifact@v4.3.1
-              with:
-                  name: insanity-nix-aarch64-darwin
-                  path: result
-
-    release:
-        runs-on: ubuntu-latest
-        if: startsWith(github.ref, 'refs/tags/v')
-        needs:
-            [
-                linux-gnu,
-                linux-musl,
-                macos-apple-silicon,
-                windows-mingw,
-                windows-msvc,
-            ]
-        steps:
-            - name: Download artifacts
-              uses: actions/download-artifact@v4
-            - name: Zip artifacts
-              run: |
-                  for f in *; do
-                    if [ -d "$f" ]; then
-                      zip -r "$f.zip" "$f"
-                      rm -rf "$f"
-                    fi
-                  done
-            - name: Create release
-              uses: ncipollo/release-action@v1
-              with:
-                  artifacts: "*"
-                  token: ${{ secrets.GITHUB_TOKEN }}
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get install -y libasound2-dev
+      - name: Test
+        run: cargo test --verbose
+  linux-gnu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get install -y libasound2-dev
+      - name: Build
+        run: cargo build --release --verbose
+      - name: Test
+        run: cargo test --verbose
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-linux-gnu
+          path: target/release/insanity
+  linux-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker Build
+        run: docker build -t insanity-musl -f Dockerfile.alpine .
+      - name: Copy artifact
+        run: |
+          docker create --name temp-container insanity-musl
+          docker cp temp-container:/usr/local/cargo/bin/insanity ./insanity
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-linux-musl
+          path: insanity
+  macos-apple-silicon:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rustup Toolchain
+        run: rustup toolchain install stable-aarch64-apple-darwin
+      - name: Rustup Target
+        run: rustup target add aarch64-apple-darwin
+      - name: Install CMake 3.29
+        run: |
+          brew uninstall cmake --ignore-dependencies || true
+          brew tap-new $USER/local-cmake
+          brew extract --version=3.29.6 cmake $USER/local-cmake
+          brew install $USER/local-cmake/cmake@3.29.6
+          echo "/usr/local/opt/cmake@3.29.6/bin" >> $GITHUB_PATH
+      - name: Build
+        run: cargo +stable-aarch64-apple-darwin build --release --verbose --target aarch64-apple-darwin
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-macos-apple-silicon
+          path: target/aarch64-apple-darwin/release/insanity
+  windows-mingw:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rustup Toolchain
+        run: rustup toolchain install --force-non-host stable-x86_64-pc-windows-gnu
+      - name: Rustup Target
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: Build
+        run: cargo +stable-x86_64-pc-windows-gnu build --release --verbose --target x86_64-pc-windows-gnu
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-windows-mingw
+          path: target/x86_64-pc-windows-gnu/release/insanity.exe
+  windows-msvc:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rustup Toolchain
+        run: rustup toolchain install stable-x86_64-pc-windows-msvc
+      - name: Rustup Target
+        run: rustup target add x86_64-pc-windows-msvc
+      - name: Build
+        run: cargo +stable-x86_64-pc-windows-msvc build --release --verbose --target x86_64-pc-windows-msvc
+      - name: Upload a Build Artifact
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-windows-msvc
+          path: target/x86_64-pc-windows-msvc/release/insanity.exe
+  nix-x86_64-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Nix Build
+        run: nix build
+      - name: Upload build result
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-nix-x86_64-linux
+          path: result
+  nix-aarch64-linux:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Nix Build
+        run: nix build
+      - name: Upload build result
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-nix-aarch64-linux
+          path: result
+  nix-aarch64-darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: Nix Build
+        run: nix build
+      - name: Upload build result
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: insanity-nix-aarch64-darwin
+          path: result
+  release:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - linux-gnu
+      - linux-musl
+      - macos-apple-silicon
+      - windows-mingw
+      - windows-msvc
+      - nix-x86_64-linux
+      - nix-aarch64-linux
+      - nix-aarch64-darwin
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+      - name: Zip artifacts
+        run: |
+          for f in *; do
+            if [ -d "$f" ]; then
+              zip -r "$f.zip" "$f"
+              rm -rf "$f"
+            fi
+          done
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "*"
+          token: ${{ secrets.GITHUB_TOKEN }}
