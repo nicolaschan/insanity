@@ -26,29 +26,7 @@
         packageMetadata = builtins.fromTOML (builtins.readFile ./insanity-native-tui-app/Cargo.toml);
         pname = packageMetadata.package.name;
         version = packageMetadata.package.version;
-      in {
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            rustToolchain
-            rust-analyzer
-            cargo-edit
-            cmake
-            libopus
-            automake
-            autoconf
-            perl
-            pkg-config
-            # web app
-            nodejs_22
-          ] ++ (if stdenv.isDarwin then [
-            # SDK automatically includes audio libs
-          ] else [
-            alsa-lib
-            gcc
-          ]);
-        };
-
-        packages.default = pkgs.rustPlatform.buildRustPackage {
+        rustPackageOptions = pkgs: {
           inherit pname version;
           src = ./.;
           cargoLock = {
@@ -60,15 +38,50 @@
             "insanity"
           ];
           nativeBuildInputs = [pkgs.pkg-config pkgs.perl pkgs.cmake];
-          buildInputs = [
-            pkgs.openssl
-            pkgs.libopus
-          ] ++ (if pkgs.stdenv.isDarwin then [
-            # SDK automatically includes audio libs
-          ] else [
-            pkgs.alsa-lib
-          ]);
+          buildInputs =
+            [
+              pkgs.libopus
+            ]
+            ++ (
+              if pkgs.stdenv.isDarwin
+              then [
+                # SDK automatically includes audio libs
+              ]
+              else [
+                pkgs.alsa-lib
+              ]
+            );
         };
+      in {
+        devShells.default = pkgs.mkShell {
+          buildInputs = with pkgs;
+            [
+              rustToolchain
+              rust-analyzer
+              cargo-edit
+              cmake
+              libopus
+              automake
+              autoconf
+              perl
+              pkg-config
+              # web app
+              nodejs_22
+            ]
+            ++ (
+              if stdenv.isDarwin
+              then [
+                # SDK automatically includes audio libs
+              ]
+              else [
+                alsa-lib
+                gcc
+              ]
+            );
+        };
+
+        packages.default = pkgs.rustPlatform.buildRustPackage (rustPackageOptions pkgs);
+        packages.static = pkgs.pkgsStatic.rustPlatform.buildRustPackage (rustPackageOptions pkgs.pkgsStatic);
 
         packages.docker = pkgs.dockerTools.buildLayeredImage {
           name = pname;
