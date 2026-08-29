@@ -24,6 +24,21 @@ Choose an option:
    ```
    and keep installing missing system libraries until it works
 
+### Config File
+
+Configuration options can be specified in a toml file passed to insanity with `-c`. Insanity will default to reading the config file at the location output by `insanity print-config-path`. An example config file is as follows.
+
+```
+bridge = ["<BAYBRIDGE_SERVER1>", "<BAYBRIDGE_SERVER2>"]
+room = "<ROOM>"
+```
+
+With configuration in the default config file, running insanity is as follows:
+
+```
+insanity
+```
+
 ### Update
 
 If you use the insanity binary, you can update it in place with `insanity update`.
