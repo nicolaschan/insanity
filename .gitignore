@@ -4,3 +4,5 @@ tmp
 .direnv
 .vscode
 result
+dir1/
+dir2/
