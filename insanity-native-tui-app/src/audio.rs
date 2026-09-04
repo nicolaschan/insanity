@@ -10,26 +10,37 @@ use insanity_core::audio_source::{AudioSource, SyncAudioSource};
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
-use crate::processor::{AudioChunk, MultiChannelDenoiser, AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AudioChunk, MultiChannelDenoiser};
 use crate::realtime_buffer::RealTimeBuffer;
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::ResampledAudioSource;
 
 // shared config helpers
 
-pub(crate) fn find_stereo_input(range: cpal::SupportedInputConfigs) -> Option<cpal::SupportedStreamConfigRange> {
+pub(crate) fn find_stereo_input(
+    range: cpal::SupportedInputConfigs,
+) -> Option<cpal::SupportedStreamConfigRange> {
     use itertools::Itertools;
-    range.into_iter().find_or_last(|x| x.channels() == AUDIO_CHANNELS)
+    range
+        .into_iter()
+        .find_or_last(|x| x.channels() == AUDIO_CHANNELS)
 }
 
-pub(crate) fn find_stereo_output(range: cpal::SupportedOutputConfigs) -> Option<cpal::SupportedStreamConfigRange> {
+pub(crate) fn find_stereo_output(
+    range: cpal::SupportedOutputConfigs,
+) -> Option<cpal::SupportedStreamConfigRange> {
     use itertools::Itertools;
-    range.into_iter().find_or_last(|x| x.channels() == AUDIO_CHANNELS)
+    range
+        .into_iter()
+        .find_or_last(|x| x.channels() == AUDIO_CHANNELS)
 }
 
 pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat, StreamConfig)> {
-    let range = device.supported_input_configs().map_err(|e| anyhow::anyhow!(e))?;
-    let cfg_range = find_stereo_input(range).ok_or_else(|| anyhow::anyhow!("No supported input config"))?;
+    let range = device
+        .supported_input_configs()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let cfg_range =
+        find_stereo_input(range).ok_or_else(|| anyhow::anyhow!("No supported input config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = std::cmp::min(SampleRate(48000), max);
@@ -37,13 +48,20 @@ pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat,
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
     };
-    let cfg = StreamConfig { channels, sample_rate, buffer_size };
+    let cfg = StreamConfig {
+        channels,
+        sample_rate,
+        buffer_size,
+    };
     Ok((cfg_range.sample_format(), cfg))
 }
 
 pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat, StreamConfig)> {
-    let range = device.supported_output_configs().map_err(|e| anyhow::anyhow!(e))?;
-    let cfg_range = find_stereo_output(range).ok_or_else(|| anyhow::anyhow!("No supported output config"))?;
+    let range = device
+        .supported_output_configs()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let cfg_range =
+        find_stereo_output(range).ok_or_else(|| anyhow::anyhow!("No supported output config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = std::cmp::min(SampleRate(48000), max);
@@ -51,7 +69,11 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
     };
-    let cfg = StreamConfig { channels, sample_rate, buffer_size };
+    let cfg = StreamConfig {
+        channels,
+        sample_rate,
+        buffer_size,
+    };
     Ok((cfg_range.sample_format(), cfg))
 }
 
@@ -87,8 +109,17 @@ pub struct RealtimeAudioSource {
 }
 
 impl RealtimeAudioSource {
-    pub fn new(chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>, sample_rate: u32, channels: u16) -> Self {
-        Self { chunk_buffer, sample_buffer: VecDeque::new(), sample_rate, channels }
+    pub fn new(
+        chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Self {
+        Self {
+            chunk_buffer,
+            sample_buffer: VecDeque::new(),
+            sample_rate,
+            channels,
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use base64::{prelude::BASE64_URL_SAFE, Engine};
+use base64::{Engine, prelude::BASE64_URL_SAFE};
 use insanity_core::user_input_event::UserInputEvent;
 use insanity_tui_adapter::AppEvent;
 
@@ -397,7 +397,7 @@ fn handle_user_action(
             }
         }
         UserInputEvent::SendMessage(message) => {
-            for (_, peer) in managed_peers.iter() {
+            for peer in managed_peers.values() {
                 if let Err(e) = peer.send_message(message.clone()) {
                     log::debug!("Failed to send message to a peer: {:?}", e);
                 }
@@ -406,9 +406,10 @@ fn handle_user_action(
         UserInputEvent::SetMuteSelf(is_muted) => {
             hub.set_muted(is_muted);
             if let Some(app_event_tx) = app_event_tx
-                && let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted)) {
-                    log::debug!("Failed to send mute self event: {:?}", e);
-                }
+                && let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted))
+            {
+                log::debug!("Failed to send mute self event: {:?}", e);
+            }
         }
     }
     Ok(())

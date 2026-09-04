@@ -1,16 +1,16 @@
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use insanity_core::user_input_event::UserInputEvent;
 use std::collections::BTreeMap;
 use std::{error::Error, io, io::Stdout};
 use tokio::{
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     task::JoinHandle,
 };
-use tui::{backend::Backend, backend::CrosstermBackend, Terminal};
+use tui::{Terminal, backend::Backend, backend::CrosstermBackend};
 
 mod editor;
 use editor::Editor;
@@ -427,76 +427,78 @@ pub async fn get_sender<B: Backend + Send + 'static>(
 }
 
 pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
-    tokio::task::spawn_blocking(move || loop {
-        match event::read().unwrap() {
-            Event::Key(key) => {
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                    match key.code {
-                        KeyCode::Char(c) => {
-                            sender.send(AppEvent::Character(c)).unwrap();
-                        }
-                        KeyCode::Tab => {
-                            sender.send(AppEvent::NextTab).unwrap();
-                        }
-                        KeyCode::BackTab => {
-                            sender.send(AppEvent::PreviousTab).unwrap();
-                        }
-                        KeyCode::Backspace => {
-                            sender.send(AppEvent::Backspace).unwrap();
-                        }
-                        KeyCode::Left => {
-                            sender.send(AppEvent::Left).unwrap();
-                        }
-                        KeyCode::Right => {
-                            sender.send(AppEvent::Right).unwrap();
-                        }
-                        KeyCode::Down => {
-                            sender.send(AppEvent::Down).unwrap();
-                        }
-                        KeyCode::Up => {
-                            sender.send(AppEvent::Up).unwrap();
-                        }
-                        KeyCode::Enter => {
-                            sender.send(AppEvent::Enter).unwrap();
-                        }
-                        _ => {}
-                    }
-                } else {
-                    if key.modifiers.contains(KeyModifiers::ALT) {
+    tokio::task::spawn_blocking(move || {
+        loop {
+            match event::read().unwrap() {
+                Event::Key(key) => {
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
                         match key.code {
-                            KeyCode::Char('f') => {
-                                sender.send(AppEvent::NextWord).unwrap();
+                            KeyCode::Char(c) => {
+                                sender.send(AppEvent::Character(c)).unwrap();
                             }
-                            KeyCode::Char('b') => {
-                                sender.send(AppEvent::PreviousWord).unwrap();
+                            KeyCode::Tab => {
+                                sender.send(AppEvent::NextTab).unwrap();
+                            }
+                            KeyCode::BackTab => {
+                                sender.send(AppEvent::PreviousTab).unwrap();
                             }
                             KeyCode::Backspace => {
-                                sender.send(AppEvent::DeleteWord).unwrap();
+                                sender.send(AppEvent::Backspace).unwrap();
+                            }
+                            KeyCode::Left => {
+                                sender.send(AppEvent::Left).unwrap();
+                            }
+                            KeyCode::Right => {
+                                sender.send(AppEvent::Right).unwrap();
+                            }
+                            KeyCode::Down => {
+                                sender.send(AppEvent::Down).unwrap();
+                            }
+                            KeyCode::Up => {
+                                sender.send(AppEvent::Up).unwrap();
+                            }
+                            KeyCode::Enter => {
+                                sender.send(AppEvent::Enter).unwrap();
                             }
                             _ => {}
                         }
-                    }
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        match key.code {
-                            KeyCode::Char('c') => {
-                                sender.send(AppEvent::Kill).unwrap();
-                                return;
+                    } else {
+                        if key.modifiers.contains(KeyModifiers::ALT) {
+                            match key.code {
+                                KeyCode::Char('f') => {
+                                    sender.send(AppEvent::NextWord).unwrap();
+                                }
+                                KeyCode::Char('b') => {
+                                    sender.send(AppEvent::PreviousWord).unwrap();
+                                }
+                                KeyCode::Backspace => {
+                                    sender.send(AppEvent::DeleteWord).unwrap();
+                                }
+                                _ => {}
                             }
-                            KeyCode::Char('a') => {
-                                sender.send(AppEvent::CursorBeginning).unwrap();
+                        }
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            match key.code {
+                                KeyCode::Char('c') => {
+                                    sender.send(AppEvent::Kill).unwrap();
+                                    return;
+                                }
+                                KeyCode::Char('a') => {
+                                    sender.send(AppEvent::CursorBeginning).unwrap();
+                                }
+                                KeyCode::Char('e') => {
+                                    sender.send(AppEvent::CursorEnd).unwrap();
+                                }
+                                _ => {}
                             }
-                            KeyCode::Char('e') => {
-                                sender.send(AppEvent::CursorEnd).unwrap();
-                            }
-                            _ => {}
                         }
                     }
                 }
+                Event::Resize(_, _) => {
+                    sender.send(AppEvent::Nothing).unwrap();
+                }
+                _ => {}
             }
-            Event::Resize(_, _) => {
-                sender.send(AppEvent::Nothing).unwrap();
-            }
-            _ => {}
         }
     })
 }

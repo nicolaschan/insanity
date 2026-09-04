@@ -9,8 +9,8 @@ use baybridge::client::Actions;
 use baybridge::models::Value;
 
 use chacha20poly1305::{
-    aead::{Aead, AeadCore, KeyInit, OsRng},
     ChaCha20Poly1305,
+    aead::{Aead, AeadCore, KeyInit, OsRng},
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
@@ -174,9 +174,10 @@ pub async fn start_room_connection(
     if let Some(app_event_tx) = app_event_tx.clone()
         && let Err(e) = app_event_tx.send(insanity_tui_adapter::AppEvent::SetRoomFingerprint(
             room_fingerprint.clone(),
-        )) {
-            log::debug!("Failed to write room fingerprint to UI: {e}");
-        }
+        ))
+    {
+        log::debug!("Failed to write room fingerprint to UI: {e}");
+    }
 
     let signing_key = {
         let mut signing_key_material = [0u8; 32];

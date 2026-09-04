@@ -1,5 +1,5 @@
 use insanity_core::user_input_event::UserInputEvent;
-use insanity_tui_adapter::{start_tui, stop_tui, AppEvent, Peer, PeerState};
+use insanity_tui_adapter::{AppEvent, Peer, PeerState, start_tui, stop_tui};
 use std::{collections::BTreeMap, error::Error};
 
 #[tokio::main]

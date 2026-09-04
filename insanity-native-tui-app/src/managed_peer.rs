@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use bon::bon;
@@ -144,9 +144,10 @@ impl ManagedPeer {
                 PeerState::Disabled,
                 self.denoise.load(Ordering::Relaxed),
                 self.volume.load(Ordering::Relaxed),
-            ))) {
-                log::debug!("Failed to send app event: {:?}", e);
-            }
+            )))
+        {
+            log::debug!("Failed to send app event: {:?}", e);
+        }
 
         Ok(())
     }
@@ -236,25 +237,28 @@ async fn update_app_connecting_status(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
         }
-    } else { match app_event_tx { Some(app_event_tx) => {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        loop {
-            for ip_address in ip_addresses.iter() {
-                interval.tick().await;
-                if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
-                    id.to_string(),
-                    Some(display_name.clone()),
-                    PeerState::Connecting(ip_address.clone()),
-                    denoise.load(Ordering::Relaxed),
-                    volume.load(Ordering::Relaxed),
-                ))) {
-                    log::debug!("Failed to send app event: {:?}", e);
+    } else {
+        match app_event_tx {
+            Some(app_event_tx) => {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                loop {
+                    for ip_address in ip_addresses.iter() {
+                        interval.tick().await;
+                        if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                            id.to_string(),
+                            Some(display_name.clone()),
+                            PeerState::Connecting(ip_address.clone()),
+                            denoise.load(Ordering::Relaxed),
+                            volume.load(Ordering::Relaxed),
+                        ))) {
+                            log::debug!("Failed to send app event: {:?}", e);
+                        }
+                    }
                 }
             }
+            _ => loop {
+                tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
+            },
         }
-    } _ => {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
-        }
-    }}}
+    }
 }

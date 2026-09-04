@@ -59,10 +59,10 @@ pub async fn update(dry_run: bool, force: bool) -> anyhow::Result<()> {
             .starts_with(&current_platform_asset_name)
     });
 
-    let asset_download_url = asset_for_current_platform.expect("no asset for current platform")
-        ["browser_download_url"]
-        .as_str()
-        .expect("asset download url is not a string");
+    let asset_download_url =
+        asset_for_current_platform.expect("no asset for current platform")["browser_download_url"]
+            .as_str()
+            .expect("asset download url is not a string");
 
     info!(
         "Found download URL for current platform: {}",
@@ -109,9 +109,10 @@ pub async fn update(dry_run: bool, force: bool) -> anyhow::Result<()> {
             create_dir_all(&outpath).await?;
         } else {
             if let Some(p) = outpath.parent()
-                && !p.exists() {
-                    create_dir_all(p).await?;
-                }
+                && !p.exists()
+            {
+                create_dir_all(p).await?;
+            }
             let mut outfile = std::fs::File::create(&outpath)?;
             std::io::copy(&mut file, &mut outfile)?;
         }

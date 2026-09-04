@@ -80,7 +80,12 @@ fn timing_fill_buffer_release_gate() {
     let d = Arc::new(AtomicBool::new(false));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
-    for seq in 0..10 { mixer.handle_incoming(id, AudioChunk::new(seq, AudioFormat::new(2,48000), vec![0.5;960])); }
+    for seq in 0..10 {
+        mixer.handle_incoming(
+            id,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.5; 960]),
+        );
+    }
     let start = std::time::Instant::now();
     for _ in 0..1000 {
         let mut out = vec![0f32; 960];
@@ -88,7 +93,10 @@ fn timing_fill_buffer_release_gate() {
         // refill buffer so next loop has data: need to handle incoming again periodically
     }
     let elapsed = start.elapsed();
-    let per_ms = elapsed.as_secs_f64()*1000.0 / 1000.0;
+    let per_ms = elapsed.as_secs_f64() * 1000.0 / 1000.0;
     // dev may be <5ms, release <1ms; we gate leniently to avoid flaky CI
-    assert!(per_ms < 5.0, "fill_buffer per call {per_ms}ms too slow (dev gate 5ms)");
+    assert!(
+        per_ms < 5.0,
+        "fill_buffer per call {per_ms}ms too slow (dev gate 5ms)"
+    );
 }
