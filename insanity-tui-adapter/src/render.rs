@@ -333,7 +333,7 @@ fn render_chat_history<'a>(
             .iter()
             .take(display_name_num_wraps)
             .map(|s| Spans::from(vec![Span::styled(s.to_string(), name_style)]))
-            .chain(split_line.into_iter())
+            .chain(split_line)
             .chain(
                 lines
                     .iter()
