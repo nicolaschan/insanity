@@ -9,7 +9,7 @@ use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 
 use crate::{
-    audio::{AudioInputHub, AudioMixer},
+    audio::{AudioInputHub, AudioMixer, MAX_VOLUME},
     clerver::run_clerver,
     connection_manager::AugmentedInfo,
     protocol::ProtocolMessage,
@@ -96,7 +96,7 @@ impl ManagedPeer {
     }
 
     pub fn set_volume(&self, volume: usize) -> anyhow::Result<()> {
-        let v = volume.min(500);
+        let v = volume.min(MAX_VOLUME);
         self.volume.store(v, Ordering::Relaxed);
         if let Some(app_event_tx) = &self.app_event_tx {
             app_event_tx.send(AppEvent::SetPeerVolume(self.id.to_string(), v))?;

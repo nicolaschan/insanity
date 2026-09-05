@@ -341,8 +341,11 @@ impl AudioInputHub {
 
 // Output mixer
 
+/// Single source of truth for max volume.
+pub const MAX_VOLUME: usize = 500;
+
 pub fn volume_multiplier(volume: usize) -> f32 {
-    let vol = volume.min(200) as f32;
+    let vol = volume.min(MAX_VOLUME) as f32;
     let a: f32 = 0.2;
     let m = a * ((1.0 + 1.0 / a).powf(vol / 100.0) - 1.0);
     // cap to avoid inf/NaN before hard clip in mixer; 8.0 (~+18dB) is ample
@@ -489,7 +492,7 @@ impl AudioMixer {
     }
 
     pub fn set_master_volume(&self, vol: usize) {
-        self.master_volume.store(vol.min(200), Ordering::Relaxed);
+        self.master_volume.store(vol.min(MAX_VOLUME), Ordering::Relaxed);
     }
 
     pub fn master_volume(&self) -> usize {
