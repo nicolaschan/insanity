@@ -165,7 +165,7 @@ pub async fn run_clerver(
         },
         _ = run_receiver(
             conn.clone(),
-            mixer,
+            mixer.clone(),
             app_event_sender,
             id,
         ) => {
@@ -178,4 +178,5 @@ pub async fn run_clerver(
             log::debug!("Peer message sender for {id} ended early.");
         },
     }
+    mixer.remove_peer(&id);
 }
