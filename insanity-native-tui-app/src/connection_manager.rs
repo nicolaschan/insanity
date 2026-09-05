@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    audio::{AudioInputHub, AudioMixer},
+    audio::{AudioInputHub, AudioMixer, JITTER_TARGET_CHUNKS, format_metrics_line},
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
 use veq::snow_types::SnowPublicKey;
@@ -265,6 +265,37 @@ fn manage_peers(
     // single input hub and single output mixer
     let hub = Arc::new(AudioInputHub::new());
     let mixer = Arc::new(AudioMixer::new(app_event_tx.clone()));
+    let metrics_mixer = mixer.clone();
+    let hub_channels = hub.channels();
+    let mixer_channels = mixer.channels();
+    let mixer_rate = mixer.sample_rate();
+    let metrics_token = cancellation_token.clone();
+    tokio::spawn(async move {
+        log::info!(
+            "Audio formats: input channels={hub_channels} output channels={mixer_channels} output rate={mixer_rate} jitter_chunks={JITTER_TARGET_CHUNKS}"
+        );
+        let mut prev = metrics_mixer.metrics_snapshot();
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    let current = metrics_mixer.metrics_snapshot();
+                    let line = format_metrics_line(
+                        &prev,
+                        &current,
+                        metrics_mixer.fill_avg_nanos(),
+                        &metrics_mixer.peer_occupancies(),
+                    );
+                    log::info!("{line}");
+                    prev = current;
+                }
+                _ = metrics_token.cancelled() => {
+                    log::debug!("Audio metrics shutdown.");
+                    break;
+                }
+            }
+        }
+    });
     tokio::spawn(async move {
         let mut managed_peers: HashMap<uuid::Uuid, ManagedPeer> = HashMap::new();
         loop {

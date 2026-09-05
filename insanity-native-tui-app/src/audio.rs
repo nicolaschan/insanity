@@ -363,8 +363,123 @@ impl AudioInputHub {
 
 // Output mixer
 
+/// Jitter buffer target in 10ms chunks.
+pub const JITTER_TARGET_CHUNKS: usize = 10;
 /// Single source of truth for max volume.
 pub const MAX_VOLUME: usize = 500;
+
+/// Snapshot of mixer counters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MixerMetricsSnapshot {
+    pub gap_detected: usize,
+    pub late_dropped: usize,
+    pub underrun: usize,
+    pub plc_hold: usize,
+    pub clip_hits: usize,
+    pub fills: usize,
+}
+
+/// Live counters. All relaxed-order atomics; hot-path increments only.
+/// `underrun` counts missed slots (events); `plc_hold` counts synthesized samples.
+#[derive(Debug, Default)]
+pub struct MixerMetrics {
+    pub gap_detected: AtomicUsize,
+    pub late_dropped: AtomicUsize,
+    pub underrun: AtomicUsize,
+    pub plc_hold: AtomicUsize,
+    pub clip_hits: AtomicUsize,
+    pub fills: AtomicUsize,
+    pub fill_nanos_total: std::sync::atomic::AtomicU64,
+}
+
+impl MixerMetrics {
+    pub fn snapshot(&self) -> MixerMetricsSnapshot {
+        MixerMetricsSnapshot {
+            gap_detected: self.gap_detected.load(Ordering::Relaxed),
+            late_dropped: self.late_dropped.load(Ordering::Relaxed),
+            underrun: self.underrun.load(Ordering::Relaxed),
+            plc_hold: self.plc_hold.load(Ordering::Relaxed),
+            clip_hits: self.clip_hits.load(Ordering::Relaxed),
+            fills: self.fills.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn fill_avg_nanos(&self) -> u64 {
+        let fills = self.fills.load(Ordering::Relaxed) as u64;
+        if fills == 0 {
+            return 0;
+        }
+        self.fill_nanos_total.load(Ordering::Relaxed) / fills
+    }
+}
+
+pub fn buffer_starved(
+    interval_underruns: usize,
+    occupancies: &[(String, usize)],
+    capacity_chunks: usize,
+) -> bool {
+    interval_underruns > 0 && occupancies.iter().any(|(_, len)| *len >= capacity_chunks)
+}
+
+pub fn format_metrics_line(
+    prev: &MixerMetricsSnapshot,
+    current: &MixerMetricsSnapshot,
+    fill_avg_nanos: u64,
+    occupancies: &[(String, usize)],
+) -> String {
+    let peers: Vec<String> = occupancies
+        .iter()
+        .map(|(id, len)| format!("{id}:{len}"))
+        .collect();
+    format!(
+        "audio gaps={} late={} underruns={} plc={} clips={} fills={} fill_avg_ns={} peers=[{}]",
+        current.gap_detected.saturating_sub(prev.gap_detected),
+        current.late_dropped.saturating_sub(prev.late_dropped),
+        current.underrun.saturating_sub(prev.underrun),
+        current.plc_hold.saturating_sub(prev.plc_hold),
+        current.clip_hits.saturating_sub(prev.clip_hits),
+        current.fills.saturating_sub(prev.fills),
+        fill_avg_nanos,
+        peers.join(" "),
+    )
+}
+
+/// Convert an incoming chunk to mixer channel space.
+/// Passthrough when equal; mono->stereo duplicates, stereo->mono averages
+/// `(L+R)/2`. Generic fallback round-robins source channels.
+pub fn convert_to_mixer_channels(mut chunk: AudioChunk, mixer_channels: u16) -> AudioChunk {
+    let src_channel_count = chunk.audio_format.channel_count;
+    if src_channel_count == mixer_channels
+        || src_channel_count == 0
+        || mixer_channels == 0
+        || chunk.audio_data.is_empty()
+    {
+        return chunk;
+    }
+    let frames = chunk.audio_data.len() / src_channel_count as usize;
+    let mut out = Vec::with_capacity(frames * mixer_channels as usize);
+    if src_channel_count == 1 && mixer_channels == 2 {
+        for &m in chunk.audio_data.iter() {
+            out.push(m);
+            out.push(m);
+        }
+    } else if src_channel_count == 2 && mixer_channels == 1 {
+        let (pairs, _) = chunk.audio_data.as_chunks::<2>();
+        out.extend(pairs.iter().map(|pair| (pair[0] + pair[1]) * 0.5));
+    } else {
+        for f in 0..frames {
+            for t in 0..mixer_channels as usize {
+                out.push(
+                    chunk.audio_data
+                        [f * src_channel_count as usize + (t % src_channel_count as usize)],
+                );
+            }
+        }
+    }
+    chunk.audio_data = out;
+    chunk.audio_format.channel_count = mixer_channels;
+    chunk
+}
 
 pub fn volume_multiplier(volume: usize) -> f32 {
     let vol = volume.min(MAX_VOLUME) as f32;
@@ -383,34 +498,108 @@ struct PeerState {
     app_event_sender: Option<UnboundedSender<AppEvent>>,
     peer_id: String,
     last_sample: AtomicU32,
+    /// Fade-to-zero PLC state: start level of current gap,
+    /// samples consumed, and remaining concealment samples.
+    fade_start: f32,
+    fade_pos: usize,
+    conceal_remaining: usize,
 }
 
-struct MixerInner {
+struct MixerState {
     peers: HashMap<uuid::Uuid, PeerState>,
 }
 
 pub struct AudioMixer {
-    inner: Arc<Mutex<MixerInner>>,
+    state: Arc<Mutex<MixerState>>,
     master_volume: Arc<AtomicUsize>,
-    _stream: Option<send_safe::SendWrapperThread<Stream>>,
+    metrics: Arc<MixerMetrics>,
+    _stream: Option<send_safe::SendWrapperThread<Option<Stream>>>,
     sample_rate: SampleRate,
     channels: u16,
+    jitter_chunks: usize,
+}
+
+fn build_output_stream(
+    sample_format: &SampleFormat,
+    config: &StreamConfig,
+    device: &Device,
+    state: Arc<Mutex<MixerState>>,
+    master: Arc<AtomicUsize>,
+    metrics: Arc<MixerMetrics>,
+) -> anyhow::Result<Stream> {
+    let err_fn = |err| eprintln!("output stream error: {err}");
+    match sample_format {
+        SampleFormat::F32 => device
+            .build_output_stream(
+                config,
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    fill_buffer_inner(&state, &master, &metrics, data);
+                },
+                err_fn,
+            )
+            .map_err(|e| anyhow::anyhow!("build f32 output stream: {e}")),
+        SampleFormat::I16 => device
+            .build_output_stream(
+                config,
+                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
+                    fill_buffer_inner(&state, &master, &metrics, data);
+                },
+                err_fn,
+            )
+            .map_err(|e| anyhow::anyhow!("build i16 output stream: {e}")),
+        SampleFormat::U16 => device
+            .build_output_stream(
+                config,
+                move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
+                    fill_buffer_inner(&state, &master, &metrics, data);
+                },
+                err_fn,
+            )
+            .map_err(|e| anyhow::anyhow!("build u16 output stream: {e}")),
+    }
 }
 
 impl AudioMixer {
     pub fn new_no_device() -> Self {
-        let inner = Arc::new(Mutex::new(MixerInner { peers: HashMap::new() }));
+        Self::new_no_device_with_format(48000, AUDIO_CHANNELS)
+    }
+
+    pub fn new_no_device_with_format(sample_rate: u32, channels: u16) -> Self {
+        Self::new_no_device_with_format_and_capacity(sample_rate, channels, JITTER_TARGET_CHUNKS)
+    }
+
+    pub fn new_no_device_with_format_and_capacity(
+        sample_rate: u32,
+        channels: u16,
+        jitter_chunks: usize,
+    ) -> Self {
+        let state = Arc::new(Mutex::new(MixerState {
+            peers: HashMap::new(),
+        }));
         let master_volume = Arc::new(AtomicUsize::new(100));
-        Self { inner, master_volume, _stream: None, sample_rate: SampleRate(48000), channels: AUDIO_CHANNELS }
+        let metrics = Arc::new(MixerMetrics::default());
+        Self {
+            state,
+            master_volume,
+            metrics,
+            _stream: None,
+            sample_rate: SampleRate(sample_rate),
+            channels,
+            jitter_chunks,
+        }
     }
 
     pub fn new(_app_event_sender: Option<UnboundedSender<AppEvent>>) -> Self {
         let host = cpal::default_host();
         // try to get default output device; if none, create dummy mixer without stream
-        let inner = Arc::new(Mutex::new(MixerInner { peers: HashMap::new() }));
+        let state = Arc::new(Mutex::new(MixerState {
+            peers: HashMap::new(),
+        }));
         let master_volume = Arc::new(AtomicUsize::new(100));
-        let inner_clone = inner.clone();
+        let state_clone = state.clone();
         let master_clone = master_volume.clone();
+        let metrics = Arc::new(MixerMetrics::default());
+        let metrics_clone = metrics.clone();
 
         let output_device = host.default_output_device();
         let (sample_rate, channels, _stream) = if let Some(device) = output_device {
@@ -419,38 +608,32 @@ impl AudioMixer {
                     let sr = cfg.sample_rate;
                     let ch = cfg.channels;
                     let cfg2 = cfg.clone();
-                    let inner2 = inner_clone.clone();
+                    let state2 = state_clone.clone();
                     let master2 = master_clone.clone();
+                    let metrics2 = metrics_clone.clone();
                     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-                        let inner3 = inner2.clone();
-                        let master3 = master2.clone();
-                        let err_fn = |err| eprintln!("output stream error: {err}");
-                        match fmt {
-                            SampleFormat::F32 => device.build_output_stream(
-                                &cfg2,
-                                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                                    fill_buffer_inner(&inner3, &master3, data);
-                                },
-                                err_fn,
-                            ).unwrap(),
-                            SampleFormat::I16 => device.build_output_stream(
-                                &cfg2,
-                                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                                    fill_buffer_inner(&inner3, &master3, data);
-                                },
-                                err_fn,
-                            ).unwrap(),
-                            SampleFormat::U16 => device.build_output_stream(
-                                &cfg2,
-                                move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                                    fill_buffer_inner(&inner3, &master3, data);
-                                },
-                                err_fn,
-                            ).unwrap(),
+                        match build_output_stream(&fmt, &cfg2, &device, state2, master2, metrics2) {
+                            Ok(s) => Some(s),
+                            Err(e) => {
+                                log::warn!(
+                                    "Failed to build output stream, falling back to dummy: {e:?}"
+                                );
+                                None
+                            }
                         }
                     });
-                    wrapper.execute(|s| s.play().unwrap()).unwrap();
-                    (sr, ch, Some(wrapper))
+                    let play_ok = wrapper
+                        .execute(|s| match s {
+                            Some(stream) => stream.play().is_ok(),
+                            None => false,
+                        })
+                        .unwrap_or(false);
+                    if !play_ok {
+                        log::warn!("Failed to start output stream, falling back to dummy");
+                        (SampleRate(48000), AUDIO_CHANNELS, None)
+                    } else {
+                        (sr, ch, Some(wrapper))
+                    }
                 }
                 Err(e) => {
                     log::warn!("Failed to get output config: {e}, falling back to dummy");
@@ -461,17 +644,51 @@ impl AudioMixer {
             (SampleRate(48000), AUDIO_CHANNELS, None)
         };
 
-        Self { inner, master_volume, _stream, sample_rate, channels }
+        Self {
+            state,
+            master_volume,
+            metrics,
+            _stream,
+            sample_rate,
+            channels,
+            jitter_chunks: JITTER_TARGET_CHUNKS,
+        }
     }
 
-    pub fn add_peer(&self, id: uuid::Uuid, volume: Arc<AtomicUsize>, enable_denoise: Arc<AtomicBool>, app_event_sender: Option<UnboundedSender<AppEvent>>) {
-        let mut guard = self.inner.lock().unwrap();
-        if guard.peers.contains_key(&id) {
+    pub fn add_peer(
+        &self,
+        id: uuid::Uuid,
+        volume: Arc<AtomicUsize>,
+        enable_denoise: Arc<AtomicBool>,
+        app_event_sender: Option<UnboundedSender<AppEvent>>,
+    ) {
+        let mut guard = lock(&self.state, "mixer state");
+        if let Some(peer) = guard.peers.get_mut(&id) {
+            // Reconnect
+            lock(&peer.chunk_buffer, "chunk_buffer").clear();
+            let mixer_channels = self.channels;
+            let audio_receiver =
+                RealtimeAudioSource::new(peer.chunk_buffer.clone(), 48000, mixer_channels);
+            peer.audio_receiver = Mutex::new(ResampledAudioSource::new(
+                audio_receiver,
+                self.sample_rate.0,
+                AUDIO_CHUNK_SIZE,
+            ));
+            peer.denoiser = Mutex::new(MultiChannelDenoiser::new());
+            peer.last_sample.store(0.0f32.to_bits(), Ordering::Relaxed);
+            peer.fade_start = 0.0;
+            peer.fade_pos = 0;
+            peer.conceal_remaining = 0;
+            peer.volume = volume;
+            peer.enable_denoise = enable_denoise;
+            peer.app_event_sender = app_event_sender;
             return;
         }
-        let chunk_buffer = Arc::new(Mutex::new(RealTimeBuffer::new(10)));
-        let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone(), 48000, AUDIO_CHANNELS);
-        let audio_receiver = ResampledAudioSource::new(audio_receiver, self.sample_rate.0, AUDIO_CHUNK_SIZE);
+        let chunk_buffer = Arc::new(Mutex::new(RealTimeBuffer::new(self.jitter_chunks)));
+        let mixer_channels = self.channels;
+        let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone(), 48000, mixer_channels);
+        let audio_receiver =
+            ResampledAudioSource::new(audio_receiver, self.sample_rate.0, AUDIO_CHUNK_SIZE);
         let state = PeerState {
             chunk_buffer,
             audio_receiver: Mutex::new(audio_receiver),
@@ -481,21 +698,29 @@ impl AudioMixer {
             app_event_sender,
             peer_id: id.to_string(),
             last_sample: AtomicU32::new(0.0f32.to_bits()),
+            fade_start: 0.0,
+            fade_pos: 0,
+            conceal_remaining: 0,
         };
         guard.peers.insert(id, state);
     }
 
     pub fn remove_peer(&self, id: &uuid::Uuid) {
-        let mut guard = self.inner.lock().unwrap();
-        guard.peers.remove(id);
+        lock(&self.state, "mixer state").peers.remove(id);
     }
 
     pub fn handle_incoming(&self, id: uuid::Uuid, mut chunk: AudioChunk) {
-        let mut guard = self.inner.lock().unwrap();
-        let Some(peer) = guard.peers.get_mut(&id) else { return };
+        // Convert sender channels to mixer channels first (passthrough when
+        // equal; mono->stereo dup / stereo->mono (L+R)/2 only on mismatch),
+        // so denoise/gain/buffer all operate in mixer channel space.
+        chunk = convert_to_mixer_channels(chunk, self.channels);
+        let mut guard = lock(&self.state, "mixer state");
+        let Some(peer) = guard.peers.get_mut(&id) else {
+            return;
+        };
         // denoise before mixing
         if peer.enable_denoise.load(Ordering::Relaxed) {
-            let mut d = peer.denoiser.lock().unwrap();
+            let mut d = lock(&peer.denoiser, "denoiser");
             chunk = d.denoise_chunk(&chunk);
         }
         let vol = peer.volume.load(Ordering::Relaxed);
@@ -509,12 +734,25 @@ impl AudioMixer {
             let loudness = calculate_loudness(&chunk.audio_data);
             let _ = sender.send(AppEvent::Loudness(peer.peer_id.clone(), loudness));
         }
-        let mut buf = peer.chunk_buffer.lock().unwrap();
-        buf.set(chunk.sequence_number, chunk);
+        let seq = chunk.sequence_number;
+        let mut buf = lock(&peer.chunk_buffer, "chunk_buffer");
+
+        let virgin = buf.is_empty() && buf.head() == 0 && buf.prev() == 0;
+        if seq < buf.head() {
+            self.metrics.late_dropped.fetch_add(1, Ordering::Relaxed);
+        } else if virgin {
+            if seq != 0 {
+                self.metrics.gap_detected.fetch_add(1, Ordering::Relaxed);
+            }
+        } else if seq > buf.prev() && seq != buf.prev() + 1 {
+            self.metrics.gap_detected.fetch_add(1, Ordering::Relaxed);
+        }
+        buf.set(seq, chunk);
     }
 
     pub fn set_master_volume(&self, vol: usize) {
-        self.master_volume.store(vol.min(MAX_VOLUME), Ordering::Relaxed);
+        self.master_volume
+            .store(vol.min(MAX_VOLUME), Ordering::Relaxed);
     }
 
     pub fn master_volume(&self) -> usize {
@@ -522,7 +760,38 @@ impl AudioMixer {
     }
 
     pub fn fill_buffer<T: Sample>(&self, data: &mut [T]) {
-        fill_buffer_inner(&self.inner, &self.master_volume, data);
+        fill_buffer_inner(&self.state, &self.master_volume, &self.metrics, data);
+    }
+
+    pub fn metrics_snapshot(&self) -> MixerMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
+    pub fn fill_avg_nanos(&self) -> u64 {
+        self.metrics.fill_avg_nanos()
+    }
+
+    /// Current queued chunks for a peer (jitter occupancy). `None` if unknown.
+    pub fn peer_occupancy(&self, id: &uuid::Uuid) -> Option<usize> {
+        let guard = lock(&self.state, "mixer state");
+        guard
+            .peers
+            .get(id)
+            .map(|p| lock(&p.chunk_buffer, "chunk_buffer").len())
+    }
+
+    pub fn peer_occupancies(&self) -> Vec<(String, usize)> {
+        let guard = lock(&self.state, "mixer state");
+        guard
+            .peers
+            .values()
+            .map(|p| {
+                (
+                    p.peer_id.clone(),
+                    lock(&p.chunk_buffer, "chunk_buffer").len(),
+                )
+            })
+            .collect()
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -535,8 +804,9 @@ impl AudioMixer {
 }
 
 fn fill_buffer_inner<T: Sample>(
-    inner: &Arc<Mutex<MixerInner>>,
+    inner: &Arc<Mutex<MixerState>>,
     master_volume: &Arc<AtomicUsize>,
+    _metrics: &Arc<MixerMetrics>,
     data: &mut [T],
 ) {
     let master_vol = master_volume.load(Ordering::Relaxed);
