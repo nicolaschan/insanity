@@ -84,12 +84,15 @@ impl MultiChannelDenoiser<'_> {
         let mut denoised_output: Vec<f32> = Vec::new();
 
         let channels = chunk.audio_format.channel_count;
+        // Degenerate input: nothing to denoise, preserve as-is.
+        if channels == 0 || chunk.audio_data.is_empty() {
+            return chunk.clone();
+        }
         self.setup_denoisers(channels);
 
-        for audio_chunk in chunk
-            .audio_data
-            .chunks_exact((channels as usize) * DenoiseState::FRAME_SIZE)
-        {
+        let frame_samples = (channels as usize) * DenoiseState::FRAME_SIZE;
+        let full_len = (chunk.audio_data.len() / frame_samples) * frame_samples;
+        for audio_chunk in chunk.audio_data[..full_len].chunks_exact(frame_samples) {
             // Audio data for each channel is interleaved
             // Separate it into a buffer for each channel in the raw_audio Vec
             let mut raw_audio: Vec<[f32; DenoiseState::FRAME_SIZE]> = Vec::new();
@@ -110,13 +113,15 @@ impl MultiChannelDenoiser<'_> {
                 denoised_audio.insert(i as usize, denoised_audio_buffer);
             }
 
-            // Re-interleave the audio data
-            for i in 0..DenoiseState::FRAME_SIZE {
-                for c in 0..channels {
-                    denoised_output.push(denoised_audio[c as usize][i] / magic);
-                }
-            }
+            // Re-interleave the audio data (transpose channel frames).
+            denoised_output.extend(
+                (0..DenoiseState::FRAME_SIZE)
+                    .flat_map(|i| denoised_audio.iter().map(move |ch| ch[i] / magic)),
+            );
         }
+        // Tail that doesn't fill a full denoiser frame can't be processed;
+        // pass it through unchanged so no samples are lost.
+        denoised_output.extend_from_slice(&chunk.audio_data[full_len..]);
 
         AudioChunk::new(
             chunk.sequence_number,

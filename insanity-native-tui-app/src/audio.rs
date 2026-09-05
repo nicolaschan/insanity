@@ -1,8 +1,21 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
+    Arc, Mutex, MutexGuard,
     atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
-    Arc, Mutex,
 };
+
+/// Lock a mutex, recovering from poisoning with an error log instead of
+/// panicking. Audio must stay alive: a poisoned lock means a previous holder
+/// panicked, so we reclaim the guard and keep going.
+fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> MutexGuard<'a, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(poisoned) => {
+            log::error!("{what} mutex poisoned, recovering");
+            poisoned.into_inner()
+        }
+    }
+}
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
@@ -77,7 +90,11 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
     Ok((cfg_range.sample_format(), cfg))
 }
 
-fn run_input<T: Sample>(config: &StreamConfig, device: &Device, sender: tokio::sync::mpsc::UnboundedSender<f32>) -> Stream {
+fn run_input<T: Sample>(
+    config: &StreamConfig,
+    device: &Device,
+    sender: tokio::sync::mpsc::UnboundedSender<f32>,
+) -> anyhow::Result<Stream> {
     let err_fn = |err| eprintln!("input stream error: {err}");
     device
         .build_input_stream(
@@ -89,10 +106,15 @@ fn run_input<T: Sample>(config: &StreamConfig, device: &Device, sender: tokio::s
             },
             err_fn,
         )
-        .unwrap()
+        .map_err(|e| anyhow::anyhow!("build input stream: {e}"))
 }
 
-fn setup_input_stream(sample_format: &SampleFormat, config: &StreamConfig, device: &Device, sender: tokio::sync::mpsc::UnboundedSender<f32>) -> Stream {
+fn setup_input_stream(
+    sample_format: &SampleFormat,
+    config: &StreamConfig,
+    device: &Device,
+    sender: tokio::sync::mpsc::UnboundedSender<f32>,
+) -> anyhow::Result<Stream> {
     match sample_format {
         SampleFormat::F32 => run_input::<f32>(config, device, sender),
         SampleFormat::I16 => run_input::<i16>(config, device, sender),
@@ -138,7 +160,7 @@ impl AudioSource for RealtimeAudioSource {
 impl SyncAudioSource for RealtimeAudioSource {
     fn next_sync(&mut self) -> Option<f32> {
         if self.sample_buffer.is_empty() {
-            let mut buf = self.chunk_buffer.lock().unwrap();
+            let mut buf = lock(&self.chunk_buffer, "chunk_buffer");
             if let Some(chunk) = buf.next_item() {
                 self.sample_buffer.extend(chunk.audio_data);
             }
@@ -149,7 +171,7 @@ impl SyncAudioSource for RealtimeAudioSource {
 
 // Cpal receiver for single input
 struct CpalStreamReceiver {
-    _stream: send_safe::SendWrapperThread<Stream>,
+    _stream: send_safe::SendWrapperThread<Option<Stream>>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
     sample_rate: u32,
     channels: u16,
@@ -176,9 +198,31 @@ fn make_single_input() -> Option<CpalStreamReceiver> {
         return None;
     };
     let cfg2 = cfg.clone();
-    let mut wrapper = send_safe::SendWrapperThread::new(move || setup_input_stream(&fmt, &cfg2, &device, tx));
-    wrapper.execute(|s| s.play().unwrap()).unwrap();
-    Some(CpalStreamReceiver { _stream: wrapper, receiver: rx, sample_rate: cfg.sample_rate.0, channels: cfg.channels })
+    let mut wrapper = send_safe::SendWrapperThread::new(move || {
+        match setup_input_stream(&fmt, &cfg2, &device, tx) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log::warn!("Failed to build input stream, falling back to silence: {e:?}");
+                None
+            }
+        }
+    });
+    let play_ok = wrapper
+        .execute(|s| match s {
+            Some(stream) => stream.play().is_ok(),
+            None => false,
+        })
+        .unwrap_or(false);
+    if !play_ok {
+        log::warn!("Failed to start input stream, falling back to silence");
+        return None;
+    }
+    Some(CpalStreamReceiver {
+        _stream: wrapper,
+        receiver: rx,
+        sample_rate: cfg.sample_rate.0,
+        channels: cfg.channels,
+    })
 }
 
 // Single input hub
