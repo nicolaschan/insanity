@@ -227,8 +227,12 @@ fn make_single_input() -> Option<CpalStreamReceiver> {
 
 // Single input hub
 
+/// Hub broadcast item: wall-clock sequence number + chunk. Seq advances every
+/// 10ms tick (including muted ticks, which are not sent).
+pub type HubChunk = (u128, Arc<Vec<f32>>);
+
 pub struct AudioInputHub {
-    tx: broadcast::Sender<Arc<Vec<f32>>>,
+    tx: broadcast::Sender<HubChunk>,
     muted: Arc<AtomicBool>,
     channels: u16,
 }
@@ -259,17 +263,22 @@ impl AudioInputHub {
         tokio::spawn(async move {
             let Some(receiver) = make_single_input() else {
                 // no input device: send silence periodically so senders don't block forever
+                let mut next_seq: u128 = 0;
+                let silence: Arc<Vec<f32>> =
+                    Arc::new(vec![0.0f32; AUDIO_CHUNK_SIZE * AUDIO_CHANNELS as usize]);
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    let seq = next_seq;
+                    next_seq += 1;
                     if muted_clone.load(Ordering::Relaxed) {
                         continue;
                     }
-                    let chunk = vec![0.0f32; AUDIO_CHUNK_SIZE * AUDIO_CHANNELS as usize];
-                    let _ = btx_clone.send(Arc::new(chunk));
+                    let _ = btx_clone.send((seq, silence.clone()));
                 }
             };
             let channels = receiver.channels;
             let mut resampled = ResampledAudioSource::new(receiver, 48000, AUDIO_CHUNK_SIZE);
+            let mut next_seq: u128 = 0;
             loop {
                 let mut chunk = Vec::with_capacity(AUDIO_CHUNK_SIZE * channels as usize);
                 for _ in 0..AUDIO_CHUNK_SIZE * channels as usize {
@@ -279,15 +288,21 @@ impl AudioInputHub {
                         return;
                     }
                 }
+                let seq = next_seq;
+                next_seq += 1;
                 if muted_clone.load(Ordering::Relaxed) {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                     continue;
                 }
-                let _ = btx_clone.send(Arc::new(chunk));
+                let _ = btx_clone.send((seq, Arc::new(chunk)));
             }
         });
 
-        Self { tx: btx, muted, channels: initial_channels }
+        Self {
+            tx: btx,
+            muted,
+            channels: initial_channels,
+        }
     }
 
     // test seam: single input from any AudioSource
@@ -302,6 +317,7 @@ impl AudioInputHub {
         let channels = source.channels();
         tokio::spawn(async move {
             let mut resampled = ResampledAudioSource::new(source, 48000, AUDIO_CHUNK_SIZE);
+            let mut next_seq: u128 = 0;
             loop {
                 let mut chunk = Vec::with_capacity(AUDIO_CHUNK_SIZE * channels as usize);
                 for _ in 0..AUDIO_CHUNK_SIZE * channels as usize {
@@ -311,18 +327,24 @@ impl AudioInputHub {
                         return;
                     }
                 }
+                let seq = next_seq;
+                next_seq += 1;
                 if muted_clone.load(Ordering::Relaxed) {
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                     continue;
                 }
-                let _ = btx_clone.send(Arc::new(chunk));
-                tokio::task::yield_now().await;
+                let _ = btx_clone.send((seq, Arc::new(chunk)));
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         });
-        Self { tx: btx, muted, channels }
+        Self {
+            tx: btx,
+            muted,
+            channels,
+        }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Arc<Vec<f32>>> {
+    pub fn subscribe(&self) -> broadcast::Receiver<HubChunk> {
         self.tx.subscribe()
     }
 

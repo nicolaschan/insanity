@@ -17,34 +17,73 @@ pub struct AudioFrame(u128, Vec<u8>);
 
 // A clerver is a CLient + sERVER.
 
-async fn run_audio_sender(
-    mut conn: VeqSessionAlias,
-    hub: Arc<AudioInputHub>,
-) {
+pub fn encode_hub_chunk(
+    encoder: &mut Encoder,
+    sequence_number: u128,
+    chunk: &[f32],
+) -> Option<AudioFrame> {
+    match encoder.encode_vec_float(chunk, 65535) {
+        Ok(payload) => Some(AudioFrame(sequence_number, payload)),
+        Err(e) => {
+            log::warn!("Opus encode failed: {e:?}");
+            None
+        }
+    }
+}
+
+pub fn decode_frame_to_chunk(
+    decoder: &mut Decoder,
+    frame: &AudioFrame,
+    channels: u16,
+    sample_rate: u32,
+) -> Option<AudioChunk> {
+    let Ok(nb) = decoder.get_nb_samples(&frame.1[..]) else {
+        return None;
+    };
+    let len = nb * (channels as usize);
+    let mut buf = vec![0f32; len];
+    if decoder
+        .decode_float(&frame.1[..], &mut buf[..], false)
+        .is_err()
+    {
+        return None;
+    }
+    Some(AudioChunk::new(
+        frame.0,
+        AudioFormat::new(channels, sample_rate),
+        buf,
+    ))
+}
+
+async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
     let channels = u16_to_channels(hub.channels());
-    let mut encoder = Encoder::new(48000, channels, Application::Audio).unwrap();
-    let mut sequence_number = 0;
+    let Ok(mut encoder) = Encoder::new(48000, channels, Application::Audio) else {
+        log::error!("Failed to create Opus encoder; audio sender for hub disabled");
+        return;
+    };
     let mut rx = hub.subscribe();
 
     loop {
-        let chunk = match rx.recv().await {
+        // Hub seq is wall-clock: muted ticks are not sent (no silence encode)
+        // but still advance seq, so the next received chunk jumps honestly.
+        // Lagged (slow consumer) also surfaces as a seq jump on next recv.
+        let (sequence_number, chunk) = match rx.recv().await {
             Ok(c) => c,
             Err(broadcast::error::RecvError::Closed) => break,
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
         };
 
-        let opus_frame = encoder.encode_vec_float(&chunk[..], 65535).unwrap();
-        let frame = AudioFrame(sequence_number, opus_frame);
+        let Some(frame) = encode_hub_chunk(&mut encoder, sequence_number, &chunk[..]) else {
+            continue;
+        };
 
         let mut buf = Vec::new();
         let protocol_message = ProtocolMessage::AudioFrame(frame);
-        let write_result = protocol_message.write_to_stream(&mut buf).await;
-        if conn.send(buf).await.is_err() {
+        if protocol_message.write_to_stream(&mut buf).await.is_err() {
             break;
         }
-        sequence_number = match write_result {
-            Ok(_) => sequence_number + 1,
-            Err(_) => break,
+        if conn.send(buf).await.is_err() {
+            break;
         }
     }
 }
@@ -76,19 +115,23 @@ async fn run_receiver(
     id: uuid::Uuid,
 ) {
     let id_str = id.to_string();
-    let mut decoder = Decoder::new(48000, u16_to_channels(mixer.channels())).unwrap();
+    let Ok(mut decoder) = Decoder::new(48000, u16_to_channels(mixer.channels())) else {
+        log::error!("Failed to create Opus decoder for peer {id}; receiver disabled");
+        return;
+    };
 
     while let Ok(packet) = conn.recv().await {
         if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
                 ProtocolMessage::AudioFrame(frame) => {
-                    let packet = frame.1;
-                    let Ok(nb) = decoder.get_nb_samples(&packet[..]) else { continue; };
-                    let len = nb * (mixer.channels() as usize);
-                    let mut buf = vec![0f32; len];
-                    if decoder.decode_float(&packet[..], &mut buf[..], false).is_err() { continue; }
-                    let audio_format = AudioFormat::new(mixer.channels(), mixer.sample_rate());
-                    let chunk = AudioChunk::new(frame.0, audio_format, buf);
+                    let Some(chunk) = decode_frame_to_chunk(
+                        &mut decoder,
+                        &frame,
+                        mixer.channels(),
+                        mixer.sample_rate(),
+                    ) else {
+                        continue;
+                    };
                     mixer.handle_incoming(id, chunk);
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}

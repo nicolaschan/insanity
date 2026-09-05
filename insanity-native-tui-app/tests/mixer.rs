@@ -45,31 +45,50 @@ impl SyncAudioSource for SineSource {
 
 #[tokio::test]
 async fn hub_fanout_same_chunk() {
-    let src = SineSource::new(48000, 2, 440.0);
-    let hub = Arc::new(AudioInputHub::from_source(src));
-    let mut rx1 = hub.subscribe();
-    let mut rx2 = hub.subscribe();
-    let mut rx3 = hub.subscribe();
-    let c1 = tokio::time::timeout(std::time::Duration::from_secs(2), rx1.recv()).await.unwrap().unwrap();
-    let c2 = tokio::time::timeout(std::time::Duration::from_secs(2), rx2.recv()).await.unwrap().unwrap();
-    let c3 = tokio::time::timeout(std::time::Duration::from_secs(2), rx3.recv()).await.unwrap().unwrap();
-    assert_eq!(c1.len(), 960);
-    assert_eq!(&*c1, &*c2);
-    assert_eq!(&*c2, &*c3);
+    let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let src = SineSource::new(48000, 2, 440.0);
+        let hub = Arc::new(AudioInputHub::from_source(src));
+        let mut rx1 = hub.subscribe();
+        let mut rx2 = hub.subscribe();
+        let mut rx3 = hub.subscribe();
+        let (s1, c1) = tokio::time::timeout(std::time::Duration::from_secs(2), rx1.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let (s2, c2) = tokio::time::timeout(std::time::Duration::from_secs(2), rx2.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let (s3, c3) = tokio::time::timeout(std::time::Duration::from_secs(2), rx3.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(c1.len(), 960);
+        assert_eq!(s1, s2);
+        assert_eq!(s2, s3);
+        assert_eq!(&*c1, &*c2);
+        assert_eq!(&*c2, &*c3);
+    })
+    .await;
+    assert!(res.is_ok(), "hub_fanout_same_chunk timed out");
 }
 
 #[tokio::test]
 async fn hub_mute_skips_send() {
-    let src = SineSource::new(48000, 2, 440.0);
-    let hub = AudioInputHub::from_source(src);
-    hub.set_muted(true);
-    let mut rx = hub.subscribe();
-    // should timeout if muted
-    let res = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
-    assert!(res.is_err(), "muted hub should not send");
-    hub.set_muted(false);
-    let res2 = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await;
-    assert!(res2.is_ok(), "unmuted hub should send within 2s");
+    let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let src = SineSource::new(48000, 2, 440.0);
+        let hub = AudioInputHub::from_source(src);
+        hub.set_muted(true);
+        let mut rx = hub.subscribe();
+        // should timeout if muted
+        let res = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
+        assert!(res.is_err(), "muted hub should not send");
+        hub.set_muted(false);
+        let res2 = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await;
+        assert!(res2.is_ok(), "unmuted hub should send within 2s");
+    })
+    .await;
+    assert!(res.is_ok(), "hub_mute_skips_send timed out");
 }
 
 #[test]
