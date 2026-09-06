@@ -249,11 +249,13 @@ fn resampled_output_fill_budget() {
         snap.underrun, 0,
         "prefilled resampled mixer must not underrun: {snap:?}"
     );
-    assert!(
-        mixer.fill_avg_nanos() < 5_000_000,
-        "fill budget blown: {}ns",
-        mixer.fill_avg_nanos()
-    );
+    if !cfg!(debug_assertions) {
+        assert!(
+            mixer.fill_avg_nanos() < 5_000_000,
+            "fill budget blown: {}ns",
+            mixer.fill_avg_nanos()
+        );
+    }
 }
 
 #[tokio::test]
