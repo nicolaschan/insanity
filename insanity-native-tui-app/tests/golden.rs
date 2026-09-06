@@ -1,11 +1,9 @@
 use insanity_core::loudness::calculate_loudness;
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioMixer;
 use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use std::path::Path;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize},
-};
+use std::sync::{Arc, atomic::AtomicUsize};
 
 fn read_f32_le(path: &Path) -> Vec<f32> {
     let bytes = std::fs::read(path).unwrap();
@@ -49,9 +47,9 @@ fn golden_two_peer_mix_perceptual() {
     // regen via mixer
     let mixer = AudioMixer::new_no_device();
     let v1 = Arc::new(AtomicUsize::new(100));
-    let d1 = Arc::new(AtomicBool::new(false));
+    let d1 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let v2 = Arc::new(AtomicUsize::new(100));
-    let d2 = Arc::new(AtomicBool::new(false));
+    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id1 = uuid::Uuid::new_v4();
     let id2 = uuid::Uuid::new_v4();
     mixer.add_peer(id1, v1, d1, None);
@@ -90,7 +88,7 @@ fn timing_fill_buffer_release_gate() {
     // only meaningful in release, but we check dev still <5ms
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     for seq in 0..10 {

@@ -6,6 +6,7 @@
 //! waveform cross-correlation (Opus shifts phase/delay, so naive sample SNR
 //! would be brittle).
 
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::JITTER_TARGET_CHUNKS;
 use insanity_native_tui_app::audio_test_support::{
     VirtualNode, energy_ratio, goertzel_energy, loudness, max_normalized_xcorr, mesh_timeout,
@@ -191,7 +192,7 @@ async fn denoise_parity_on_tonal_content() {
         nodes
             .get_mut("c")
             .expect("node")
-            .add_inbound_denoise("a", true);
+            .add_inbound_denoise("a", DenoiseSelection::default());
         let edge_list = edges(&[("a", "b"), ("a", "c")]);
         run_mesh(&mut nodes, &edge_list, 40).await;
         for rx in ["b", "c"] {

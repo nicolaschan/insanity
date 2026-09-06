@@ -1,9 +1,7 @@
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioMixer;
 use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize},
-};
+use std::sync::{Arc, atomic::AtomicUsize};
 
 // Feed model: each fill pushes floor(callback/960) whole chunks, so
 // non-multiple callback sizes (e.g. 2048 -> 2 chunks = 1920 samples)
@@ -31,7 +29,7 @@ fn run_cell(callback: usize, capacity: usize, condition: &'static str) -> CellRe
     mixer.add_peer(
         id,
         Arc::new(AtomicUsize::new(100)),
-        Arc::new(AtomicBool::new(false)),
+        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
         None,
     );
     let feed_per_fill = callback / 960;
