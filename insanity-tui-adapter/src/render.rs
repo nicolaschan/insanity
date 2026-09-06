@@ -1,16 +1,16 @@
 use insanity_core::built_info;
 use tui::{
+    Frame,
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::DOT,
     text::{Span, Spans},
     widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Tabs, Widget},
-    Frame,
 };
 
 use crate::{
-    App, Editor, Peer, DECREMENT_PEER_VOLUME_KEY, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY,
+    App, DECREMENT_PEER_VOLUME_KEY, Editor, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY, Peer,
     TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
 };
 
@@ -333,7 +333,7 @@ fn render_chat_history<'a>(
             .iter()
             .take(display_name_num_wraps)
             .map(|s| Spans::from(vec![Span::styled(s.to_string(), name_style)]))
-            .chain(split_line.into_iter())
+            .chain(split_line)
             .chain(
                 lines
                     .iter()

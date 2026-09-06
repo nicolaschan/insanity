@@ -81,7 +81,7 @@ fn split_channels(audio_chunk: &[f32], num_channels: usize) -> Vec<Vec<f32>> {
     channels
 }
 
-fn interleave_channels(channels: &Vec<Vec<f32>>) -> Vec<f32> {
+fn interleave_channels(channels: &[Vec<f32>]) -> Vec<f32> {
     let mut samples = Vec::new();
     let frame_size = channels[0].len();
     for i in 0..frame_size {
