@@ -489,6 +489,10 @@ pub fn volume_multiplier(volume: usize) -> f32 {
     m.clamp(0.0, 8.0)
 }
 
+/// 1-chunk fade (~10ms stereo: 960 samples). Mono mixers fade ~20ms;
+/// negligible and keeps the callback channel-agnostic.
+pub const PLC_FADE_SAMPLES: usize = 960;
+
 struct PeerState {
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
     audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
@@ -498,11 +502,11 @@ struct PeerState {
     app_event_sender: Option<UnboundedSender<AppEvent>>,
     peer_id: String,
     last_sample: AtomicU32,
-    /// Fade-to-zero PLC state: start level of current gap,
-    /// samples consumed, and remaining concealment samples.
+    /// Fade-to-zero PLC state: start level of current gap and position
+    /// within the run. Zero means idle (no active concealment); otherwise
+    /// samples remaining are `PLC_FADE_SAMPLES - fade_pos`.
     fade_start: f32,
     fade_pos: usize,
-    conceal_remaining: usize,
 }
 
 struct MixerState {
@@ -678,7 +682,6 @@ impl AudioMixer {
             peer.last_sample.store(0.0f32.to_bits(), Ordering::Relaxed);
             peer.fade_start = 0.0;
             peer.fade_pos = 0;
-            peer.conceal_remaining = 0;
             peer.volume = volume;
             peer.enable_denoise = enable_denoise;
             peer.app_event_sender = app_event_sender;
@@ -700,7 +703,6 @@ impl AudioMixer {
             last_sample: AtomicU32::new(0.0f32.to_bits()),
             fade_start: 0.0,
             fade_pos: 0,
-            conceal_remaining: 0,
         };
         guard.peers.insert(id, state);
     }
@@ -803,50 +805,103 @@ impl AudioMixer {
     }
 }
 
+fn render_silence<T: Sample>(data: &mut [T], metrics: &Arc<MixerMetrics>, t0: std::time::Instant) {
+    data.fill(Sample::from(&0.0f32));
+    metrics
+        .fill_nanos_total
+        .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+}
+
+/// Drain one callback worth of samples per peer.
+/// Empty peers (including a TOCTOU race with the fast path)
+/// yield an empty vec, which the caller renders as silence.
+fn drain_peer_samples(
+    state: &Arc<Mutex<MixerState>>,
+    len: usize,
+    metrics: &Arc<MixerMetrics>,
+) -> Vec<Vec<f32>> {
+    // One recv lock per peer.
+    let mut guard = lock(state, "mixer state");
+    let mut peer_temps: Vec<Vec<f32>> = Vec::new();
+    for peer in guard.peers.values_mut() {
+        let mut recv = lock(&peer.audio_receiver, "audio_receiver");
+        let mut tmp = Vec::with_capacity(len);
+        for _ in 0..len {
+            // While a concealment run is active, emit fade without pulling
+            // so one missing slot maps to a full PLC_FADE_SAMPLES run.
+            if peer.fade_pos != 0 {
+                metrics.plc_hold.fetch_add(1, Ordering::Relaxed);
+                let t = peer.fade_pos as f32 / PLC_FADE_SAMPLES as f32;
+                let s = if peer.fade_pos < PLC_FADE_SAMPLES {
+                    peer.fade_start * (1.0 - t)
+                } else {
+                    0.0
+                };
+                peer.fade_pos += 1;
+                if peer.fade_pos >= PLC_FADE_SAMPLES {
+                    peer.fade_pos = 0;
+                    peer.last_sample.store(0.0f32.to_bits(), Ordering::Relaxed);
+                }
+                tmp.push(s);
+                continue;
+            }
+            match recv.next_sync() {
+                Some(v) => {
+                    peer.last_sample.store(v.to_bits(), Ordering::Relaxed);
+                    peer.fade_start = v;
+                    tmp.push(v);
+                }
+                None => {
+                    // One-chunk fade-to-zero PLC. This pull
+                    // consumed one missing slot; the remaining run is
+                    // emitted without pulling to preserve timing.
+                    metrics.underrun.fetch_add(1, Ordering::Relaxed);
+                    metrics.plc_hold.fetch_add(1, Ordering::Relaxed);
+                    peer.fade_start = f32::from_bits(peer.last_sample.load(Ordering::Relaxed));
+                    peer.fade_pos = 1;
+                    tmp.push(peer.fade_start);
+                }
+            }
+        }
+        peer_temps.push(tmp);
+    }
+    peer_temps
+}
+
 fn fill_buffer_inner<T: Sample>(
-    inner: &Arc<Mutex<MixerState>>,
+    state: &Arc<Mutex<MixerState>>,
     master_volume: &Arc<AtomicUsize>,
-    _metrics: &Arc<MixerMetrics>,
+    metrics: &Arc<MixerMetrics>,
     data: &mut [T],
 ) {
+    let t0 = std::time::Instant::now();
+    metrics.fills.fetch_add(1, Ordering::Relaxed);
     let master_vol = master_volume.load(Ordering::Relaxed);
     let master_mult = volume_multiplier(master_vol);
     let use_master = master_vol != 100;
 
-    if inner.lock().unwrap().peers.is_empty() {
-        for out in data.iter_mut() {
-            *out = Sample::from(&0.0f32);
-        }
+    if lock(state, "mixer state").peers.is_empty() {
+        render_silence(data, metrics, t0);
         return;
     }
 
-    for out in data.iter_mut() {
-        let mut mixed: f32 = 0.0;
-        // Hold inner only for the sample fetch; drops immediately after.
-        let mut guard = inner.lock().unwrap();
-        if guard.peers.is_empty() {
-            *out = Sample::from(&0.0f32);
-            continue;
-        }
-        for peer in guard.peers.values_mut() {
-            let sample_opt = {
-                let mut recv = peer.audio_receiver.lock().unwrap();
-                recv.next_sync()
-            };
-            let s = match sample_opt {
-                Some(v) => {
-                    peer.last_sample.store(v.to_bits(), Ordering::Relaxed);
-                    v
-                }
-                None => f32::from_bits(peer.last_sample.load(Ordering::Relaxed)),
-            };
-            mixed += s;
-        }
-        drop(guard);
+    let peer_temps = drain_peer_samples(state, data.len(), metrics);
+    if peer_temps.is_empty() {
+        render_silence(data, metrics, t0);
+        return;
+    }
+    for (i, out) in data.iter_mut().enumerate() {
+        let mut mixed: f32 = peer_temps.iter().map(|tmp| tmp[i]).sum();
         if use_master {
             mixed *= master_mult;
         }
         let clipped = mixed.clamp(-1.0, 1.0);
+        if clipped != mixed {
+            metrics.clip_hits.fetch_add(1, Ordering::Relaxed);
+        }
         *out = Sample::from(&clipped);
     }
+    metrics
+        .fill_nanos_total
+        .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
 }
