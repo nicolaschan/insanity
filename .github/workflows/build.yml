@@ -58,13 +58,6 @@ jobs:
         run: rustup toolchain install stable-aarch64-apple-darwin
       - name: Rustup Target
         run: rustup target add aarch64-apple-darwin
-      - name: Install CMake 3.29
-        run: |
-          brew uninstall cmake --ignore-dependencies || true
-          brew tap-new $USER/local-cmake
-          brew extract --version=3.29.6 cmake $USER/local-cmake
-          brew install $USER/local-cmake/cmake@3.29.6
-          echo "/usr/local/opt/cmake@3.29.6/bin" >> $GITHUB_PATH
       - name: Build
         run: cargo +stable-aarch64-apple-darwin build --release --verbose --target aarch64-apple-darwin
       - name: Upload a Build Artifact
@@ -82,8 +75,6 @@ jobs:
         run: rustup target add x86_64-pc-windows-gnu
       - name: Build
         run: cargo +stable-x86_64-pc-windows-gnu build --release --verbose --target x86_64-pc-windows-gnu
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v4.3.1
         with:
@@ -99,8 +90,6 @@ jobs:
         run: rustup target add x86_64-pc-windows-msvc
       - name: Build
         run: cargo +stable-x86_64-pc-windows-msvc build --release --verbose --target x86_64-pc-windows-msvc
-        env:
-          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
       - name: Upload a Build Artifact
         uses: actions/upload-artifact@v4.3.1
         with:
