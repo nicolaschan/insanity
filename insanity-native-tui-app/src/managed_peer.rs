@@ -1,9 +1,10 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::AtomicBool,
 };
 
 use bon::bon;
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
@@ -28,7 +29,7 @@ pub struct ManagedPeer {
     connection_status: Arc<Mutex<ConnectionStatus>>,
     display_name: String,
     sender_is_muted: Arc<AtomicBool>,
-    denoise: Arc<AtomicBool>,
+    denoise: Arc<Mutex<DenoiseSelection>>,
     volume: Arc<Mutex<usize>>,
 }
 
@@ -41,14 +42,14 @@ impl ManagedPeer {
         socket: VeqSocket,
         app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
         display_name: String,
-        denoise: bool,
+        denoise: DenoiseSelection,
         volume: usize,
         sender_is_muted: Arc<AtomicBool>,
     ) -> ManagedPeer {
         let (shutdown_tx, _shutdown_rx) = broadcast::channel(10);
         let (peer_message_tx, _) = broadcast::channel(10);
         ManagedPeer {
-            denoise: Arc::new(AtomicBool::new(denoise)),
+            denoise: Arc::new(Mutex::new(denoise)),
             volume: Arc::new(Mutex::new(volume)),
             sender_is_muted,
             connection_info,
@@ -79,8 +80,9 @@ impl ManagedPeer {
         connection_status.clone()
     }
 
-    pub fn set_denoise(&self, denoise: bool) -> anyhow::Result<()> {
-        self.denoise.store(denoise, Ordering::Relaxed);
+    pub fn set_denoise(&self, denoise: DenoiseSelection) -> anyhow::Result<()> {
+        let mut guard = self.denoise.lock().unwrap();
+        *guard = denoise;
         if let Some(app_event_tx) = &self.app_event_tx {
             app_event_tx.send(AppEvent::SetPeerDenoise(self.id.to_string(), denoise))?;
         }
@@ -133,11 +135,12 @@ impl ManagedPeer {
                 self.id.to_string(),
                 Some(self.display_name.clone()),
                 PeerState::Disabled,
-                self.denoise.load(Ordering::Relaxed),
+                *self.denoise.lock().unwrap(),
                 *self.volume.lock().unwrap(),
-            ))) {
-                log::debug!("Failed to send app event: {:?}", e);
-            }
+            )))
+        {
+            log::debug!("Failed to send app event: {:?}", e);
+        }
 
         Ok(())
     }
@@ -175,7 +178,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                             peer.id.to_string(),
                             Some(peer.display_name.clone()),
                             PeerState::Connected(session.remote_addr().await.to_string()),
-                            peer.denoise.load(Ordering::Relaxed),
+                            *peer.denoise.lock().unwrap(),
                             *peer.volume.lock().unwrap(),
                         ))) {
                             log::debug!("Failed to send app event: {:?}", e);
@@ -212,7 +215,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
 async fn update_app_connecting_status(
     id: uuid::Uuid,
     display_name: String,
-    denoise: Arc<AtomicBool>,
+    denoise: Arc<Mutex<DenoiseSelection>>,
     volume: Arc<Mutex<usize>>,
     ip_addresses: Vec<String>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
@@ -221,25 +224,28 @@ async fn update_app_connecting_status(
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
         }
-    } else { match app_event_tx { Some(app_event_tx) => {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        loop {
-            for ip_address in ip_addresses.iter() {
-                interval.tick().await;
-                if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
-                    id.to_string(),
-                    Some(display_name.clone()),
-                    PeerState::Connecting(ip_address.clone()),
-                    denoise.load(Ordering::Relaxed),
-                    *volume.lock().unwrap(),
-                ))) {
-                    log::debug!("Failed to send app event: {:?}", e);
+    } else {
+        match app_event_tx {
+            Some(app_event_tx) => {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                loop {
+                    for ip_address in ip_addresses.iter() {
+                        interval.tick().await;
+                        if let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
+                            id.to_string(),
+                            Some(display_name.clone()),
+                            PeerState::Connecting(ip_address.clone()),
+                            *denoise.lock().unwrap(),
+                            *volume.lock().unwrap(),
+                        ))) {
+                            log::debug!("Failed to send app event: {:?}", e);
+                        }
+                    }
                 }
             }
+            _ => loop {
+                tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
+            },
         }
-    } _ => {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
-        }
-    }}}
+    }
 }

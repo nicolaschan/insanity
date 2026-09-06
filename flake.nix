@@ -60,6 +60,7 @@
               rust-analyzer
               cargo-edit
               cmake
+              onnxruntime
               libopus
               automake
               autoconf

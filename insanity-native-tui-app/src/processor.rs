@@ -1,5 +1,3 @@
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use std::sync::{Arc, Mutex};
 
@@ -8,11 +6,13 @@ use insanity_core::audio::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio_source::SyncAudioSource;
 use insanity_core::loudness::calculate_loudness;
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use log::error;
 use rubato_audio_source::ResampledAudioSource;
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::denoise::deepfilter::DeepfilterDenoiser;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
 use crate::realtime_buffer::RealTimeBuffer;
 use crate::server::RealtimeAudioSource;
@@ -20,10 +20,11 @@ use crate::server::RealtimeAudioSource;
 pub const AUDIO_CHUNK_SIZE: usize = 480;
 pub const AUDIO_CHANNELS: u16 = 2;
 
-pub struct AudioProcessor<'a> {
-    enable_denoise: Arc<AtomicBool>,
+pub struct AudioProcessor {
+    denoise_selection: Arc<Mutex<DenoiseSelection>>,
     volume: Arc<Mutex<usize>>,
-    denoiser: Mutex<MultiChannelDenoiser<NnnoiselessDenoiser<'a>>>,
+    nn_denoiser: Mutex<MultiChannelDenoiser<NnnoiselessDenoiser>>,
+    deepfilter_denoiser: Mutex<MultiChannelDenoiser<DeepfilterDenoiser>>,
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
     audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
     app_event_sender: Option<UnboundedSender<AppEvent>>,
@@ -31,9 +32,9 @@ pub struct AudioProcessor<'a> {
     last_sample: Mutex<f32>,
 }
 
-impl AudioProcessor<'_> {
+impl AudioProcessor {
     pub fn new(
-        enable_denoise: Arc<AtomicBool>,
+        denoise_selection: Arc<Mutex<DenoiseSelection>>,
         volume: Arc<Mutex<usize>>,
         output_sample_rate: SampleRate,
         app_event_sender: Option<UnboundedSender<AppEvent>>,
@@ -45,9 +46,10 @@ impl AudioProcessor<'_> {
             ResampledAudioSource::new(audio_receiver, output_sample_rate.0, AUDIO_CHUNK_SIZE);
 
         AudioProcessor {
-            enable_denoise,
+            denoise_selection,
             volume,
-            denoiser: Mutex::new(MultiChannelDenoiser::default()),
+            nn_denoiser: Mutex::new(MultiChannelDenoiser::default()),
+            deepfilter_denoiser: Mutex::new(MultiChannelDenoiser::default()),
             audio_receiver: Mutex::new(audio_receiver),
             chunk_buffer,
             app_event_sender,
@@ -57,9 +59,16 @@ impl AudioProcessor<'_> {
     }
 
     pub fn handle_incoming(&self, mut chunk: AudioChunk) {
-        if self.enable_denoise.load(Ordering::Relaxed) {
-            let mut denoiser_guard = self.denoiser.lock().unwrap();
-            chunk = denoiser_guard.denoise_chunk(&chunk);
+        match *self.denoise_selection.lock().unwrap() {
+            DenoiseSelection::None => { /* noop */ }
+            DenoiseSelection::Deepfilter => {
+                let mut denoiser_guard = self.deepfilter_denoiser.lock().unwrap();
+                chunk = denoiser_guard.denoise_chunk(&chunk);
+            }
+            DenoiseSelection::Nnnoiseless => {
+                let mut denoiser_guard = self.nn_denoiser.lock().unwrap();
+                chunk = denoiser_guard.denoise_chunk(&chunk);
+            }
         }
 
         // Adjust volume if necessary

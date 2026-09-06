@@ -5,13 +5,13 @@ use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamC
 use itertools::Itertools;
 use log::debug;
 
-use crate::processor::AudioProcessor;
 use crate::processor::AUDIO_CHANNELS;
+use crate::processor::AudioProcessor;
 
 fn run_output<T: Sample>(
     config: &cpal::StreamConfig,
     device: &Device,
-    processor: Arc<AudioProcessor<'static>>,
+    processor: Arc<AudioProcessor>,
 ) -> Stream {
     let err_fn = |err| eprintln!("an error occurred in the output audio stream: {err}");
     device
@@ -35,7 +35,7 @@ pub fn setup_output_stream(
     sample_format: &SampleFormat,
     config: &StreamConfig,
     device: &Device,
-    processor: Arc<AudioProcessor<'static>>,
+    processor: Arc<AudioProcessor>,
 ) -> Stream {
     match sample_format {
         SampleFormat::F32 => run_output::<f32>(config, device, processor),

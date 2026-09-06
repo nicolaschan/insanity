@@ -1,16 +1,16 @@
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use insanity_core::user_input_event::UserInputEvent;
+use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
 use std::collections::BTreeMap;
 use std::{error::Error, io, io::Stdout};
 use tokio::{
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     task::JoinHandle,
 };
-use tui::{backend::Backend, backend::CrosstermBackend, Terminal};
+use tui::{Terminal, backend::Backend, backend::CrosstermBackend};
 
 mod editor;
 use editor::Editor;
@@ -51,7 +51,7 @@ pub struct Peer {
     id: String,
     display_name: Option<String>,
     state: PeerState,
-    denoised: bool,
+    denoised: DenoiseSelection,
     volume: usize,
     loudness: f64,
 }
@@ -61,7 +61,7 @@ impl Peer {
         id: String,
         display_name: Option<String>,
         state: PeerState,
-        denoised: bool,
+        denoised: DenoiseSelection,
         volume: usize,
     ) -> Peer {
         Peer {
@@ -74,7 +74,7 @@ impl Peer {
         }
     }
 
-    pub fn with_denoised(self, denoised: bool) -> Peer {
+    pub fn with_denoised(self, denoised: DenoiseSelection) -> Peer {
         Peer { denoised, ..self }
     }
 
@@ -115,7 +115,7 @@ pub enum AppEvent {
     Up,
     TogglePeer,
     ToggleDenoise,
-    SetPeerDenoise(String, bool),
+    SetPeerDenoise(String, DenoiseSelection),
     SetPeerVolume(String, usize),
     MuteSelf(bool),
     Loudness(String, f64),
@@ -362,15 +362,12 @@ impl App {
 
     fn toggle_denoise(&mut self) {
         if let Some(peer) = self.selected_peer() {
-            if peer.denoised {
-                self.user_action_sender
-                    .send(UserInputEvent::DisableDenoise(peer.id.clone()))
-                    .unwrap();
-            } else {
-                self.user_action_sender
-                    .send(UserInputEvent::EnableDenoise(peer.id.clone()))
-                    .unwrap();
-            }
+            self.user_action_sender
+                .send(UserInputEvent::SetDenoise(
+                    peer.id.clone(),
+                    peer.denoised.next(),
+                ))
+                .unwrap();
         }
     }
 
@@ -427,76 +424,78 @@ pub async fn get_sender<B: Backend + Send + 'static>(
 }
 
 pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
-    tokio::task::spawn_blocking(move || loop {
-        match event::read().unwrap() {
-            Event::Key(key) => {
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                    match key.code {
-                        KeyCode::Char(c) => {
-                            sender.send(AppEvent::Character(c)).unwrap();
-                        }
-                        KeyCode::Tab => {
-                            sender.send(AppEvent::NextTab).unwrap();
-                        }
-                        KeyCode::BackTab => {
-                            sender.send(AppEvent::PreviousTab).unwrap();
-                        }
-                        KeyCode::Backspace => {
-                            sender.send(AppEvent::Backspace).unwrap();
-                        }
-                        KeyCode::Left => {
-                            sender.send(AppEvent::Left).unwrap();
-                        }
-                        KeyCode::Right => {
-                            sender.send(AppEvent::Right).unwrap();
-                        }
-                        KeyCode::Down => {
-                            sender.send(AppEvent::Down).unwrap();
-                        }
-                        KeyCode::Up => {
-                            sender.send(AppEvent::Up).unwrap();
-                        }
-                        KeyCode::Enter => {
-                            sender.send(AppEvent::Enter).unwrap();
-                        }
-                        _ => {}
-                    }
-                } else {
-                    if key.modifiers.contains(KeyModifiers::ALT) {
+    tokio::task::spawn_blocking(move || {
+        loop {
+            match event::read().unwrap() {
+                Event::Key(key) => {
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
                         match key.code {
-                            KeyCode::Char('f') => {
-                                sender.send(AppEvent::NextWord).unwrap();
+                            KeyCode::Char(c) => {
+                                sender.send(AppEvent::Character(c)).unwrap();
                             }
-                            KeyCode::Char('b') => {
-                                sender.send(AppEvent::PreviousWord).unwrap();
+                            KeyCode::Tab => {
+                                sender.send(AppEvent::NextTab).unwrap();
+                            }
+                            KeyCode::BackTab => {
+                                sender.send(AppEvent::PreviousTab).unwrap();
                             }
                             KeyCode::Backspace => {
-                                sender.send(AppEvent::DeleteWord).unwrap();
+                                sender.send(AppEvent::Backspace).unwrap();
+                            }
+                            KeyCode::Left => {
+                                sender.send(AppEvent::Left).unwrap();
+                            }
+                            KeyCode::Right => {
+                                sender.send(AppEvent::Right).unwrap();
+                            }
+                            KeyCode::Down => {
+                                sender.send(AppEvent::Down).unwrap();
+                            }
+                            KeyCode::Up => {
+                                sender.send(AppEvent::Up).unwrap();
+                            }
+                            KeyCode::Enter => {
+                                sender.send(AppEvent::Enter).unwrap();
                             }
                             _ => {}
                         }
-                    }
-                    if key.modifiers.contains(KeyModifiers::CONTROL) {
-                        match key.code {
-                            KeyCode::Char('c') => {
-                                sender.send(AppEvent::Kill).unwrap();
-                                return;
+                    } else {
+                        if key.modifiers.contains(KeyModifiers::ALT) {
+                            match key.code {
+                                KeyCode::Char('f') => {
+                                    sender.send(AppEvent::NextWord).unwrap();
+                                }
+                                KeyCode::Char('b') => {
+                                    sender.send(AppEvent::PreviousWord).unwrap();
+                                }
+                                KeyCode::Backspace => {
+                                    sender.send(AppEvent::DeleteWord).unwrap();
+                                }
+                                _ => {}
                             }
-                            KeyCode::Char('a') => {
-                                sender.send(AppEvent::CursorBeginning).unwrap();
+                        }
+                        if key.modifiers.contains(KeyModifiers::CONTROL) {
+                            match key.code {
+                                KeyCode::Char('c') => {
+                                    sender.send(AppEvent::Kill).unwrap();
+                                    return;
+                                }
+                                KeyCode::Char('a') => {
+                                    sender.send(AppEvent::CursorBeginning).unwrap();
+                                }
+                                KeyCode::Char('e') => {
+                                    sender.send(AppEvent::CursorEnd).unwrap();
+                                }
+                                _ => {}
                             }
-                            KeyCode::Char('e') => {
-                                sender.send(AppEvent::CursorEnd).unwrap();
-                            }
-                            _ => {}
                         }
                     }
                 }
+                Event::Resize(_, _) => {
+                    sender.send(AppEvent::Nothing).unwrap();
+                }
+                _ => {}
             }
-            Event::Resize(_, _) => {
-                sender.send(AppEvent::Nothing).unwrap();
-            }
-            _ => {}
         }
     })
 }

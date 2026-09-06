@@ -5,6 +5,7 @@ use cpal::traits::{HostTrait, StreamTrait};
 
 use insanity_core::audio::{AudioChunk, AudioFormat};
 use insanity_core::audio_source::AudioSource;
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use rubato_audio_source::ResampledAudioSource;
@@ -94,7 +95,7 @@ async fn run_peer_message_sender(
 async fn run_receiver(
     mut conn: VeqSessionAlias,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
-    enable_denoise: Arc<AtomicBool>,
+    denoise_selection: Arc<Mutex<DenoiseSelection>>,
     volume: Arc<Mutex<usize>>,
     id: uuid::Uuid,
 ) {
@@ -103,7 +104,7 @@ async fn run_receiver(
     let output_device = host.default_output_device().unwrap();
     let (sample_format, config) = get_output_config(&output_device);
     let processor = Arc::new(AudioProcessor::new(
-        enable_denoise,
+        denoise_selection,
         volume,
         config.sample_rate,
         app_event_sender.clone(),
@@ -161,7 +162,7 @@ pub async fn run_clerver(
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     sender_is_muted: Arc<AtomicBool>,
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
-    enable_denoise: Arc<AtomicBool>,
+    denoise: Arc<Mutex<DenoiseSelection>>,
     volume: Arc<Mutex<usize>>,
     id: uuid::Uuid,
 ) {
@@ -176,7 +177,7 @@ pub async fn run_clerver(
         _ = run_receiver(
             conn.clone(),
             app_event_sender,
-            enable_denoise,
+            denoise,
             volume,
             id,
         ) => {
