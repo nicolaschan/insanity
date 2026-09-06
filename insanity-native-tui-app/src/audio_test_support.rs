@@ -16,12 +16,10 @@ use crate::clerver::{decode_frame_to_chunk, encode_hub_chunk};
 use crate::protocol::ProtocolMessage;
 use insanity_core::audio_source::{AudioSource, SyncAudioSource};
 use insanity_core::loudness::calculate_loudness;
+use insanity_core::user_input_event::DenoiseSelection;
 use opus::{Application, Channels, Decoder, Encoder};
 use std::collections::HashMap;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize},
-};
+use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
 use tokio::sync::broadcast;
 
@@ -138,17 +136,17 @@ impl VirtualNode {
     }
 
     pub fn add_inbound(&mut self, peer_name: &str) {
-        self.add_inbound_denoise(peer_name, false);
+        self.add_inbound_denoise(peer_name, DenoiseSelection::None);
     }
 
     /// Register an inbound peer with explicit denoise flag.
-    pub fn add_inbound_denoise(&mut self, peer_name: &str, denoise: bool) {
+    pub fn add_inbound_denoise(&mut self, peer_name: &str, denoise: DenoiseSelection) {
         let id = uuid::Uuid::new_v4();
         self.peer_ids.insert(peer_name.to_string(), id);
         self.mixer.add_peer(
             id,
             Arc::new(AtomicUsize::new(100)),
-            Arc::new(AtomicBool::new(denoise)),
+            Arc::new(std::sync::Mutex::new(denoise)),
             None,
         );
         self.decoders.insert(

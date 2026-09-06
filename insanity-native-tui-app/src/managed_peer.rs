@@ -1,9 +1,10 @@
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
 };
 
 use bon::bon;
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
@@ -32,7 +33,7 @@ pub struct ManagedPeer {
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     connection_status: Arc<Mutex<ConnectionStatus>>,
     display_name: String,
-    denoise: Arc<AtomicBool>,
+    denoise: Arc<Mutex<DenoiseSelection>>,
     volume: Arc<AtomicUsize>,
     hub: Arc<AudioInputHub>,
     mixer: Arc<AudioMixer>,
@@ -47,7 +48,7 @@ impl ManagedPeer {
         socket: VeqSocket,
         app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
         display_name: String,
-        denoise: bool,
+        denoise: DenoiseSelection,
         volume: usize,
         hub: Arc<AudioInputHub>,
         mixer: Arc<AudioMixer>,
@@ -55,7 +56,7 @@ impl ManagedPeer {
         let (shutdown_tx, _shutdown_rx) = broadcast::channel(10);
         let (peer_message_tx, _) = broadcast::channel(10);
         ManagedPeer {
-            denoise: Arc::new(AtomicBool::new(denoise)),
+            denoise: Arc::new(Mutex::new(denoise)),
             volume: Arc::new(AtomicUsize::new(volume)),
             connection_info,
             display_name,
@@ -87,8 +88,9 @@ impl ManagedPeer {
         connection_status.clone()
     }
 
-    pub fn set_denoise(&self, denoise: bool) -> anyhow::Result<()> {
-        self.denoise.store(denoise, Ordering::Relaxed);
+    pub fn set_denoise(&self, denoise: DenoiseSelection) -> anyhow::Result<()> {
+        let mut guard = self.denoise.lock().unwrap();
+        *guard = denoise;
         if let Some(app_event_tx) = &self.app_event_tx {
             app_event_tx.send(AppEvent::SetPeerDenoise(self.id.to_string(), denoise))?;
         }
@@ -142,7 +144,7 @@ impl ManagedPeer {
                 self.id.to_string(),
                 Some(self.display_name.clone()),
                 PeerState::Disabled,
-                self.denoise.load(Ordering::Relaxed),
+                *self.denoise.lock().unwrap(),
                 self.volume.load(Ordering::Relaxed),
             )))
         {
@@ -185,7 +187,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                             peer.id.to_string(),
                             Some(peer.display_name.clone()),
                             PeerState::Connected(session.remote_addr().await.to_string()),
-                            peer.denoise.load(Ordering::Relaxed),
+                            *peer.denoise.lock().unwrap(),
                             peer.volume.load(Ordering::Relaxed),
                         ))) {
                             log::debug!("Failed to send app event: {:?}", e);
@@ -228,7 +230,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
 async fn update_app_connecting_status(
     id: uuid::Uuid,
     display_name: String,
-    denoise: Arc<AtomicBool>,
+    denoise: Arc<Mutex<DenoiseSelection>>,
     volume: Arc<AtomicUsize>,
     ip_addresses: Vec<String>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
@@ -248,7 +250,7 @@ async fn update_app_connecting_status(
                             id.to_string(),
                             Some(display_name.clone()),
                             PeerState::Connecting(ip_address.clone()),
-                            denoise.load(Ordering::Relaxed),
+                            *denoise.lock().unwrap(),
                             volume.load(Ordering::Relaxed),
                         ))) {
                             log::debug!("Failed to send app event: {:?}", e);

@@ -1,10 +1,12 @@
 use insanity_core::audio_source::{AudioSource, SyncAudioSource};
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
 use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize},
 };
+use tokio::sync::Mutex;
 
 struct SineSource {
     phase: f32,
@@ -95,9 +97,9 @@ async fn hub_mute_skips_send() {
 fn mixer_sum_and_clip() {
     let mixer = AudioMixer::new_no_device();
     let v1 = Arc::new(AtomicUsize::new(100));
-    let d1 = Arc::new(AtomicBool::new(false));
+    let d1 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let v2 = Arc::new(AtomicUsize::new(100));
-    let d2 = Arc::new(AtomicBool::new(false));
+    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id1 = uuid::Uuid::new_v4();
     let id2 = uuid::Uuid::new_v4();
     mixer.add_peer(id1, v1, d1, None);
@@ -118,7 +120,7 @@ fn mixer_sum_and_clip() {
 fn mixer_per_peer_volume() {
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(50));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v.clone(), d, None);
     let chunk = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0f32; 960]);
@@ -138,9 +140,9 @@ fn mixer_denoise_before_mix() {
     // use noisy sine, verify outputs differ (perceptually denoise changes)
     let mixer = AudioMixer::new_no_device();
     let v1 = Arc::new(AtomicUsize::new(100));
-    let d1 = Arc::new(AtomicBool::new(false));
+    let d1 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let v2 = Arc::new(AtomicUsize::new(100));
-    let d2 = Arc::new(AtomicBool::new(true));
+    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::default()));
     let id1 = uuid::Uuid::new_v4();
     let id2 = uuid::Uuid::new_v4();
     mixer.add_peer(id1, v1, d1, None);
@@ -163,7 +165,7 @@ fn mixer_denoise_before_mix() {
 fn mixer_master_volume() {
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     mixer.handle_incoming(
@@ -189,7 +191,7 @@ fn mixer_zero_peers_silence() {
     }
     // also after adding then removing, should return to silence
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     mixer.handle_incoming(
@@ -209,7 +211,7 @@ fn mixer_many_peers_clipping() {
     let mixer = AudioMixer::new_no_device();
     for _ in 0..10 {
         let v = Arc::new(AtomicUsize::new(100));
-        let d = Arc::new(AtomicBool::new(false));
+        let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
         let id = uuid::Uuid::new_v4();
         mixer.add_peer(id, v, d, None);
         mixer.handle_incoming(
@@ -232,7 +234,7 @@ fn mixer_volume_extremes() {
     // volume 0 -> silence
     let mixer = AudioMixer::new_no_device();
     let v0 = Arc::new(AtomicUsize::new(0));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id0 = uuid::Uuid::new_v4();
     mixer.add_peer(id0, v0, d, None);
     mixer.handle_incoming(
@@ -248,7 +250,7 @@ fn mixer_volume_extremes() {
     // volume 999 -> huge multiplier but clipped to 1.0, finite
     let mixer2 = AudioMixer::new_no_device();
     let v999 = Arc::new(AtomicUsize::new(999));
-    let d2 = Arc::new(AtomicBool::new(false));
+    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id999 = uuid::Uuid::new_v4();
     mixer2.add_peer(id999, v999, d2, None);
     mixer2.handle_incoming(

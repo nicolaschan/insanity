@@ -1,3 +1,4 @@
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioMixer, MixerMetricsSnapshot, format_metrics_line};
 use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use std::sync::{
@@ -68,7 +69,7 @@ fn occupancies_reflect_buffered_chunks() {
     mixer.add_peer(
         id,
         Arc::new(AtomicUsize::new(100)),
-        Arc::new(AtomicBool::new(false)),
+        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
         None,
     );
     mixer.handle_incoming(

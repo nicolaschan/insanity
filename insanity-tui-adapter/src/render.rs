@@ -91,7 +91,11 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         Style::default()
     };
 
-    let denoise_symbol = if peer.denoised { "🤫" } else { "🫨" };
+    let denoise_symbol = match peer.denoised {
+        insanity_core::user_input_event::DenoiseSelection::None => "🫨",
+        insanity_core::user_input_event::DenoiseSelection::Deepfilter => "d",
+        insanity_core::user_input_event::DenoiseSelection::Nnnoiseless => "n",
+    };
 
     let attributes = Cell::from(Spans::from(vec![Span::styled(
         format!("{}", peer.volume),

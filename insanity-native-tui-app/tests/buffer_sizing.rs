@@ -1,3 +1,4 @@
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
     AudioMixer, JITTER_TARGET_CHUNKS, buffer_starved, format_metrics_line,
 };
@@ -17,7 +18,7 @@ fn add_peer(mixer: &AudioMixer) -> uuid::Uuid {
     mixer.add_peer(
         id,
         Arc::new(AtomicUsize::new(100)),
-        Arc::new(AtomicBool::new(false)),
+        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
         None,
     );
     id
@@ -312,7 +313,7 @@ fn summed_peers_count_clips_and_stay_bounded() {
             mixer.add_peer(
                 id,
                 Arc::new(AtomicUsize::new(100)),
-                Arc::new(AtomicBool::new(false)),
+                Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
                 None,
             );
             id

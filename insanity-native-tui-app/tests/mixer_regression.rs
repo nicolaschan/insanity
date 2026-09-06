@@ -10,10 +10,13 @@
 //! - mixer_cleanup (remove_peer on all exits)
 //! - denoise_remainder_no_loss (chunks_exact tail)
 
+use insanity_core::audio::denoiser::MultiChannelDenoiser;
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
     AudioMixer, JITTER_TARGET_CHUNKS, MAX_VOLUME, convert_to_mixer_channels, volume_multiplier,
 };
-use insanity_native_tui_app::processor::{AudioChunk, AudioFormat, MultiChannelDenoiser};
+use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
+use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use std::sync::{
     Arc,
@@ -71,7 +74,7 @@ fn seq_gap_is_time() {
     // NOT play chunk 12 immediately after chunk 1 (no time-compression).
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     // Single missing chunk (gap fits the 3-chunk window: span 0..2 < 3).
@@ -119,7 +122,7 @@ fn plc_fades_not_holds() {
     // Single lost chunk must decay to ~0 within one chunk, not hold DC.
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     mixer.handle_incoming(
@@ -152,7 +155,7 @@ fn plc_fades_not_holds() {
 fn single_gap_counts_one_slot_and_full_fade_samples() {
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     mixer.handle_incoming(
@@ -173,7 +176,7 @@ fn plc_sample_to_slot_ratio_holds_across_callback_sizes() {
     for callback in [960usize, 2048, 4100] {
         let mixer = AudioMixer::new_no_device();
         let v = Arc::new(AtomicUsize::new(100));
-        let d = Arc::new(AtomicBool::new(false));
+        let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
         let id = uuid::Uuid::new_v4();
         mixer.add_peer(id, v, d, None);
         for _ in 0..4 {
@@ -200,7 +203,7 @@ fn mono_stereo_matrix() {
     let mixer = AudioMixer::new_no_device();
     assert_eq!(mixer.channels(), 2);
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     // Mono chunk: 480 samples of 0.5. Ingress duplicates to 960 stereo
@@ -232,7 +235,7 @@ fn reconnect_resets_jitter() {
     // not be entirely dropped as stale.
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v.clone(), d.clone(), None);
     for seq in 0..10u128 {
@@ -271,7 +274,8 @@ fn mixer_cleanup_readd() {
     // select!-cancel leak path: stale PeerState must never survive).
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
+
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v.clone(), d.clone(), None);
     mixer.handle_incoming(
@@ -293,7 +297,7 @@ fn mixer_cleanup_readd() {
 #[test]
 fn denoise_remainder_no_loss() {
     // chunks_exact must not drop tail samples.
-    let mut denoiser = MultiChannelDenoiser::new();
+    let mut denoiser: MultiChannelDenoiser<NnnoiselessDenoiser> = MultiChannelDenoiser::new();
     // 1000 stereo samples is not a multiple of 2*480=960.
     let data = vec![0.1f32; 1000];
     let chunk = AudioChunk::new(0, AudioFormat::new(2, 48000), data);
@@ -312,7 +316,7 @@ fn metrics_counters_wired() {
     // Smoke test that metrics instrumentation is live without changing audio.
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     mixer.handle_incoming(
@@ -341,7 +345,7 @@ fn metrics_counters_wired() {
 fn reorder_hole_fill_does_not_count_gap() {
     let mixer = AudioMixer::new_no_device();
     let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(AtomicBool::new(false));
+    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     mixer.handle_incoming(

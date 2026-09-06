@@ -1,11 +1,10 @@
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioMixer;
 use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use std::fs;
 use std::path::Path;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize},
-};
+use std::sync::Mutex;
+use std::sync::{Arc, atomic::AtomicUsize};
 
 fn write_f32_le(path: &Path, data: &[f32]) {
     let mut buf = Vec::with_capacity(data.len() * 4);
@@ -28,9 +27,9 @@ fn main() {
     // two peer mix via AudioMixer.
     let mixer = AudioMixer::new_no_device();
     let v1 = Arc::new(AtomicUsize::new(100));
-    let d1 = Arc::new(AtomicBool::new(false));
+    let d1 = Arc::new(Mutex::new(DenoiseSelection::None));
     let v2 = Arc::new(AtomicUsize::new(100));
-    let d2 = Arc::new(AtomicBool::new(false));
+    let d2 = Arc::new(Mutex::new(DenoiseSelection::None));
     let id1 = uuid::Uuid::new_v4();
     let id2 = uuid::Uuid::new_v4();
     mixer.add_peer(id1, v1, d1, None);

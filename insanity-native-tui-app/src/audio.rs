@@ -19,11 +19,15 @@ fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> MutexGuard<'a, T> {
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio_source::{AudioSource, SyncAudioSource};
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
-use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AudioChunk, MultiChannelDenoiser};
+use crate::denoise::deepfilter::DeepfilterDenoiser;
+use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AudioChunk};
 use crate::realtime_buffer::RealTimeBuffer;
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::ResampledAudioSource;
@@ -495,9 +499,10 @@ pub const PLC_FADE_SAMPLES: usize = 960;
 struct PeerState {
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
     audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
-    denoiser: Mutex<MultiChannelDenoiser<'static>>,
+    nn_denoiser: Mutex<MultiChannelDenoiser<NnnoiselessDenoiser>>,
+    df_denoiser: Mutex<MultiChannelDenoiser<DeepfilterDenoiser>>,
     volume: Arc<AtomicUsize>,
-    enable_denoise: Arc<AtomicBool>,
+    denoise: Arc<Mutex<DenoiseSelection>>,
     app_event_sender: Option<UnboundedSender<AppEvent>>,
     peer_id: String,
     last_sample: AtomicU32,
@@ -662,7 +667,7 @@ impl AudioMixer {
         &self,
         id: uuid::Uuid,
         volume: Arc<AtomicUsize>,
-        enable_denoise: Arc<AtomicBool>,
+        denoise: Arc<Mutex<DenoiseSelection>>,
         app_event_sender: Option<UnboundedSender<AppEvent>>,
     ) {
         let mut guard = lock(&self.state, "mixer state");
@@ -677,12 +682,13 @@ impl AudioMixer {
                 self.sample_rate.0,
                 AUDIO_CHUNK_SIZE,
             ));
-            peer.denoiser = Mutex::new(MultiChannelDenoiser::new());
+            peer.nn_denoiser = Mutex::new(MultiChannelDenoiser::default());
+            peer.df_denoiser = Mutex::new(MultiChannelDenoiser::default());
             peer.last_sample.store(0.0f32.to_bits(), Ordering::Relaxed);
             peer.fade_start = 0.0;
             peer.fade_pos = 0;
             peer.volume = volume;
-            peer.enable_denoise = enable_denoise;
+            peer.denoise = denoise;
             peer.app_event_sender = app_event_sender;
             return;
         }
@@ -694,9 +700,10 @@ impl AudioMixer {
         let state = PeerState {
             chunk_buffer,
             audio_receiver: Mutex::new(audio_receiver),
-            denoiser: Mutex::new(MultiChannelDenoiser::new()),
+            nn_denoiser: Mutex::new(MultiChannelDenoiser::default()),
+            df_denoiser: Mutex::new(MultiChannelDenoiser::default()),
             volume,
-            enable_denoise,
+            denoise,
             app_event_sender,
             peer_id: id.to_string(),
             last_sample: AtomicU32::new(0.0f32.to_bits()),
@@ -720,10 +727,18 @@ impl AudioMixer {
             return;
         };
         // denoise before mixing
-        if peer.enable_denoise.load(Ordering::Relaxed) {
-            let mut d = lock(&peer.denoiser, "denoiser");
-            chunk = d.denoise_chunk(&chunk);
+        match *peer.denoise.lock().unwrap() {
+            DenoiseSelection::None => { /* noop */ }
+            DenoiseSelection::Deepfilter => {
+                let mut d = lock(&peer.df_denoiser, "df_denoiser");
+                chunk = d.denoise_chunk(&chunk);
+            }
+            DenoiseSelection::Nnnoiseless => {
+                let mut d = lock(&peer.nn_denoiser, "nn_denoiser");
+                chunk = d.denoise_chunk(&chunk);
+            }
         }
+
         let vol = peer.volume.load(Ordering::Relaxed);
         if vol != 100 {
             let m = volume_multiplier(vol);

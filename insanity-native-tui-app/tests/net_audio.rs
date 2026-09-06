@@ -1,10 +1,12 @@
 use insanity_core::audio_source::SyncAudioSource;
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
 use insanity_native_tui_app::audio_test_support::{
     SineSource, energy_ratio, loudness, max_normalized_xcorr,
 };
 use insanity_native_tui_app::clerver::run_clerver;
 use insanity_native_tui_app::protocol::ProtocolMessage;
+use std::sync::Mutex;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize},
@@ -63,7 +65,7 @@ async fn connected_peers_exchange_audio() {
             mixer.add_peer(
                 id,
                 Arc::new(AtomicUsize::new(100)),
-                Arc::new(AtomicBool::new(false)),
+                Arc::new(Mutex::new(DenoiseSelection::None)),
                 None,
             );
         }
