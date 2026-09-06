@@ -87,12 +87,21 @@ async fn connected_peers_exchange_audio() {
         ));
 
         let ticks = (AUDIO_SECS * 100) as usize;
+        let started = std::time::Instant::now();
         let (spk_a, spk_b) = tokio::join!(
             sample_speaker(&mixer_a, ticks),
             sample_speaker(&mixer_b, ticks)
         );
         task_a.abort();
         task_b.abort();
+        eprintln!(
+            "sampled {ticks} ticks in {:?}; mixer_a {:?} fill_avg {}ns; mixer_b {:?} fill_avg {}ns",
+            started.elapsed(),
+            mixer_a.metrics_snapshot(),
+            mixer_a.fill_avg_nanos(),
+            mixer_b.metrics_snapshot(),
+            mixer_b.fill_avg_nanos()
+        );
 
         assert_eq!(spk_a.len(), ticks * CHUNK);
         assert_eq!(spk_b.len(), ticks * CHUNK);

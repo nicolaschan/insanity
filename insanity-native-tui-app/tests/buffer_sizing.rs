@@ -334,7 +334,7 @@ fn summed_peers_count_clips_and_stay_bounded() {
 }
 
 #[test]
-fn hot_opus_single_peer_clip_rate_below_five_percent() {
+fn hot_opus_single_peer_clips_only_codec_overshoot() {
     let mut enc = Encoder::new(48000, Channels::Stereo, Application::Audio).expect("encoder");
     let mut dec = Decoder::new(48000, Channels::Stereo).expect("decoder");
     let mut hot = vec![0f32; 960];
@@ -351,6 +351,7 @@ fn hot_opus_single_peer_clip_rate_below_five_percent() {
         dec.decode_float(&payload, &mut hot, false).expect("decode");
     }
     assert_eq!(hot.len(), 960);
+    let overshoot = hot.iter().filter(|s| s.abs() > 1.0).count();
     let mixer = mixer_with_capacity(10);
     let id = add_peer(&mixer);
     for seq in 0..10u128 {
@@ -363,11 +364,12 @@ fn hot_opus_single_peer_clip_rate_below_five_percent() {
     for _ in 0..10 {
         total += fill(&mixer, 960).len();
     }
+    assert_eq!(total, 9600);
     let clips = mixer.metrics_snapshot().clip_hits;
-    let rate = clips as f64 / total.max(1) as f64;
-    assert!(
-        rate < 0.05,
-        "hot opus clip rate {rate:.4} ({clips}/{total}) exceeds 5%"
+    assert_eq!(
+        clips,
+        overshoot * 10,
+        "unity-gain mixer must clip exactly the samples opus pushed past full scale"
     );
 }
 
