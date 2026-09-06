@@ -14,7 +14,7 @@ fn realtime_buffer_basic_order() {
         buf.set(i, i as i32);
     }
     for i in 0..5 {
-        assert_eq!(buf.next_item(), Some(i as i32));
+        assert_eq!(buf.next_item(), Some(i));
     }
     assert_eq!(buf.next_item(), None);
 }
@@ -24,8 +24,9 @@ fn realtime_buffer_gap_and_wrap() {
     let mut buf = RealTimeBuffer::new(3);
     buf.set(0, 0);
     buf.set(2, 2);
-    // missing 1, next should skip gap
+    // missing 1 yields one concealment (None) to preserve timing, then 2
     assert_eq!(buf.next_item(), Some(0));
+    assert_eq!(buf.next_item(), None);
     assert_eq!(buf.next_item(), Some(2));
     // duplicate past head ignored
     buf.set(0, 99);
@@ -69,28 +70,56 @@ fn resampler_passthrough() {
     }
     impl AudioSource for Passthrough {
         async fn next(&mut self) -> Option<f32> {
-            if self.pos < self.data.len() { let v = self.data[self.pos]; self.pos+=1; Some(v)} else {None}
+            if self.pos < self.data.len() {
+                let v = self.data[self.pos];
+                self.pos += 1;
+                Some(v)
+            } else {
+                None
+            }
         }
-        fn sample_rate(&self) -> u32 { 48000 }
-        fn channels(&self) -> u16 { 2 }
+        fn sample_rate(&self) -> u32 {
+            48000
+        }
+        fn channels(&self) -> u16 {
+            2
+        }
     }
     impl SyncAudioSource for Passthrough {
         fn next_sync(&mut self) -> Option<f32> {
-            if self.pos < self.data.len() { let v = self.data[self.pos]; self.pos+=1; Some(v)} else {None}
+            if self.pos < self.data.len() {
+                let v = self.data[self.pos];
+                self.pos += 1;
+                Some(v)
+            } else {
+                None
+            }
         }
     }
     let data: Vec<f32> = (0..960).map(|i| i as f32 / 960.0).collect();
-    let src = Passthrough { data: data.clone(), pos: 0 };
+    let src = Passthrough {
+        data: data.clone(),
+        pos: 0,
+    };
     let mut res = ResampledAudioSource::new(src, 48000, AUDIO_CHUNK_SIZE);
     // passthrough should be identical
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let out: Vec<f32> = rt.block_on(async {
-        let mut v = Vec::new();
-        for _ in 0..960 { v.push(res.next().await.unwrap()); }
-        v
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            let mut v = Vec::new();
+            for _ in 0..960 {
+                v.push(res.next().await.unwrap());
+            }
+            v
+        })
+        .await
+        .expect("resampler passthrough timed out")
     });
-    for (a,b) in data.iter().zip(out.iter()) {
-        assert!((a-b).abs() < 1e-6);
+    for (a, b) in data.iter().zip(out.iter()) {
+        assert!((a - b).abs() < 1e-6);
     }
     assert_eq!(AUDIO_CHUNK_SIZE, 480);
     assert_eq!(AUDIO_CHANNELS, 2);
