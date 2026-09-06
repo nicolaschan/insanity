@@ -1,8 +1,9 @@
 use std::sync::atomic::Ordering;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 use cpal::traits::{HostTrait, StreamTrait};
 
+use insanity_core::audio::{AudioChunk, AudioFormat};
 use insanity_core::audio_source::AudioSource;
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
@@ -13,7 +14,7 @@ use veq::veq::VeqSessionAlias;
 
 use crate::{
     client::{get_output_config, setup_output_stream},
-    processor::{AudioChunk, AudioFormat, AudioProcessor, AUDIO_CHUNK_SIZE},
+    processor::{AUDIO_CHUNK_SIZE, AudioProcessor},
     protocol::ProtocolMessage,
     server::make_audio_receiver,
 };

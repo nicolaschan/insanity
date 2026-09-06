@@ -3,10 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use insanity_core::audio::AudioChunk;
 use insanity_core::audio_source::{AudioSource, SyncAudioSource};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::processor::{AudioChunk, AUDIO_CHANNELS};
+use crate::processor::{AUDIO_CHANNELS};
 use crate::realtime_buffer::RealTimeBuffer;
 
 fn run_input<T: Sample>(

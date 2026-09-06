@@ -8,3 +8,4 @@ pub mod realtime_buffer;
 pub mod room_handler;
 pub mod server;
 pub mod update;
+mod denoise;
