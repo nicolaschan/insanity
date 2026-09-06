@@ -13,6 +13,18 @@ path = "src/main.rs"
 name = "generate_golden"
 path = "tools/generate_golden.rs"
 
+[[bin]]
+name = "char_audio"
+path = "tools/char_audio.rs"
+
+[[bin]]
+name = "buffer_sweep"
+path = "tools/buffer_sweep.rs"
+
+[[bin]]
+name = "log_audio_check"
+path = "tools/log_audio_check.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
