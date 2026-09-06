@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, Mutex,
-    atomic::AtomicBool,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use bon::bon;
@@ -9,7 +9,12 @@ use insanity_tui_adapter::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 
-use crate::{clerver::run_clerver, connection_manager::AugmentedInfo, protocol::ProtocolMessage};
+use crate::{
+    audio::{AudioInputHub, AudioMixer, MAX_VOLUME},
+    clerver::run_clerver,
+    connection_manager::AugmentedInfo,
+    protocol::ProtocolMessage,
+};
 
 #[derive(Clone, Debug)]
 pub enum ConnectionStatus {
@@ -28,9 +33,10 @@ pub struct ManagedPeer {
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     connection_status: Arc<Mutex<ConnectionStatus>>,
     display_name: String,
-    sender_is_muted: Arc<AtomicBool>,
     denoise: Arc<Mutex<DenoiseSelection>>,
-    volume: Arc<Mutex<usize>>,
+    volume: Arc<AtomicUsize>,
+    hub: Arc<AudioInputHub>,
+    mixer: Arc<AudioMixer>,
 }
 
 #[bon]
@@ -44,14 +50,14 @@ impl ManagedPeer {
         display_name: String,
         denoise: DenoiseSelection,
         volume: usize,
-        sender_is_muted: Arc<AtomicBool>,
+        hub: Arc<AudioInputHub>,
+        mixer: Arc<AudioMixer>,
     ) -> ManagedPeer {
         let (shutdown_tx, _shutdown_rx) = broadcast::channel(10);
         let (peer_message_tx, _) = broadcast::channel(10);
         ManagedPeer {
             denoise: Arc::new(Mutex::new(denoise)),
-            volume: Arc::new(Mutex::new(volume)),
-            sender_is_muted,
+            volume: Arc::new(AtomicUsize::new(volume)),
             connection_info,
             display_name,
             shutdown_tx,
@@ -59,6 +65,8 @@ impl ManagedPeer {
             socket,
             app_event_tx,
             id,
+            hub,
+            mixer,
             connection_status: Arc::new(Mutex::new(ConnectionStatus::Disabled)),
         }
     }
@@ -90,10 +98,10 @@ impl ManagedPeer {
     }
 
     pub fn set_volume(&self, volume: usize) -> anyhow::Result<()> {
-        let mut volume_guard = self.volume.lock().unwrap();
-        *volume_guard = volume;
+        let v = volume.min(MAX_VOLUME);
+        self.volume.store(v, Ordering::Relaxed);
         if let Some(app_event_tx) = &self.app_event_tx {
-            app_event_tx.send(AppEvent::SetPeerVolume(self.id.to_string(), volume))?;
+            app_event_tx.send(AppEvent::SetPeerVolume(self.id.to_string(), v))?;
         }
         Ok(())
     }
@@ -123,6 +131,7 @@ impl ManagedPeer {
     }
 
     pub fn disable(&self) -> anyhow::Result<()> {
+        self.mixer.remove_peer(&self.id);
         self.shutdown_tx.send(())?;
         log::info!("Disabled peer: {}", self.id);
 
@@ -136,7 +145,7 @@ impl ManagedPeer {
                 Some(self.display_name.clone()),
                 PeerState::Disabled,
                 *self.denoise.lock().unwrap(),
-                *self.volume.lock().unwrap(),
+                self.volume.load(Ordering::Relaxed),
             )))
         {
             log::debug!("Failed to send app event: {:?}", e);
@@ -179,19 +188,25 @@ async fn run_connection_loop(peer: ManagedPeer) {
                             Some(peer.display_name.clone()),
                             PeerState::Connected(session.remote_addr().await.to_string()),
                             *peer.denoise.lock().unwrap(),
-                            *peer.volume.lock().unwrap(),
+                            peer.volume.load(Ordering::Relaxed),
                         ))) {
                             log::debug!("Failed to send app event: {:?}", e);
                         }
 
                     log::info!("Starting clerver for connection with {}.", peer.id);
+                    // register peer with single output mixer before streaming
+                    peer.mixer.add_peer(
+                        peer.id,
+                        peer.volume.clone(),
+                        peer.denoise.clone(),
+                        peer.app_event_tx.clone(),
+                    );
                     run_clerver(
                         session,
                         peer.app_event_tx.clone(),
-                        peer.sender_is_muted.clone(),
+                        peer.hub.clone(),
+                        peer.mixer.clone(),
                         peer.peer_message_tx.subscribe(),
-                        peer.denoise.clone(),
-                        peer.volume.clone(),
                         peer.id,
                     )
                     .await;
@@ -216,7 +231,7 @@ async fn update_app_connecting_status(
     id: uuid::Uuid,
     display_name: String,
     denoise: Arc<Mutex<DenoiseSelection>>,
-    volume: Arc<Mutex<usize>>,
+    volume: Arc<AtomicUsize>,
     ip_addresses: Vec<String>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
 ) {
@@ -236,7 +251,7 @@ async fn update_app_connecting_status(
                             Some(display_name.clone()),
                             PeerState::Connecting(ip_address.clone()),
                             *denoise.lock().unwrap(),
-                            *volume.lock().unwrap(),
+                            volume.load(Ordering::Relaxed),
                         ))) {
                             log::debug!("Failed to send app event: {:?}", e);
                         }

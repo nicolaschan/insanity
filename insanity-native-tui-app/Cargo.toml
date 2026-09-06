@@ -9,6 +9,22 @@ default-run = "insanity"
 name = "insanity"
 path = "src/main.rs"
 
+[[example]]
+name = "generate_golden"
+path = "tools/generate_golden.rs"
+
+[[example]]
+name = "char_audio"
+path = "tools/char_audio.rs"
+
+[[example]]
+name = "buffer_sweep"
+path = "tools/buffer_sweep.rs"
+
+[[example]]
+name = "log_audio_check"
+path = "tools/log_audio_check.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -54,3 +70,6 @@ base64 = "0.22.1"
 toml = "0.8.19"
 url = "2.5.4"
 ndarray = "0.15"
+
+[dev-dependencies]
+approx = "0.5"

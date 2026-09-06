@@ -35,7 +35,10 @@ impl ProtocolMessage {
     where
         W: Write,
     {
-        let serialized = bincode::serialize(self).unwrap();
+        let Ok(serialized) = bincode::serialize(self) else {
+            log::error!("Error serializing protocol message");
+            return Err(Error::other("serialize protocol message"));
+        };
         if let Err(e) = std::io::copy(&mut &serialized[..], &mut stream) {
             log::error!("Error writing to stream: {:?}", e);
             return Err(e);

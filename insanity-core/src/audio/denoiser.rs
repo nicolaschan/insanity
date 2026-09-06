@@ -39,12 +39,16 @@ impl<T: Denoiser> MultiChannelDenoiser<T> {
         let mut denoised_audio: Vec<f32> = Vec::new();
 
         let channels = chunk.audio_format.channel_count;
+        // Degenerate input: nothing to denoise, preserve as-is.
+        // Also guards against `chunks_exact(0)` panicking when channels == 0.
+        if channels == 0 || chunk.audio_data.is_empty() {
+            return chunk.clone();
+        }
         self.setup_denoisers(channels);
 
-        for audio_chunk in chunk
-            .audio_data
-            .chunks_exact((channels as usize) * T::FRAME_SIZE)
-        {
+        let frame_samples = (channels as usize) * T::FRAME_SIZE;
+        let full_len = (chunk.audio_data.len() / frame_samples) * frame_samples;
+        for audio_chunk in chunk.audio_data[..full_len].chunks_exact(frame_samples) {
             let raw_audio = split_channels(audio_chunk, channels as usize);
 
             // Denoise each channel independently
@@ -61,6 +65,9 @@ impl<T: Denoiser> MultiChannelDenoiser<T> {
                 denoised_audio.push(sample);
             }
         }
+        // Tail that doesn't fill a full denoiser frame can't be processed;
+        // pass it through unchanged so no samples are lost.
+        denoised_audio.extend_from_slice(&chunk.audio_data[full_len..]);
 
         AudioChunk::new(
             chunk.sequence_number,
