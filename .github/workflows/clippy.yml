@@ -1,0 +1,22 @@
+name: Clippy
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get install -y libasound2-dev
+      - name: Rustup Clippy
+        run: rustup component add clippy
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

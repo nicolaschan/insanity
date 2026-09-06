@@ -237,6 +237,12 @@ pub struct AudioInputHub {
     channels: u16,
 }
 
+impl Default for AudioInputHub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioInputHub {
     pub fn new() -> Self {
         let (btx, _) = broadcast::channel(32);
@@ -484,8 +490,7 @@ pub fn convert_to_mixer_channels(mut chunk: AudioChunk, mixer_channels: u16) -> 
 pub fn volume_multiplier(volume: usize) -> f32 {
     let vol = volume.min(MAX_VOLUME) as f32;
     let a: f32 = 0.2;
-    let m = a * ((1.0 + 1.0 / a).powf(vol / 100.0) - 1.0);
-    m
+    a * ((1.0 + 1.0 / a).powf(vol / 100.0) - 1.0)
 }
 
 /// 1-chunk fade (~10ms stereo: 960 samples). Mono mixers fade ~20ms;
