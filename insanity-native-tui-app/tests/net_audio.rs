@@ -1,4 +1,4 @@
-use insanity_core::audio_source::SyncAudioSource;
+use insanity_core::audio::SyncAudioSource;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
 use insanity_native_tui_app::audio_test_support::{

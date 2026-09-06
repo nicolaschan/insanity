@@ -1,4 +1,4 @@
-use insanity_core::audio_source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::{AudioSource, SyncAudioSource};
 use insanity_native_tui_app::audio_test_support::{
     VirtualNode, energy_ratio, goertzel_energy, loudness, max_normalized_xcorr, render_tick,
     run_mesh, transfer_tick_timeout,

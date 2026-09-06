@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use insanity_core::audio_source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::{AudioSource, SyncAudioSource};
 use log::trace;
 use rubato::{Resampler, SincFixedIn};
 
