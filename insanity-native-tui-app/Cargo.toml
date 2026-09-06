@@ -9,19 +9,19 @@ default-run = "insanity"
 name = "insanity"
 path = "src/main.rs"
 
-[[bin]]
+[[example]]
 name = "generate_golden"
 path = "tools/generate_golden.rs"
 
-[[bin]]
+[[example]]
 name = "char_audio"
 path = "tools/char_audio.rs"
 
-[[bin]]
+[[example]]
 name = "buffer_sweep"
 path = "tools/buffer_sweep.rs"
 
-[[bin]]
+[[example]]
 name = "log_audio_check"
 path = "tools/log_audio_check.rs"
 

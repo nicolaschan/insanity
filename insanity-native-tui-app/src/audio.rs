@@ -812,8 +812,6 @@ fn render_silence<T: Sample>(data: &mut [T], metrics: &Arc<MixerMetrics>, t0: st
 }
 
 /// Drain one callback worth of samples per peer.
-/// Empty peers (including a TOCTOU race with the fast path)
-/// yield an empty vec, which the caller renders as silence.
 fn drain_peer_samples(
     state: &Arc<Mutex<MixerState>>,
     len: usize,
