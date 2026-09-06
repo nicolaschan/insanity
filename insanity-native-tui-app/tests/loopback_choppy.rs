@@ -247,9 +247,10 @@ fn resampled_output_fill_budget() {
         snap.underrun, 0,
         "prefilled resampled mixer must not underrun: {snap:?}"
     );
+    let realtime_nanos = 960 / 2 * 1_000_000_000 / 44_100;
     assert!(
-        mixer.fill_avg_nanos() < 5_000_000,
-        "fill budget blown: {}ns",
+        mixer.fill_avg_nanos() < realtime_nanos,
+        "fill budget blown: {}ns of {realtime_nanos}ns",
         mixer.fill_avg_nanos()
     );
 }
