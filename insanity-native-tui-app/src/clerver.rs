@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use insanity_core::audio::{AudioChunk, AudioFormat};
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -8,7 +9,6 @@ use veq::veq::VeqSessionAlias;
 
 use crate::{
     audio::{AudioInputHub, AudioMixer},
-    processor::{AudioChunk, AudioFormat},
     protocol::ProtocolMessage,
 };
 

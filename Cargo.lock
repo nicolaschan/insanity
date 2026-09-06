@@ -2262,6 +2262,7 @@ version = "1.6.6"
 dependencies = [
  "bon",
  "built",
+ "serde",
 ]
 
 [[package]]
