@@ -3,7 +3,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use insanity_core::user_input_event::UserInputEvent;
+use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
 use std::collections::BTreeMap;
 use std::{error::Error, io, io::Stdout};
 use tokio::{
@@ -51,7 +51,7 @@ pub struct Peer {
     id: String,
     display_name: Option<String>,
     state: PeerState,
-    denoised: bool,
+    denoised: DenoiseSelection,
     volume: usize,
     loudness: f64,
 }
@@ -61,7 +61,7 @@ impl Peer {
         id: String,
         display_name: Option<String>,
         state: PeerState,
-        denoised: bool,
+        denoised: DenoiseSelection,
         volume: usize,
     ) -> Peer {
         Peer {
@@ -74,7 +74,7 @@ impl Peer {
         }
     }
 
-    pub fn with_denoised(self, denoised: bool) -> Peer {
+    pub fn with_denoised(self, denoised: DenoiseSelection) -> Peer {
         Peer { denoised, ..self }
     }
 
@@ -115,7 +115,7 @@ pub enum AppEvent {
     Up,
     TogglePeer,
     ToggleDenoise,
-    SetPeerDenoise(String, bool),
+    SetPeerDenoise(String, DenoiseSelection),
     SetPeerVolume(String, usize),
     MuteSelf(bool),
     Loudness(String, f64),
@@ -362,15 +362,12 @@ impl App {
 
     fn toggle_denoise(&mut self) {
         if let Some(peer) = self.selected_peer() {
-            if peer.denoised {
-                self.user_action_sender
-                    .send(UserInputEvent::DisableDenoise(peer.id.clone()))
-                    .unwrap();
-            } else {
-                self.user_action_sender
-                    .send(UserInputEvent::EnableDenoise(peer.id.clone()))
-                    .unwrap();
-            }
+            self.user_action_sender
+                .send(UserInputEvent::SetDenoise(
+                    peer.id.clone(),
+                    peer.denoised.next(),
+                ))
+                .unwrap();
         }
     }
 

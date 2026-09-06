@@ -6,7 +6,7 @@ use std::{
 };
 
 use base64::{Engine, prelude::BASE64_URL_SAFE};
-use insanity_core::user_input_event::UserInputEvent;
+use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
 use insanity_tui_adapter::AppEvent;
 
 use sha2::{Digest, Sha256};
@@ -379,7 +379,7 @@ fn update_peer_info(
                 .socket(socket)
                 .maybe_app_event_tx(app_event_tx)
                 .display_name(new_info.display_name)
-                .denoise(true)
+                .denoise(DenoiseSelection::default())
                 .volume(100)
                 .hub(hub)
                 .mixer(mixer)
@@ -397,16 +397,10 @@ fn handle_user_action(
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {
     match user_action {
-        UserInputEvent::DisableDenoise(id) => {
+        UserInputEvent::SetDenoise(id, denoise_selection) => {
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
-                peer.set_denoise(false)?;
-            }
-        }
-        UserInputEvent::EnableDenoise(id) => {
-            let id = uuid::Uuid::from_str(&id)?;
-            if let Some(peer) = managed_peers.get(&id) {
-                peer.set_denoise(true)?;
+                peer.set_denoise(denoise_selection)?;
             }
         }
         UserInputEvent::DisablePeer(id) => {
