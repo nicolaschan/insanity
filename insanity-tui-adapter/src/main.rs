@@ -1,4 +1,4 @@
-use insanity_core::user_input_event::UserInputEvent;
+use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
 use insanity_tui_adapter::{AppEvent, Peer, PeerState, start_tui, stop_tui};
 use std::{collections::BTreeMap, error::Error};
 
@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "francis".to_string(),
             None,
             PeerState::Disconnected,
-            true,
+            DenoiseSelection::None,
             100,
         ),
     );
@@ -22,13 +22,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "nicolas".to_string(),
             None,
             PeerState::Connected("hi".to_string()),
-            false,
+            DenoiseSelection::None,
             100,
         ),
     );
     peers.insert(
         "randall",
-        Peer::new("randall".to_string(), None, PeerState::Disabled, true, 100),
+        Peer::new(
+            "randall".to_string(),
+            None,
+            PeerState::Disabled,
+            DenoiseSelection::Nnnoiseless,
+            100,
+        ),
     );
     peers.insert(
         "neelay",
@@ -36,7 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "neelay".to_string(),
             None,
             PeerState::Connecting("bruh".to_string()),
-            true,
+            DenoiseSelection::Nnnoiseless,
             100,
         ),
     );
@@ -48,14 +54,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         while let Some(event) = user_action_receiver.recv().await {
             match event {
-                UserInputEvent::EnableDenoise(peer_id) => {
+                UserInputEvent::SetDenoise(peer_id, selection) => {
                     sender
-                        .send(AppEvent::SetPeerDenoise(peer_id, true))
-                        .unwrap();
-                }
-                UserInputEvent::DisableDenoise(peer_id) => {
-                    sender
-                        .send(AppEvent::SetPeerDenoise(peer_id, false))
+                        .send(AppEvent::SetPeerDenoise(peer_id, selection))
                         .unwrap();
                 }
                 UserInputEvent::DisablePeer(peer_id) => {

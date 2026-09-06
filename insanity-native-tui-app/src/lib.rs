@@ -2,7 +2,7 @@ pub mod audio;
 pub mod audio_test_support;
 pub mod clerver;
 pub mod connection_manager;
-mod denoise;
+pub mod denoise;
 pub mod managed_peer;
 pub mod processor;
 pub mod protocol;

@@ -1,15 +1,15 @@
 use insanity_core::audio::denoiser::Denoiser;
 use nnnoiseless::DenoiseState;
 
-pub struct NnnoiselessDenoiser<'a>(DenoiseState<'a>);
+pub struct NnnoiselessDenoiser(Box<DenoiseState<'static>>);
 
-impl<'a> Denoiser for NnnoiselessDenoiser<'a> {
+impl Denoiser for NnnoiselessDenoiser {
     const FRAME_SIZE: usize = DenoiseState::FRAME_SIZE;
 
     fn init() -> Self {
         let model = nnnoiseless::RnnModel::default();
         let denoise_state = DenoiseState::from_model(model);
-        NnnoiselessDenoiser(*denoise_state)
+        NnnoiselessDenoiser(denoise_state)
     }
 
     fn process_frame(&mut self, output: &mut [f32], input: &[f32]) {

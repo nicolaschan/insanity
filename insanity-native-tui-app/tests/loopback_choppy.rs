@@ -1,4 +1,5 @@
 use insanity_core::audio_source::{AudioSource, SyncAudioSource};
+use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
 use insanity_native_tui_app::audio_test_support::{
     SineSource, energy_ratio, loudness, max_normalized_xcorr, render_tick, run_mesh,
@@ -9,10 +10,7 @@ use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use opus::{Application, Channels, Decoder, Encoder};
 use std::collections::HashMap;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, AtomicUsize},
-};
+use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
 
 struct ChirpSource {
@@ -223,7 +221,7 @@ fn resampled_output_fill_budget() {
     mixer.add_peer(
         id,
         Arc::new(AtomicUsize::new(100)),
-        Arc::new(AtomicBool::new(false)),
+        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
         None,
     );
     for seq in 0..3u128 {
@@ -287,7 +285,7 @@ async fn broadcast_lag_records_gap() {
         mixer.add_peer(
             id,
             Arc::new(AtomicUsize::new(100)),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
             None,
         );
         mixer.handle_incoming(
