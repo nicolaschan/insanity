@@ -14,7 +14,7 @@
 use crate::audio::{AudioInputHub, AudioMixer};
 use crate::clerver::{decode_frame_to_chunk, encode_hub_chunk};
 use crate::protocol::ProtocolMessage;
-use insanity_core::audio::{AudioSource, SyncAudioSource};
+use insanity_core::audio::source::{AudioSource, SyncAudioSource};
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
 use opus::{Application, Channels, Decoder, Encoder};
