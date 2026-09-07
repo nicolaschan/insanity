@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use insanity_core::audio::codec::AudioFrame;
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_tui_adapter::AppEvent;
 use opus::Decoder;
@@ -10,7 +11,7 @@ use crate::{
     audio::{AudioInputHub, AudioMixer},
     codec_opus::u16_to_channels,
     processor::AUDIO_SAMPLE_RATE,
-    protocol::{AudioFrame, ProtocolMessage},
+    protocol::ProtocolMessage,
 };
 
 // A clerver is a CLient + sERVER.
@@ -43,14 +44,14 @@ async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
 
     loop {
         // Muted and lagged chunks both surface as a seq jump on next recv.
-        let encoded = match rx.recv().await {
-            Ok(c) => c,
+        let frame = match rx.recv().await {
+            Ok(f) => f,
             Err(broadcast::error::RecvError::Closed) => break,
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
         };
 
         let mut buf = Vec::new();
-        let protocol_message = ProtocolMessage::AudioFrame(AudioFrame::from(encoded));
+        let protocol_message = ProtocolMessage::AudioFrame(frame);
         if protocol_message.write_to_stream(&mut buf).await.is_err() {
             break;
         }

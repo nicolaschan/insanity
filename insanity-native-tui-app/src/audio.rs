@@ -21,7 +21,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, Rechunker};
-use insanity_core::audio::codec::{AudioEncoder, EncodedChunk};
+use insanity_core::audio::codec::{AudioEncoder, AudioFrame};
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
@@ -169,7 +169,7 @@ impl ChunkSource for SilentChunkSource {
 /// Broadcasts Opus-encoded 10ms chunks. Sequence numbers advance on every
 /// chunk, including muted ones, which are not sent.
 pub struct AudioInputHub {
-    tx: broadcast::Sender<EncodedChunk>,
+    tx: broadcast::Sender<AudioFrame>,
     muted: Arc<AtomicBool>,
     device_name: String,
 }
@@ -227,10 +227,10 @@ impl AudioInputHub {
                     encoder =
                         OpusEncoder::new(chunk.format.sample_rate, chunk.format.channel_count);
                 }
-                let Some(encoded) = encoder.as_mut().and_then(|e| e.encode(&chunk)) else {
+                let Some(frame) = encoder.as_mut().and_then(|e| e.encode(&chunk)) else {
                     continue;
                 };
-                let _ = tx.send(encoded);
+                let _ = tx.send(frame);
             }
         });
         hub
@@ -240,7 +240,7 @@ impl AudioInputHub {
         &self.device_name
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<EncodedChunk> {
+    pub fn subscribe(&self) -> broadcast::Receiver<AudioFrame> {
         self.tx.subscribe()
     }
 

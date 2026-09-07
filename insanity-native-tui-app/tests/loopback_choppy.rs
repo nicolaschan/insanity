@@ -10,7 +10,6 @@ use insanity_native_tui_app::audio_test_support::{
 };
 use insanity_native_tui_app::clerver::decode_frame_to_chunk;
 use insanity_native_tui_app::codec_opus::OpusEncoder;
-use insanity_native_tui_app::protocol::AudioFrame;
 use opus::{Channels, Decoder};
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicUsize};
@@ -359,14 +358,13 @@ fn opus_stereo_frame_roundtrip_shape() {
                 vec![s, s]
             })
             .collect();
-        let encoded = enc
+        let frame = enc
             .encode(&AudioChunk::new(
                 seq,
                 AudioFormat::new(2, 48000),
                 chunk.clone(),
             ))
             .expect("encode");
-        let frame = AudioFrame::from(encoded);
         let decoded = decode_frame_to_chunk(&mut dec, &frame, 2).expect("decode");
         assert_eq!(decoded.sequence_number, seq);
         assert_eq!(decoded.audio_data.len(), 960);

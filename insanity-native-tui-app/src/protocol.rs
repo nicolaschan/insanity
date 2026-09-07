@@ -1,23 +1,8 @@
 use bincode::ErrorKind;
-use insanity_core::audio::codec::EncodedChunk;
+use insanity_core::audio::codec::AudioFrame;
 use serde::{Deserialize, Serialize};
 
 use std::io::{Error, Write};
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AudioFrame {
-    pub sequence_number: u128,
-    pub payload: Vec<u8>,
-}
-
-impl From<EncodedChunk> for AudioFrame {
-    fn from(chunk: EncodedChunk) -> Self {
-        AudioFrame {
-            sequence_number: chunk.sequence_number,
-            payload: chunk.payload,
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ProtocolMessage {

@@ -63,7 +63,10 @@ async fn hub_fanout_same_chunk() {
             .unwrap()
             .unwrap();
         assert!(!c1.payload.is_empty());
-        assert_eq!(c1.format, AudioFormat::new(2, 48000));
+        assert_eq!(
+            opus::packet::get_nb_channels(&c1.payload).unwrap(),
+            opus::Channels::Stereo
+        );
         assert_eq!(c1, c2);
         assert_eq!(c2, c3);
     })
@@ -320,16 +323,16 @@ async fn hub_rebuilds_encoder_on_format_change() {
             next_sequence: 0,
         });
         let mut rx = hub.subscribe();
-        let mut formats = Vec::new();
+        let mut channels = Vec::new();
         let mut sequences = Vec::new();
-        while let Ok(Ok(chunk)) =
+        while let Ok(Ok(frame)) =
             tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await
         {
-            formats.push(chunk.format);
-            sequences.push(chunk.sequence_number);
+            channels.push(opus::packet::get_nb_channels(&frame.payload).unwrap());
+            sequences.push(frame.sequence_number);
         }
-        let expected = [&mono, &mono, &mono, &stereo, &stereo, &stereo];
-        assert_eq!(formats.iter().collect::<Vec<_>>(), expected);
+        use opus::Channels::{Mono, Stereo};
+        assert_eq!(channels, [Mono, Mono, Mono, Stereo, Stereo, Stereo]);
         assert_eq!(sequences, [0, 1, 2, 3, 4, 5]);
     })
     .await;
