@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_tui_adapter::AppEvent;
-use opus::{Application, Channels, Decoder, Encoder};
+use opus::{Application, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
 
 use crate::{
     audio::{AudioInputHub, AudioMixer},
+    codec_opus::u16_to_channels,
     protocol::ProtocolMessage,
 };
 
@@ -80,14 +81,6 @@ async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
         if conn.send(buf).await.is_err() {
             break;
         }
-    }
-}
-
-fn u16_to_channels(n: u16) -> Channels {
-    match n {
-        1 => Channels::Mono,
-        2 => Channels::Stereo,
-        _ => Channels::Stereo,
     }
 }
 

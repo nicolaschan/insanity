@@ -1,3 +1,4 @@
+use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::audio::{
     AudioFormat,
@@ -5,14 +6,13 @@ use insanity_core::audio::{
 };
 use insanity_core::loudness::calculate_loudness;
 use insanity_native_tui_app::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
-use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use rubato_audio_source::ResampledAudioSource;
 
 // keep tests simple
 
 #[test]
 fn realtime_buffer_basic_order() {
-    let mut buf = RealTimeBuffer::new(10);
+    let mut buf = JitterBuffer::new(10);
     for i in 0..5 {
         buf.set(i, i as i32);
     }
@@ -24,7 +24,7 @@ fn realtime_buffer_basic_order() {
 
 #[test]
 fn realtime_buffer_gap_and_wrap() {
-    let mut buf = RealTimeBuffer::new(3);
+    let mut buf = JitterBuffer::new(3);
     buf.set(0, 0);
     buf.set(2, 2);
     // missing 1 yields one concealment (None) to preserve timing, then 2

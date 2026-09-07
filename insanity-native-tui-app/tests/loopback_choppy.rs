@@ -1,3 +1,4 @@
+use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
@@ -7,7 +8,6 @@ use insanity_native_tui_app::audio_test_support::{
     transfer_tick_timeout,
 };
 use insanity_native_tui_app::clerver::{decode_frame_to_chunk, encode_hub_chunk};
-use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use opus::{Application, Channels, Decoder, Encoder};
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicUsize};
@@ -282,7 +282,7 @@ async fn broadcast_lag_records_gap() {
             snap.gap_detected > 0,
             "seq jump must be recorded, got {snap:?}"
         );
-        let mut buf = RealTimeBuffer::new(3);
+        let mut buf = JitterBuffer::new(3);
         buf.set(0, 0);
         buf.set(jumped_seq, 1);
         assert_eq!(
