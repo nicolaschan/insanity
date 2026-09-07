@@ -1,4 +1,4 @@
-use crate::audio::AudioChunk;
+use crate::audio::{chunk::AudioChunk, sample_ops::{interleave_channels, split_channels}};
 
 pub trait Denoiser {
     const FRAME_SIZE: usize;
@@ -75,26 +75,4 @@ impl<T: Denoiser> MultiChannelDenoiser<T> {
             denoised_audio,
         )
     }
-}
-
-fn split_channels(audio_chunk: &[f32], num_channels: usize) -> Vec<Vec<f32>> {
-    let mut channels: Vec<Vec<f32>> = vec![Vec::new(); num_channels];
-    for (i, &val) in audio_chunk.iter().enumerate() {
-        let channel_index = i % num_channels;
-        let mut channel = channels.swap_remove(channel_index);
-        channel.push(val);
-        channels.insert(channel_index, channel);
-    }
-    channels
-}
-
-fn interleave_channels(channels: &[Vec<f32>]) -> Vec<f32> {
-    let mut samples = Vec::new();
-    let frame_size = channels[0].len();
-    for i in 0..frame_size {
-        for c in channels.iter() {
-            samples.push(c[i]);
-        }
-    }
-    samples
 }
