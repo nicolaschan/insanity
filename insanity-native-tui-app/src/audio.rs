@@ -33,6 +33,8 @@ use crate::realtime_buffer::RealTimeBuffer;
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::ResampledAudioSource;
 
+const UNKNOWN_DEVICE_NAME: &str = "unknown device";
+
 // shared config helpers
 
 pub(crate) fn find_stereo_input(
@@ -188,9 +190,7 @@ impl SampleSource for CpalStreamReceiver {
     }
 }
 
-fn make_single_input() -> Option<CpalStreamReceiver> {
-    let host = cpal::default_host();
-    let device = host.default_input_device()?;
+fn make_single_input(device: Device) -> Option<CpalStreamReceiver> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let Ok((fmt, cfg)) = get_input_config(&device) else {
         log::warn!("Failed to get input config, falling back to silence");
@@ -233,6 +233,7 @@ pub type HubChunk = (u128, Arc<Vec<f32>>);
 pub struct AudioInputHub {
     tx: broadcast::Sender<HubChunk>,
     muted: Arc<AtomicBool>,
+    device_name: String,
     channels: u16,
 }
 
@@ -244,6 +245,12 @@ impl Default for AudioInputHub {
 
 impl AudioInputHub {
     pub fn new() -> Self {
+        let host = cpal::default_host();
+        let device = host.default_input_device().unwrap();
+        Self::from_device(device)
+    }
+
+    pub fn from_device(device: Device) -> Self {
         let (btx, _) = broadcast::channel(32);
         let muted = Arc::new(AtomicBool::new(false));
         let muted_clone = muted.clone();
@@ -251,22 +258,16 @@ impl AudioInputHub {
 
         // Synchronously probe input device to determine correct channel count for the encoder.
         // Fallback to stereo if no device.
-        let initial_channels = {
-            let host = cpal::default_host();
-            if let Some(device) = host.default_input_device() {
-                if let Ok((_fmt, cfg)) = get_input_config(&device) {
-                    cfg.channels
-                } else {
-                    AUDIO_CHANNELS
-                }
-            } else {
-                AUDIO_CHANNELS
-            }
+        let initial_channels = if let Ok((_fmt, cfg)) = get_input_config(&device) {
+            cfg.channels
+        } else {
+            AUDIO_CHANNELS
         };
+        let device_name = device.name().unwrap_or(UNKNOWN_DEVICE_NAME.into());
 
         // spawn task that captures single input and resamples to 48000
         tokio::spawn(async move {
-            let Some(receiver) = make_single_input() else {
+            let Some(receiver) = make_single_input(device) else {
                 // no input device: send silence periodically so senders don't block forever
                 let mut next_seq: u128 = 0;
                 let silence: Arc<Vec<f32>> =
@@ -306,6 +307,7 @@ impl AudioInputHub {
         Self {
             tx: btx,
             muted,
+            device_name,
             channels: initial_channels,
         }
     }
@@ -345,8 +347,13 @@ impl AudioInputHub {
         Self {
             tx: btx,
             muted,
+            device_name: UNKNOWN_DEVICE_NAME.into(),
             channels,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.device_name
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<HubChunk> {

@@ -264,6 +264,11 @@ fn manage_peers(
     let (conn_info_tx, mut conn_info_rx) = mpsc::unbounded_channel::<AugmentedInfo>();
     // single input hub and single output mixer
     let hub = Arc::new(AudioInputHub::new());
+    if let Some(app_event_tx) = &app_event_tx {
+        app_event_tx
+            .send(AppEvent::SetInputDeviceName(hub.name().into()))
+            .expect("could not set input device name");
+    }
     let mixer = Arc::new(AudioMixer::new(app_event_tx.clone()));
     let metrics_mixer = mixer.clone();
     let hub_channels = hub.channels();

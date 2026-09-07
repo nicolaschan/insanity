@@ -1,5 +1,12 @@
 use insanity_core::built_info;
-use tui::{Frame, backend::Backend, layout::{Constraint, Direction, Layout, Rect}, style::{Color, Style}, text::{Span, Spans}, widgets::Paragraph};
+use tui::{
+    Frame,
+    backend::Backend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
+    text::{Span, Spans},
+    widgets::Paragraph,
+};
 
 use crate::{App, components::block::default_block};
 
@@ -10,6 +17,7 @@ pub fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
             [
                 Constraint::Length(6),
                 Constraint::Length(4),
+                Constraint::Length(3),
                 Constraint::Min(0),
             ]
             .as_ref(),
@@ -78,4 +86,19 @@ pub fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     .block(default_block())
     .style(Style::default().fg(Color::White));
     f.render_widget(version_widget, chunks[1]);
+
+    let audio_widget = audio_widget(app.input_device_name.clone());
+    f.render_widget(audio_widget, chunks[2]);
+}
+
+fn audio_widget<'a>(input_device_name: String) -> Paragraph<'a> {
+    Paragraph::new(vec![Spans::from(vec![
+        Span::styled(
+            "Current input device: ",
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(input_device_name, Style::default().fg(Color::LightBlue)),
+    ])])
+    .block(default_block())
+    .style(Style::default().fg(Color::White))
 }
