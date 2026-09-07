@@ -1,7 +1,10 @@
 pub mod chunk;
+pub mod codec;
 pub mod denoiser;
+pub mod resample;
 pub mod sample;
 pub mod sample_ops;
+pub mod transform;
 
 use serde::{Deserialize, Serialize};
 

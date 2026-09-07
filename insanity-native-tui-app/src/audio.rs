@@ -23,12 +23,14 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
+use insanity_core::audio::sample_ops::convert_to_mixer_channels;
+use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
-use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, MAX_VOLUME};
 use crate::realtime_buffer::RealTimeBuffer;
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::ResampledAudioSource;
@@ -370,8 +372,6 @@ impl AudioInputHub {
 
 /// Jitter buffer target in 10ms chunks.
 pub const JITTER_TARGET_CHUNKS: usize = 10;
-/// Single source of truth for max volume.
-pub const MAX_VOLUME: usize = 500;
 
 /// Snapshot of mixer counters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -447,48 +447,6 @@ pub fn format_metrics_line(
         fill_avg_nanos,
         peers.join(" "),
     )
-}
-
-/// Convert an incoming chunk to mixer channel space.
-/// Passthrough when equal; mono->stereo duplicates, stereo->mono averages
-/// `(L+R)/2`. Generic fallback round-robins source channels.
-pub fn convert_to_mixer_channels(
-    mut chunk: AudioChunk,
-    src_channels: u16,
-    mixer_channels: u16,
-) -> AudioChunk {
-    if src_channels == mixer_channels
-        || src_channels == 0
-        || mixer_channels == 0
-        || chunk.audio_data.is_empty()
-    {
-        return chunk;
-    }
-    let frames = chunk.audio_data.len() / src_channels as usize;
-    let mut out = Vec::with_capacity(frames * mixer_channels as usize);
-    if src_channels == 1 && mixer_channels == 2 {
-        for &m in chunk.audio_data.iter() {
-            out.push(m);
-            out.push(m);
-        }
-    } else if src_channels == 2 && mixer_channels == 1 {
-        let (pairs, _) = chunk.audio_data.as_chunks::<2>();
-        out.extend(pairs.iter().map(|pair| (pair[0] + pair[1]) * 0.5));
-    } else {
-        for f in 0..frames {
-            for t in 0..mixer_channels as usize {
-                out.push(chunk.audio_data[f * src_channels as usize + (t % src_channels as usize)]);
-            }
-        }
-    }
-    chunk.audio_data = out;
-    chunk
-}
-
-pub fn volume_multiplier(volume: usize) -> f32 {
-    let vol = volume.min(MAX_VOLUME) as f32;
-    let a: f32 = 0.2;
-    a * ((1.0 + 1.0 / a).powf(vol / 100.0) - 1.0)
 }
 
 /// 1-chunk fade (~10ms stereo: 960 samples). Mono mixers fade ~20ms;

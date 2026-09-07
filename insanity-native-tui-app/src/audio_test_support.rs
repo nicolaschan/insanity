@@ -16,6 +16,8 @@ use crate::clerver::{decode_frame_to_chunk, encode_hub_chunk};
 use crate::protocol::ProtocolMessage;
 use insanity_core::audio::{
     AudioFormat,
+    chunk::AudioChunk,
+    codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk},
     sample::{SampleSource, SyncSampleSource},
 };
 use insanity_core::loudness::calculate_loudness;
@@ -356,4 +358,82 @@ pub fn goertzel_energy(samples: &[f32], freq: f32, sr: f32) -> f64 {
     let real = u1 * cw - u2;
     let imag = u1 * sw;
     real * real + imag * imag
+}
+
+pub struct PassthroughEncoder {
+    format: AudioFormat,
+}
+
+impl PassthroughEncoder {
+    pub fn new(format: AudioFormat) -> Self {
+        PassthroughEncoder { format }
+    }
+}
+
+impl AudioEncoder for PassthroughEncoder {
+    fn encode(&mut self, chunk: &AudioChunk) -> Option<EncodedChunk> {
+        let mut payload = Vec::with_capacity(chunk.audio_data.len() * 4);
+        for sample in chunk.audio_data.iter() {
+            payload.extend_from_slice(&sample.to_le_bytes());
+        }
+        Some(EncodedChunk {
+            sequence_number: chunk.sequence_number,
+            codec: AudioCodec::Raw,
+            payload,
+            format: self.format.clone(),
+        })
+    }
+}
+
+pub struct PassthroughDecoder;
+
+impl AudioDecoder for PassthroughDecoder {
+    fn decode(&mut self, frame: &EncodedChunk) -> Option<AudioChunk> {
+        if frame.codec != AudioCodec::Raw || !frame.payload.len().is_multiple_of(4) {
+            return None;
+        }
+        Some(AudioChunk::new(
+            frame.sequence_number,
+            frame
+                .payload
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
+                .collect(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PassthroughDecoder, PassthroughEncoder};
+    use insanity_core::audio::AudioFormat;
+    use insanity_core::audio::chunk::AudioChunk;
+    use insanity_core::audio::codec::{AudioDecoder, AudioEncoder};
+
+    #[test]
+    fn passthrough_codec_roundtrips() {
+        let format = AudioFormat::new(2, 48000);
+        let mut encoder = PassthroughEncoder::new(format.clone());
+        let mut decoder = PassthroughDecoder;
+        let chunk = AudioChunk::new(3, vec![0.5, -0.25, 0.0, 1.0]);
+        let frame = encoder.encode(&chunk).expect("encode");
+        assert_eq!(frame.sequence_number, 3);
+        let out = decoder.decode(&frame).expect("decode");
+        assert_eq!(out, chunk);
+    }
+
+    #[test]
+    fn passthrough_decoder_rejects_non_raw() {
+        use insanity_core::audio::codec::{AudioCodec, EncodedChunk};
+        let mut decoder = PassthroughDecoder;
+        let frame = EncodedChunk {
+            sequence_number: 0,
+            codec: AudioCodec::Opus,
+            payload: vec![0, 1, 2, 3],
+            format: AudioFormat::new(2, 48000),
+        };
+        assert!(decoder.decode(&frame).is_none());
+    }
 }
