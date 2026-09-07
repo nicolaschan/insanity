@@ -9,7 +9,10 @@ use tui::{
 };
 
 use crate::{
-    App, DECREMENT_PEER_VOLUME_KEY, Editor, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY, Peer, TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY, components::{block::default_block, settings::render_settings}, style::{BG_GRAY, CHAT_COLORS, COLOR_RED, CONNECTED, NUM_CHAT_COLORS, SELECTED},
+    App, DECREMENT_PEER_VOLUME_KEY, Editor, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY, Peer,
+    TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
+    components::{block::default_block, settings::render_settings},
+    style::{BG_GRAY, CHAT_COLORS, COLOR_RED, CONNECTED, NUM_CHAT_COLORS, SELECTED},
 };
 
 pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
