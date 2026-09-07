@@ -2,7 +2,7 @@
 //!
 //! Each test pins one hard-won behavior so future changes fail loudly:
 //! - volume_max_contract (MAX_VOLUME=500 single source of truth)
-//! - buffer_accounting_exact (RealTimeBuffer size accounting)
+//! - buffer_accounting_exact (JitterBuffer size accounting)
 //! - seq_gap_is_time (mute/lagged seq-advance, no silence encode)
 //! - plc_fades_not_holds (fade-to-zero instead of hold-last)
 //! - mono_stereo_matrix (channel conversion)
@@ -12,13 +12,13 @@
 
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
+use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample_ops::convert_to_mixer_channels;
 use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioMixer, JITTER_TARGET_CHUNKS};
 use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
 use insanity_native_tui_app::processor::MAX_VOLUME;
-use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use std::sync::{Arc, atomic::AtomicUsize};
 
 #[test]
@@ -54,7 +54,7 @@ fn volume_max_contract_single_source_of_truth() {
 fn buffer_accounting_exact_stale_drop() {
     // Stale chunk (seq < head after fast-forward) must not be returned.
     // Timing-preserving: slots 8,9 conceal (None) before 10 plays.
-    let mut buf = RealTimeBuffer::new(3);
+    let mut buf = JitterBuffer::new(3);
     buf.set(0, 0);
     buf.set(10, 10); // far-future jump: head fast-forwards past 0
     assert_eq!(buf.head(), 8, "head should fast-forward to 10-3+1");

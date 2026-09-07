@@ -1,12 +1,12 @@
 pub mod audio;
 pub mod audio_test_support;
 pub mod clerver;
+pub mod codec_opus;
 pub mod connection_manager;
 pub mod cpal;
 pub mod denoise;
 pub mod managed_peer;
 pub mod processor;
 pub mod protocol;
-pub mod realtime_buffer;
 pub mod room_handler;
 pub mod update;

@@ -2,11 +2,12 @@ use std::collections::VecDeque;
 
 use insanity_core::audio::{
     AudioFormat,
+    resample::Resampler,
     sample::{SampleSource, SyncSampleSource},
     sample_ops::{interleave_channels, split_channels},
 };
 use log::trace;
-use rubato::{Resampler, SincFixedIn};
+use rubato::{Resampler as RubatoResamplerTrait, SincFixedIn};
 
 pub struct ResampledAudioSource<R: SampleSource> {
     resampler: SincFixedIn<f32>,
@@ -141,5 +142,101 @@ impl<R: SyncSampleSource + Send> SyncSampleSource for ResampledAudioSource<R> {
             self.resampled_buffer = resampled_samples.into();
         }
         self.resampled_buffer.pop_front()
+    }
+}
+
+pub struct RubatoResampler {
+    inner: Option<SincFixedIn<f32>>,
+    channels: u16,
+    block_frames: usize,
+}
+
+impl RubatoResampler {
+    pub fn new(source_rate: u32, target_rate: u32, channels: u16, block_frames: usize) -> Self {
+        if source_rate == target_rate {
+            return RubatoResampler {
+                inner: None,
+                channels,
+                block_frames,
+            };
+        }
+        let params = rubato::InterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: rubato::InterpolationType::Linear,
+            oversampling_factor: 256,
+            window: rubato::WindowFunction::BlackmanHarris2,
+        };
+        RubatoResampler {
+            inner: Some(SincFixedIn::<f32>::new(
+                target_rate as f64 / source_rate as f64,
+                params,
+                block_frames,
+                channels as usize,
+            )),
+            channels,
+            block_frames,
+        }
+    }
+}
+
+impl Resampler for RubatoResampler {
+    fn input_block_frames(&self) -> usize {
+        self.block_frames
+    }
+
+    fn resample(&mut self, input: &[f32]) -> Vec<f32> {
+        let Some(inner) = self.inner.as_mut() else {
+            return input.to_vec();
+        };
+        let separated = split_channels(input, self.channels as usize);
+        match inner.process(&separated) {
+            Ok(outputs) => interleave_channels(&outputs),
+            Err(e) => {
+                log::error!("Resampler failed: {e:?}, passing block through unprocessed");
+                input.to_vec()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RubatoResampler;
+    use insanity_core::audio::resample::Resampler;
+
+    #[test]
+    fn passthrough_equal_rates() {
+        let mut resampler = RubatoResampler::new(48000, 48000, 2, 480);
+        assert_eq!(resampler.input_block_frames(), 480);
+        let input: Vec<f32> = (0..960).map(|i| i as f32 / 960.0).collect();
+        assert_eq!(resampler.resample(&input), input);
+    }
+
+    #[test]
+    fn resample_tracks_rate_ratio_after_priming() {
+        const RESAMPLE_ERROR_TOL_NUM_SAMPLES: f64 = 2.1;
+        for (source, target) in [(44100, 48000), (48000, 44100)] {
+            let mut resampler = RubatoResampler::new(source, target, 2, 480);
+            let input = vec![0.5f32; 960];
+            for _ in 0..4 {
+                let priming = resampler.resample(&input);
+                assert!(priming.iter().all(|s| s.is_finite()));
+            }
+            let mut total_in = 0usize;
+            let mut total_out = 0usize;
+            for _ in 0..20 {
+                let out = resampler.resample(&input);
+                assert!(out.iter().all(|s| s.is_finite()));
+                total_in += input.len();
+                total_out += out.len();
+            }
+            let expected = total_in as f64 * target as f64 / source as f64;
+            let actual = total_out as f64;
+            assert!(
+                (actual - expected).abs() < RESAMPLE_ERROR_TOL_NUM_SAMPLES,
+                "rates {source}->{target}: got {actual}, expected {expected}"
+            );
+        }
     }
 }
