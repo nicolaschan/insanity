@@ -1,5 +1,5 @@
-use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
+use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioMixer;
 use insanity_native_tui_app::audio_test_support::energy_ratio;
@@ -45,7 +45,10 @@ fn music_intact_when_denoise_off() {
     let (mixer, id) = mixer_with_denoise(DenoiseSelection::None);
     let music = music_chunk();
     assert!(music.iter().all(|s| s.abs() < 1.0));
-    mixer.handle_incoming(id, AudioChunk::new(0, music.clone()), 2);
+    mixer.handle_incoming(
+        id,
+        AudioChunk::new(0, AudioFormat::new(2, 48000), music.clone()),
+    );
     let mut out = vec![0f32; 960];
     mixer.fill_buffer(&mut out);
     assert_eq!(out.len(), music.len());
@@ -66,7 +69,11 @@ fn noise_substantially_quieter_when_denoise_on() {
             let mut outs = Vec::new();
             for seq in 0..6u128 {
                 let chunk = noise_chunk(seed ^ (seq as u64 + 1), amp);
-                let denoised = denoiser.denoise_chunk(&AudioChunk::new(seq, chunk.clone()), 2);
+                let denoised = denoiser.denoise_chunk(&AudioChunk::new(
+                    seq,
+                    AudioFormat::new(2, 48000),
+                    chunk.clone(),
+                ));
                 assert_eq!(denoised.sequence_number, seq);
                 assert_eq!(denoised.audio_data.len(), 960);
                 if seq >= 3 {
@@ -90,12 +97,18 @@ fn noise_substantially_quieter_when_denoise_on() {
 fn toggle_honored_on_nonspeech() {
     let music = noise_chunk(0x12345678, 0.4);
     let (mixer_off, id_off) = mixer_with_denoise(DenoiseSelection::None);
-    mixer_off.handle_incoming(id_off, AudioChunk::new(0, music.clone()), 2);
+    mixer_off.handle_incoming(
+        id_off,
+        AudioChunk::new(0, AudioFormat::new(2, 48000), music.clone()),
+    );
     let mut out_off = vec![0f32; 960];
     mixer_off.fill_buffer(&mut out_off);
     let (mixer_on, id_on) = mixer_with_denoise(DenoiseSelection::default());
     for seq in 0..6u128 {
-        mixer_on.handle_incoming(id_on, AudioChunk::new(seq, music.clone()), 2);
+        mixer_on.handle_incoming(
+            id_on,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), music.clone()),
+        );
     }
     for _ in 0..5 {
         let mut discard = vec![0f32; 960];

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use insanity_core::audio::chunk::AudioChunk;
+use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -48,7 +48,11 @@ pub fn decode_frame_to_chunk(
     {
         return None;
     }
-    Some(AudioChunk::new(frame.0, buf))
+    Some(AudioChunk::new(
+        frame.0,
+        AudioFormat::new(channels, 48000),
+        buf,
+    ))
 }
 
 async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
@@ -116,7 +120,7 @@ async fn run_receiver(
                     let Some(chunk) = decode_frame_to_chunk(&mut decoder, &frame, channels) else {
                         continue;
                     };
-                    mixer.handle_incoming(id, chunk, channels);
+                    mixer.handle_incoming(id, chunk);
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}

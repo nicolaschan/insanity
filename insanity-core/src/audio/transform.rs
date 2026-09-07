@@ -174,22 +174,20 @@ impl DenoiseControl {
 
 pub struct Denoise<D: Denoiser> {
     control: Arc<DenoiseControl>,
-    channels: u16,
     inner: MultiChannelDenoiser<D>,
 }
 
 impl<D: Denoiser> Denoise<D> {
-    pub fn new(control: Arc<DenoiseControl>, channels: u16) -> Self {
+    pub fn new(control: Arc<DenoiseControl>) -> Self {
         Denoise {
             control,
-            channels,
             inner: MultiChannelDenoiser::new(),
         }
     }
 
-    pub fn shared(selection: DenoiseSelection, channels: u16) -> (Self, Arc<DenoiseControl>) {
+    pub fn shared(selection: DenoiseSelection) -> (Self, Arc<DenoiseControl>) {
         let control = Arc::new(DenoiseControl::new(selection));
-        (Denoise::new(control.clone(), channels), control)
+        (Denoise::new(control.clone()), control)
     }
 }
 
@@ -197,7 +195,7 @@ impl<D: Denoiser> ChunkTransform for Denoise<D> {
     fn transform(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         match self.control.get() {
             DenoiseSelection::None => Some(chunk),
-            DenoiseSelection::Nnnoiseless => Some(self.inner.denoise_chunk(&chunk, self.channels)),
+            DenoiseSelection::Nnnoiseless => Some(self.inner.denoise_chunk(&chunk)),
         }
     }
 }
@@ -253,26 +251,18 @@ impl ChunkTransform for MetricsReader {
 }
 
 pub struct ChannelMap {
-    src_channels: u16,
     dst_channels: u16,
 }
 
 impl ChannelMap {
-    pub fn new(src_channels: u16, dst_channels: u16) -> Self {
-        ChannelMap {
-            src_channels,
-            dst_channels,
-        }
+    pub fn new(dst_channels: u16) -> Self {
+        ChannelMap { dst_channels }
     }
 }
 
 impl ChunkTransform for ChannelMap {
     fn transform(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        Some(convert_to_mixer_channels(
-            chunk,
-            self.src_channels,
-            self.dst_channels,
-        ))
+        Some(convert_to_mixer_channels(chunk, self.dst_channels))
     }
 }
 
@@ -282,6 +272,7 @@ mod tests {
         ChannelMap, ChunkTransform, Denoise, DenoiseSelection, Gain, GainControl, Link,
         MetricsReader, Mute, volume_multiplier,
     };
+    use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
     use crate::audio::denoiser::Denoiser;
 
@@ -302,7 +293,11 @@ mod tests {
     }
 
     fn chunk(data: Vec<f32>) -> AudioChunk {
-        AudioChunk::new(7, data)
+        chunk_with(2, data)
+    }
+
+    fn chunk_with(channels: u16, data: Vec<f32>) -> AudioChunk {
+        AudioChunk::new(7, AudioFormat::new(channels, 48000), data)
     }
 
     #[test]
@@ -341,7 +336,7 @@ mod tests {
 
     #[test]
     fn denoise_none_passes_through() {
-        let (mut denoise, control) = Denoise::<DoubleDenoiser>::shared(DenoiseSelection::None, 2);
+        let (mut denoise, control) = Denoise::<DoubleDenoiser>::shared(DenoiseSelection::None);
         let out = denoise.transform(chunk(vec![0.5; 8])).expect("live");
         assert_eq!(out.audio_data, vec![0.5; 8]);
         control.set(DenoiseSelection::Nnnoiseless);
@@ -361,13 +356,15 @@ mod tests {
 
     #[test]
     fn channel_map_matrix() {
-        let mut map = ChannelMap::new(1, 2);
-        let out = map.transform(chunk(vec![0.5; 4])).expect("live");
+        let mut map = ChannelMap::new(2);
+        let out = map.transform(chunk_with(1, vec![0.5; 4])).expect("live");
         assert_eq!(out.audio_data, vec![0.5; 8]);
-        let mut map = ChannelMap::new(2, 1);
+        assert_eq!(out.format.channel_count, 2);
+        let mut map = ChannelMap::new(1);
         let out = map.transform(chunk(vec![0.25, 0.75])).expect("live");
         assert_eq!(out.audio_data, vec![0.5]);
-        let mut map = ChannelMap::new(2, 2);
+        assert_eq!(out.format.channel_count, 1);
+        let mut map = ChannelMap::new(2);
         let out = map.transform(chunk(vec![0.5; 4])).expect("live");
         assert_eq!(out.audio_data, vec![0.5; 4]);
     }

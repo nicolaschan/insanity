@@ -1,4 +1,4 @@
-use insanity_core::audio::chunk::AudioChunk;
+use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioMixer;
@@ -58,9 +58,15 @@ fn golden_two_peer_mix_perceptual() {
     let mut regen = Vec::with_capacity(960 * 10);
     for seq in 0..10 {
         let chunk: Vec<f32> = sine(440.0, 48000, 960);
-        mixer.handle_incoming(id1, AudioChunk::new(seq, chunk.clone()), 2);
+        mixer.handle_incoming(
+            id1,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), chunk.clone()),
+        );
         let chunk2: Vec<f32> = sine(880.0, 48000, 960);
-        mixer.handle_incoming(id2, AudioChunk::new(seq, chunk2), 2);
+        mixer.handle_incoming(
+            id2,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), chunk2),
+        );
         let mut out = vec![0f32; 960];
         mixer.fill_buffer(&mut out);
         regen.extend_from_slice(&out);
@@ -86,7 +92,10 @@ fn timing_fill_buffer_release_gate() {
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
     for seq in 0..10 {
-        mixer.handle_incoming(id, AudioChunk::new(seq, vec![0.5; 960]), 2);
+        mixer.handle_incoming(
+            id,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.5; 960]),
+        );
     }
     let start = std::time::Instant::now();
     for _ in 0..1000 {

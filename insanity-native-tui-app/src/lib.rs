@@ -9,4 +9,5 @@ pub mod managed_peer;
 pub mod processor;
 pub mod protocol;
 pub mod room_handler;
+pub mod switching_chunk_source;
 pub mod update;

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 use insanity_core::audio::{
     AudioFormat,
+    chunk::{AudioChunk, ChunkSource},
     resample::Resampler,
     sample::{SampleSource, SyncSampleSource},
     sample_ops::{interleave_channels, split_channels},
@@ -145,6 +146,83 @@ impl<R: SyncSampleSource + Send> SyncSampleSource for ResampledAudioSource<R> {
     }
 }
 
+/// Resamples a chunk stream to `target_rate`, rebuilding on format change.
+pub struct ResampledChunkSource<S> {
+    source: S,
+    target_rate: u32,
+    block_frames: usize,
+    resampler: Option<(AudioFormat, RubatoResampler)>,
+    pending: VecDeque<f32>,
+    next_sequence: u128,
+}
+
+impl<S: ChunkSource + Send> ResampledChunkSource<S> {
+    pub fn new(source: S, target_rate: u32, block_frames: usize) -> Self {
+        ResampledChunkSource {
+            source,
+            target_rate,
+            block_frames,
+            resampler: None,
+            pending: VecDeque::new(),
+            next_sequence: 0,
+        }
+    }
+
+    fn next_sequence(&mut self) -> u128 {
+        let sequence_number = self.next_sequence;
+        self.next_sequence += 1;
+        sequence_number
+    }
+
+    fn take_ready(&mut self) -> Option<AudioChunk> {
+        let (format, resampler) = self.resampler.as_mut()?;
+        let len = resampler.input_block_frames() * format.channel_count as usize;
+        if len == 0 || self.pending.len() < len {
+            return None;
+        }
+        let block: Vec<f32> = self.pending.drain(..len).collect();
+        let audio_data = resampler.resample(&block);
+        let format = AudioFormat::new(format.channel_count, self.target_rate);
+        let sequence_number = self.next_sequence();
+        Some(AudioChunk::new(sequence_number, format, audio_data))
+    }
+
+    fn adopt(&mut self, format: &AudioFormat) {
+        if self.resampler.as_ref().map(|(f, _)| f) == Some(format) {
+            return;
+        }
+        self.pending.clear();
+        self.resampler = Some((
+            format.clone(),
+            RubatoResampler::new(
+                format.sample_rate,
+                self.target_rate,
+                format.channel_count,
+                self.block_frames,
+            ),
+        ));
+    }
+}
+
+impl<S: ChunkSource + Send> ChunkSource for ResampledChunkSource<S> {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        loop {
+            if let Some(chunk) = self.take_ready() {
+                return Some(chunk);
+            }
+            let mut chunk = self.source.next_chunk().await?;
+            if chunk.format.sample_rate == self.target_rate {
+                self.resampler = None;
+                self.pending.clear();
+                chunk.sequence_number = self.next_sequence();
+                return Some(chunk);
+            }
+            self.adopt(&chunk.format);
+            self.pending.extend(chunk.audio_data);
+        }
+    }
+}
+
 pub struct RubatoResampler {
     inner: Option<SincFixedIn<f32>>,
     channels: u16,
@@ -238,5 +316,87 @@ mod tests {
                 "rates {source}->{target}: got {actual}, expected {expected}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod chunk_source_tests {
+    use super::ResampledChunkSource;
+    use insanity_core::audio::AudioFormat;
+    use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
+    use std::collections::VecDeque;
+    use std::future::Future;
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = pin!(future);
+        let mut cx = Context::from_waker(Waker::noop());
+        loop {
+            if let Poll::Ready(out) = future.as_mut().poll(&mut cx) {
+                return out;
+            }
+        }
+    }
+
+    struct Scripted(VecDeque<AudioChunk>);
+
+    impl ChunkSource for Scripted {
+        async fn next_chunk(&mut self) -> Option<AudioChunk> {
+            self.0.pop_front()
+        }
+    }
+
+    #[test]
+    fn matching_rate_passes_through_with_own_sequence() {
+        let format = AudioFormat::new(2, 48000);
+        let source = Scripted(VecDeque::from(vec![
+            AudioChunk::new(9, format.clone(), vec![0.5; 4]),
+            AudioChunk::new(9, format.clone(), vec![0.25; 6]),
+        ]));
+        let mut resampled = ResampledChunkSource::new(source, 48000, 480);
+        let first = block_on(resampled.next_chunk()).expect("chunk");
+        assert_eq!(first.sequence_number, 0);
+        assert_eq!(first.audio_data, vec![0.5; 4]);
+        let second = block_on(resampled.next_chunk()).expect("chunk");
+        assert_eq!(second.sequence_number, 1);
+        assert_eq!(second.audio_data, vec![0.25; 6]);
+        assert!(block_on(resampled.next_chunk()).is_none());
+    }
+
+    #[test]
+    fn mismatched_rate_yields_target_format_at_rate_ratio() {
+        let format = AudioFormat::new(2, 44100);
+        let chunks = (0..24)
+            .map(|i| AudioChunk::new(i, format.clone(), vec![0.5; 960]))
+            .collect();
+        let mut resampled = ResampledChunkSource::new(Scripted(chunks), 48000, 480);
+        let mut total_out = 0usize;
+        let mut count = 0usize;
+        while let Some(chunk) = block_on(resampled.next_chunk()) {
+            assert_eq!(chunk.format, AudioFormat::new(2, 48000));
+            assert!(chunk.audio_data.iter().all(|s| s.is_finite()));
+            if count >= 4 {
+                total_out += chunk.audio_data.len();
+            }
+            count += 1;
+        }
+        assert_eq!(count, 24);
+        let expected = 20.0 * 960.0 * 48000.0 / 44100.0;
+        assert!((total_out as f64 - expected).abs() < 2.1 * 20.0);
+    }
+
+    #[test]
+    fn format_change_rebuilds_and_drops_partial_block() {
+        let first = AudioFormat::new(1, 44100);
+        let second = AudioFormat::new(2, 44100);
+        let source = Scripted(VecDeque::from(vec![
+            AudioChunk::new(0, first, vec![0.5; 100]),
+            AudioChunk::new(1, second.clone(), vec![0.5; 960]),
+        ]));
+        let mut resampled = ResampledChunkSource::new(source, 48000, 480);
+        let chunk = block_on(resampled.next_chunk()).expect("chunk");
+        assert_eq!(chunk.format, AudioFormat::new(2, 48000));
+        assert!(block_on(resampled.next_chunk()).is_none());
     }
 }
