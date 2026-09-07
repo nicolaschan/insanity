@@ -1,6 +1,7 @@
 pub mod chunk;
 pub mod codec;
 pub mod denoiser;
+pub mod device;
 pub mod resample;
 pub mod sample;
 pub mod sample_ops;
