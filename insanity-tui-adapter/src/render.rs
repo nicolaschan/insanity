@@ -1,4 +1,3 @@
-use insanity_core::built_info;
 use tui::{
     Frame,
     backend::Backend,
@@ -6,43 +5,12 @@ use tui::{
     style::{Color, Modifier, Style},
     symbols::DOT,
     text::{Span, Spans},
-    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Tabs, Widget},
+    widgets::{Block, Cell, Paragraph, Row, Table, Tabs, Widget},
 };
 
 use crate::{
-    App, DECREMENT_PEER_VOLUME_KEY, Editor, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY, Peer,
-    TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
+    App, DECREMENT_PEER_VOLUME_KEY, Editor, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY, Peer, TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY, components::{block::default_block, settings::render_settings}, style::{BG_GRAY, CHAT_COLORS, COLOR_RED, CONNECTED, NUM_CHAT_COLORS, SELECTED},
 };
-
-const BG_GRAY: Color = Color::Rgb(50, 50, 50);
-const SELECTED: Color = Color::Rgb(80, 80, 80);
-const CONNECTED: Color = Color::Green; //Color::Rgb(0, 255, 0);
-
-// Gruvbox (mostly) dark theme
-const COLOR_RED: Color = Color::Rgb(0xfb, 0x49, 0x34); // Color::Rgb(0xcc, 0x24, 0x1d);
-const COLOR_GREEN: Color = Color::Rgb(0x98, 0x98, 0x1a);
-const COLOR_YELLOW: Color = Color::Rgb(0xd7, 0x99, 0x21);
-const COLOR_BLUE: Color = Color::Rgb(0x45, 0x85, 0x88);
-const COLOR_PURPLE: Color = Color::Rgb(0xb1, 0x62, 0x86);
-const COLOR_AQUA: Color = Color::Rgb(0x68, 0x96, 0x6a);
-const COLOR_ORANGE: Color = Color::Rgb(0xd6, 0x5d, 0x0e);
-const NUM_CHAT_COLORS: usize = 7;
-const CHAT_COLORS: [Color; NUM_CHAT_COLORS] = [
-    COLOR_RED,
-    COLOR_GREEN,
-    COLOR_YELLOW,
-    COLOR_BLUE,
-    COLOR_PURPLE,
-    COLOR_AQUA,
-    COLOR_ORANGE,
-];
-
-fn default_block<'a>() -> Block<'a> {
-    Block::default()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BG_GRAY))
-        .borders(Borders::ALL)
-}
 
 pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     let chunks = Layout::default()
@@ -375,81 +343,4 @@ fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     let editor_widget = render_editor(&app.editor, &chunks[1]).block(default_block());
     f.render_widget(chat_history_widget, chunks[0]);
     f.render_widget(editor_widget, chunks[1]);
-}
-
-fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Length(6),
-                Constraint::Length(4),
-                Constraint::Min(0),
-            ]
-            .as_ref(),
-        )
-        .split(area);
-
-    let server_widget = Paragraph::new(vec![
-        Spans::from(vec![
-            Span::styled("Bridge servers: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                app.servers.join(", "),
-                Style::default().fg(Color::LightBlue),
-            ),
-        ]),
-        match app.room.as_ref() {
-            Some(room) => Spans::from(vec![
-                Span::styled("Room: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(room.to_string(), Style::default().fg(Color::LightBlue)),
-            ]),
-            None => Spans::from(vec![Span::styled(
-                "Room: no room specified...".to_string(),
-                Style::default().fg(Color::DarkGray),
-            )]),
-        },
-        match app.room_fingerprint.as_ref() {
-            Some(room_fingerprint) => Spans::from(vec![
-                Span::styled("Room fingerprint: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    room_fingerprint.to_string(),
-                    Style::default().fg(Color::LightBlue),
-                ),
-            ]),
-            None => Spans::from(vec![Span::styled(
-                "Room fingerprint: no room fingerprint...".to_string(),
-                Style::default().fg(Color::DarkGray),
-            )]),
-        },
-        match app.own_public_key.as_ref() {
-            Some(key) => Spans::from(vec![
-                Span::styled("Your public key: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(key.to_string(), Style::default().fg(Color::LightBlue)),
-            ]),
-            None => Spans::from(vec![Span::styled(
-                "Your public key: waiting to connect to server...".to_string(),
-                Style::default().fg(Color::DarkGray),
-            )]),
-        },
-    ])
-    .block(default_block())
-    .style(Style::default().fg(Color::White));
-    f.render_widget(server_widget, chunks[0]);
-
-    let version_widget = Paragraph::new(vec![
-        Spans::from(vec![
-            Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                built_info::GIT_VERSION.unwrap_or("unknown"),
-                Style::default().fg(Color::LightBlue),
-            ),
-        ]),
-        Spans::from(vec![
-            Span::styled("Target: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(built_info::TARGET, Style::default().fg(Color::LightBlue)),
-        ]),
-    ])
-    .block(default_block())
-    .style(Style::default().fg(Color::White));
-    f.render_widget(version_widget, chunks[1]);
 }
