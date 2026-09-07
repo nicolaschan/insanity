@@ -1,6 +1,6 @@
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
-use insanity_core::audio::codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk};
+use insanity_core::audio::codec::{AudioDecoder, AudioEncoder, AudioFrame};
 use opus::{Application, Channels, Decoder, Encoder};
 
 pub(crate) fn u16_to_channels(n: u16) -> Channels {
@@ -27,16 +27,18 @@ impl OpusEncoder {
             format: AudioFormat::new(channels, sample_rate),
         })
     }
+
+    pub fn format(&self) -> &AudioFormat {
+        &self.format
+    }
 }
 
 impl AudioEncoder for OpusEncoder {
-    fn encode(&mut self, chunk: &AudioChunk) -> Option<EncodedChunk> {
+    fn encode(&mut self, chunk: &AudioChunk) -> Option<AudioFrame> {
         match self.inner.encode_vec_float(&chunk.audio_data, 65535) {
-            Ok(payload) => Some(EncodedChunk {
+            Ok(payload) => Some(AudioFrame {
                 sequence_number: chunk.sequence_number,
-                codec: AudioCodec::Opus,
                 payload,
-                format: self.format.clone(),
             }),
             Err(e) => {
                 log::warn!("Opus encode failed: {e:?}");
@@ -48,7 +50,7 @@ impl AudioEncoder for OpusEncoder {
 
 pub struct OpusDecoder {
     inner: Decoder,
-    channels: u16,
+    format: AudioFormat,
 }
 
 impl OpusDecoder {
@@ -56,16 +58,19 @@ impl OpusDecoder {
         let Ok(inner) = Decoder::new(sample_rate, u16_to_channels(channels)) else {
             return None;
         };
-        Some(OpusDecoder { inner, channels })
+        Some(OpusDecoder {
+            inner,
+            format: AudioFormat::new(channels, sample_rate),
+        })
     }
 }
 
 impl AudioDecoder for OpusDecoder {
-    fn decode(&mut self, frame: &EncodedChunk) -> Option<AudioChunk> {
+    fn decode(&mut self, frame: &AudioFrame) -> Option<AudioChunk> {
         let Ok(nb) = self.inner.get_nb_samples(&frame.payload[..]) else {
             return None;
         };
-        let mut buf = vec![0f32; nb * self.channels as usize];
+        let mut buf = vec![0f32; nb * self.format.channel_count as usize];
         if self
             .inner
             .decode_float(&frame.payload[..], &mut buf[..], false)
@@ -75,7 +80,7 @@ impl AudioDecoder for OpusDecoder {
         }
         Some(AudioChunk::new(
             frame.sequence_number,
-            frame.format.clone(),
+            self.format.clone(),
             buf,
         ))
     }
@@ -86,7 +91,7 @@ mod tests {
     use super::{OpusDecoder, OpusEncoder};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::AudioChunk;
-    use insanity_core::audio::codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk};
+    use insanity_core::audio::codec::{AudioDecoder, AudioEncoder, AudioFrame};
 
     #[test]
     fn opus_roundtrip_preserves_shape() {
@@ -95,9 +100,9 @@ mod tests {
         let chunk = AudioChunk::new(5, AudioFormat::new(2, 48000), vec![0.4f32; 960]);
         let frame = encoder.encode(&chunk).expect("encode");
         assert_eq!(frame.sequence_number, 5);
-        assert_eq!(frame.codec, AudioCodec::Opus);
         let out = decoder.decode(&frame).expect("decode");
         assert_eq!(out.sequence_number, 5);
+        assert_eq!(out.format, AudioFormat::new(2, 48000));
         assert_eq!(out.audio_data.len(), 960);
         assert!(out.audio_data.iter().all(|s| s.is_finite()));
     }
@@ -105,11 +110,9 @@ mod tests {
     #[test]
     fn opus_decoder_rejects_garbage() {
         let mut decoder = OpusDecoder::new(48000, 2).expect("decoder");
-        let frame = EncodedChunk {
+        let frame = AudioFrame {
             sequence_number: 0,
-            codec: AudioCodec::Opus,
             payload: vec![0xFF; 10],
-            format: AudioFormat::new(2, 48000),
         };
         assert!(decoder.decode(&frame).is_none());
     }

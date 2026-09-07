@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use insanity_core::audio::codec::AudioFrame;
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_tui_adapter::AppEvent;
-use opus::{Application, Decoder, Encoder};
-use serde::{Deserialize, Serialize};
+use opus::Decoder;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
 
@@ -14,68 +14,40 @@ use crate::{
     protocol::ProtocolMessage,
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AudioFrame(u128, Vec<u8>);
-
 // A clerver is a CLient + sERVER.
-
-pub fn encode_hub_chunk(
-    encoder: &mut Encoder,
-    sequence_number: u128,
-    chunk: &[f32],
-) -> Option<AudioFrame> {
-    match encoder.encode_vec_float(chunk, 65535) {
-        Ok(payload) => Some(AudioFrame(sequence_number, payload)),
-        Err(e) => {
-            log::warn!("Opus encode failed: {e:?}");
-            None
-        }
-    }
-}
 
 pub fn decode_frame_to_chunk(
     decoder: &mut Decoder,
     frame: &AudioFrame,
     channels: u16,
 ) -> Option<AudioChunk> {
-    let Ok(nb) = decoder.get_nb_samples(&frame.1[..]) else {
+    let Ok(nb) = decoder.get_nb_samples(&frame.payload[..]) else {
         return None;
     };
     let len = nb * (channels as usize);
     let mut buf = vec![0f32; len];
     if decoder
-        .decode_float(&frame.1[..], &mut buf[..], false)
+        .decode_float(&frame.payload[..], &mut buf[..], false)
         .is_err()
     {
         return None;
     }
     Some(AudioChunk::new(
-        frame.0,
+        frame.sequence_number,
         AudioFormat::new(channels, AUDIO_SAMPLE_RATE),
         buf,
     ))
 }
 
 async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
-    let channels = u16_to_channels(hub.channels());
-    let Ok(mut encoder) = Encoder::new(AUDIO_SAMPLE_RATE, channels, Application::Audio) else {
-        log::error!("Failed to create Opus encoder; audio sender for hub disabled");
-        return;
-    };
     let mut rx = hub.subscribe();
 
     loop {
-        // Hub seq is wall-clock: muted ticks are not sent (no silence encode)
-        // but still advance seq, so the next received chunk jumps honestly.
-        // Lagged (slow consumer) also surfaces as a seq jump on next recv.
-        let (sequence_number, chunk) = match rx.recv().await {
-            Ok(c) => c,
+        // Muted and lagged chunks both surface as a seq jump on next recv.
+        let frame = match rx.recv().await {
+            Ok(f) => f,
             Err(broadcast::error::RecvError::Closed) => break,
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
-        };
-
-        let Some(frame) = encode_hub_chunk(&mut encoder, sequence_number, &chunk[..]) else {
-            continue;
         };
 
         let mut buf = Vec::new();

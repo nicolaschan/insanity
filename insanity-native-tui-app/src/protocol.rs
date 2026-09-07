@@ -1,9 +1,8 @@
 use bincode::ErrorKind;
+use insanity_core::audio::codec::AudioFrame;
 use serde::{Deserialize, Serialize};
 
 use std::io::{Error, Write};
-
-use crate::clerver::AudioFrame;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ProtocolMessage {
