@@ -29,6 +29,7 @@ use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
+use crate::cpal::stream_receiver::CpalStreamReceiver;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
 use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, MAX_VOLUME};
 use crate::realtime_buffer::RealTimeBuffer;
@@ -99,38 +100,6 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
     Ok((cfg_range.sample_format(), cfg))
 }
 
-fn run_input<T: Sample>(
-    config: &StreamConfig,
-    device: &Device,
-    sender: tokio::sync::mpsc::UnboundedSender<f32>,
-) -> anyhow::Result<Stream> {
-    let err_fn = |err| eprintln!("input stream error: {err}");
-    device
-        .build_input_stream(
-            config,
-            move |data: &[T], _: &cpal::InputCallbackInfo| {
-                for s in data.iter() {
-                    let _ = sender.send(s.to_f32());
-                }
-            },
-            err_fn,
-        )
-        .map_err(|e| anyhow::anyhow!("build input stream: {e}"))
-}
-
-fn setup_input_stream(
-    sample_format: &SampleFormat,
-    config: &StreamConfig,
-    device: &Device,
-    sender: tokio::sync::mpsc::UnboundedSender<f32>,
-) -> anyhow::Result<Stream> {
-    match sample_format {
-        SampleFormat::F32 => run_input::<f32>(config, device, sender),
-        SampleFormat::I16 => run_input::<i16>(config, device, sender),
-        SampleFormat::U16 => run_input::<u16>(config, device, sender),
-    }
-}
-
 // RealtimeAudioSource used for output per-peer
 pub struct RealtimeAudioSource {
     chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
@@ -173,57 +142,6 @@ impl SyncSampleSource for RealtimeAudioSource {
         }
         self.sample_buffer.pop_front()
     }
-}
-
-// Cpal receiver for single input
-struct CpalStreamReceiver {
-    _stream: send_safe::SendWrapperThread<Option<Stream>>,
-    receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
-    sample_rate: u32,
-    channels: u16,
-}
-
-impl SampleSource for CpalStreamReceiver {
-    async fn next(&mut self) -> Option<f32> {
-        self.receiver.recv().await
-    }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.channels, self.sample_rate)
-    }
-}
-
-fn make_single_input(device: Device) -> Option<CpalStreamReceiver> {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let Ok((fmt, cfg)) = get_input_config(&device) else {
-        log::warn!("Failed to get input config, falling back to silence");
-        return None;
-    };
-    let cfg2 = cfg.clone();
-    let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        match setup_input_stream(&fmt, &cfg2, &device, tx) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                log::warn!("Failed to build input stream, falling back to silence: {e:?}");
-                None
-            }
-        }
-    });
-    let play_ok = wrapper
-        .execute(|s| match s {
-            Some(stream) => stream.play().is_ok(),
-            None => false,
-        })
-        .unwrap_or(false);
-    if !play_ok {
-        log::warn!("Failed to start input stream, falling back to silence");
-        return None;
-    }
-    Some(CpalStreamReceiver {
-        _stream: wrapper,
-        receiver: rx,
-        sample_rate: cfg.sample_rate.0,
-        channels: cfg.channels,
-    })
 }
 
 // Single input hub
@@ -269,7 +187,7 @@ impl AudioInputHub {
 
         // spawn task that captures single input and resamples to 48000
         tokio::spawn(async move {
-            let Some(receiver) = make_single_input(device) else {
+            let Some(receiver): Option<CpalStreamReceiver> = device.try_into().ok() else {
                 // no input device: send silence periodically so senders don't block forever
                 let mut next_seq: u128 = 0;
                 let silence: Arc<Vec<f32>> =
@@ -284,7 +202,7 @@ impl AudioInputHub {
                     let _ = btx_clone.send((seq, silence.clone()));
                 }
             };
-            let channels = receiver.channels;
+            let channels = receiver.format().channel_count;
             let mut resampled = ResampledAudioSource::new(receiver, 48000, AUDIO_CHUNK_SIZE);
             let mut next_seq: u128 = 0;
             loop {
