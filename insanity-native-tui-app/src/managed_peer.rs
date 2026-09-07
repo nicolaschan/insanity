@@ -10,9 +10,10 @@ use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSocket;
 
 use crate::{
-    audio::{AudioInputHub, AudioMixer, MAX_VOLUME},
+    audio::{AudioInputHub, AudioMixer},
     clerver::run_clerver,
     connection_manager::AugmentedInfo,
+    processor::MAX_VOLUME,
     protocol::ProtocolMessage,
 };
 

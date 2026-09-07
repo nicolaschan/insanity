@@ -1,9 +1,9 @@
+use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::audio::{
     AudioFormat,
     sample::{SampleSource, SyncSampleSource},
 };
 use insanity_core::loudness::calculate_loudness;
-use insanity_native_tui_app::audio::volume_multiplier;
 use insanity_native_tui_app::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
 use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use rubato_audio_source::ResampledAudioSource;

@@ -3,7 +3,7 @@ use crate::audio::{
     sample_ops::{interleave_channels, split_channels},
 };
 
-pub trait Denoiser {
+pub trait Denoiser: Send {
     const FRAME_SIZE: usize;
     fn init() -> Self;
     fn process_frame(&mut self, output: &mut [f32], input: &[f32]);
