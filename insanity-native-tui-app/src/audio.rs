@@ -20,7 +20,7 @@ fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> MutexGuard<'a, T> {
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
-use insanity_core::audio_source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::source::{AudioSource, SyncAudioSource};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};

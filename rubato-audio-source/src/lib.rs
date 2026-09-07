@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 
-use insanity_core::{
-    audio::sample_ops::{interleave_channels, split_channels},
-    audio_source::{AudioSource, SyncAudioSource},
+
+use insanity_core::audio::{
+    sample_ops::{interleave_channels, split_channels},
+    source::{AudioSource, SyncAudioSource},
 };
 use log::trace;
 use rubato::{Resampler, SincFixedIn};
