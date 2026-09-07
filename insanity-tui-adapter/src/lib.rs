@@ -12,7 +12,9 @@ use tokio::{
 };
 use tui::{Terminal, backend::Backend, backend::CrosstermBackend};
 
+mod components;
 mod editor;
+mod style;
 use editor::Editor;
 mod render;
 
