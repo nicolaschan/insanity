@@ -1,5 +1,6 @@
 pub mod chunk;
 pub mod denoiser;
+pub mod device;
 pub mod sample;
 pub mod sample_ops;
 
