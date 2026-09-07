@@ -1,8 +1,8 @@
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
     AudioMixer, JITTER_TARGET_CHUNKS, buffer_starved, format_metrics_line,
 };
-use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use opus::{Application, Channels, Decoder, Encoder};
 use std::sync::{Arc, atomic::AtomicUsize};
 
@@ -23,10 +23,7 @@ fn add_peer(mixer: &AudioMixer) -> uuid::Uuid {
 
 fn feed(mixer: &AudioMixer, id: uuid::Uuid, first_seq: u128, count: usize, value: f32) {
     for seq in first_seq..first_seq + count as u128 {
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![value; 960]),
-        );
+        mixer.handle_incoming(id, AudioChunk::new(seq, vec![value; 960]), 2);
     }
 }
 
@@ -353,10 +350,7 @@ fn hot_opus_single_peer_clips_only_codec_overshoot() {
     let mixer = mixer_with_capacity(10);
     let id = add_peer(&mixer);
     for seq in 0..10u128 {
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), hot.clone()),
-        );
+        mixer.handle_incoming(id, AudioChunk::new(seq, hot.clone()), 2);
     }
     let mut total = 0usize;
     for _ in 0..10 {
@@ -414,14 +408,7 @@ fn bulk_overfeed_silently_drops_early_audio_with_clean_counters() {
     let mixer = mixer_with_capacity(10);
     let id = add_peer(&mixer);
     for seq in 0..20u128 {
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(
-                seq,
-                AudioFormat::new(2, 48000),
-                vec![seq as f32 * 0.01; 960],
-            ),
-        );
+        mixer.handle_incoming(id, AudioChunk::new(seq, vec![seq as f32 * 0.01; 960]), 2);
     }
     assert_eq!(mixer.peer_occupancy(&id), Some(10));
     let mut played = Vec::new();

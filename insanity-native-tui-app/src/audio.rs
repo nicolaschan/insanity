@@ -19,14 +19,16 @@ fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> MutexGuard<'a, T> {
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
-use insanity_core::audio::source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
-use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AudioChunk};
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
 use crate::realtime_buffer::RealTimeBuffer;
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::ResampledAudioSource;
@@ -148,19 +150,16 @@ impl RealtimeAudioSource {
     }
 }
 
-impl AudioSource for RealtimeAudioSource {
+impl SampleSource for RealtimeAudioSource {
     async fn next(&mut self) -> Option<f32> {
         self.next_sync()
     }
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-    fn channels(&self) -> u16 {
-        self.channels
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.channels, self.sample_rate)
     }
 }
 
-impl SyncAudioSource for RealtimeAudioSource {
+impl SyncSampleSource for RealtimeAudioSource {
     fn next_sync(&mut self) -> Option<f32> {
         if self.sample_buffer.is_empty() {
             let mut buf = lock(&self.chunk_buffer, "chunk_buffer");
@@ -180,15 +179,12 @@ struct CpalStreamReceiver {
     channels: u16,
 }
 
-impl AudioSource for CpalStreamReceiver {
+impl SampleSource for CpalStreamReceiver {
     async fn next(&mut self) -> Option<f32> {
         self.receiver.recv().await
     }
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-    fn channels(&self) -> u16 {
-        self.channels
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.channels, self.sample_rate)
     }
 }
 
@@ -314,16 +310,16 @@ impl AudioInputHub {
         }
     }
 
-    // test seam: single input from any AudioSource
+    // test seam: single input from any SampleSource
     pub fn from_source<R>(source: R) -> Self
     where
-        R: AudioSource + Send + Sync + 'static,
+        R: SampleSource + Send + Sync + 'static,
     {
         let (btx, _) = broadcast::channel(32);
         let muted = Arc::new(AtomicBool::new(false));
         let muted_clone = muted.clone();
         let btx_clone = btx.clone();
-        let channels = source.channels();
+        let channels = source.format().channel_count;
         tokio::spawn(async move {
             let mut resampled = ResampledAudioSource::new(source, 48000, AUDIO_CHUNK_SIZE);
             let mut next_seq: u128 = 0;
@@ -456,37 +452,36 @@ pub fn format_metrics_line(
 /// Convert an incoming chunk to mixer channel space.
 /// Passthrough when equal; mono->stereo duplicates, stereo->mono averages
 /// `(L+R)/2`. Generic fallback round-robins source channels.
-pub fn convert_to_mixer_channels(mut chunk: AudioChunk, mixer_channels: u16) -> AudioChunk {
-    let src_channel_count = chunk.audio_format.channel_count;
-    if src_channel_count == mixer_channels
-        || src_channel_count == 0
+pub fn convert_to_mixer_channels(
+    mut chunk: AudioChunk,
+    src_channels: u16,
+    mixer_channels: u16,
+) -> AudioChunk {
+    if src_channels == mixer_channels
+        || src_channels == 0
         || mixer_channels == 0
         || chunk.audio_data.is_empty()
     {
         return chunk;
     }
-    let frames = chunk.audio_data.len() / src_channel_count as usize;
+    let frames = chunk.audio_data.len() / src_channels as usize;
     let mut out = Vec::with_capacity(frames * mixer_channels as usize);
-    if src_channel_count == 1 && mixer_channels == 2 {
+    if src_channels == 1 && mixer_channels == 2 {
         for &m in chunk.audio_data.iter() {
             out.push(m);
             out.push(m);
         }
-    } else if src_channel_count == 2 && mixer_channels == 1 {
+    } else if src_channels == 2 && mixer_channels == 1 {
         let (pairs, _) = chunk.audio_data.as_chunks::<2>();
         out.extend(pairs.iter().map(|pair| (pair[0] + pair[1]) * 0.5));
     } else {
         for f in 0..frames {
             for t in 0..mixer_channels as usize {
-                out.push(
-                    chunk.audio_data
-                        [f * src_channel_count as usize + (t % src_channel_count as usize)],
-                );
+                out.push(chunk.audio_data[f * src_channels as usize + (t % src_channels as usize)]);
             }
         }
     }
     chunk.audio_data = out;
-    chunk.audio_format.channel_count = mixer_channels;
     chunk
 }
 
@@ -718,11 +713,11 @@ impl AudioMixer {
         lock(&self.state, "mixer state").peers.remove(id);
     }
 
-    pub fn handle_incoming(&self, id: uuid::Uuid, mut chunk: AudioChunk) {
+    pub fn handle_incoming(&self, id: uuid::Uuid, mut chunk: AudioChunk, src_channels: u16) {
         // Convert sender channels to mixer channels first (passthrough when
         // equal; mono->stereo dup / stereo->mono (L+R)/2 only on mismatch),
         // so denoise/gain/buffer all operate in mixer channel space.
-        chunk = convert_to_mixer_channels(chunk, self.channels);
+        chunk = convert_to_mixer_channels(chunk, src_channels, self.channels);
         let mut guard = lock(&self.state, "mixer state");
         let Some(peer) = guard.peers.get_mut(&id) else {
             return;
@@ -732,7 +727,7 @@ impl AudioMixer {
             DenoiseSelection::None => {}
             DenoiseSelection::Nnnoiseless => {
                 let mut d = lock(&peer.nn_denoiser, "nn_denoiser");
-                chunk = d.denoise_chunk(&chunk);
+                chunk = d.denoise_chunk(&chunk, self.channels);
             }
         }
 

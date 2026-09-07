@@ -1,45 +1,28 @@
+use crate::audio::AudioFormat;
 use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
-pub struct AudioFormat {
-    pub channel_count: u16,
-    pub sample_rate: u32,
-}
-
-impl AudioFormat {
-    pub fn new(channel_count: u16, sample_rate: u32) -> AudioFormat {
-        AudioFormat {
-            channel_count,
-            sample_rate,
-        }
-    }
-}
+use std::future::Future;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AudioChunk {
     pub sequence_number: u128,
     pub audio_data: Vec<f32>,
-    pub audio_format: AudioFormat,
 }
 
 impl AudioChunk {
-    pub fn new(
-        sequence_number: u128,
-        audio_format: AudioFormat,
-        audio_data: Vec<f32>,
-    ) -> AudioChunk {
+    pub fn new(sequence_number: u128, audio_data: Vec<f32>) -> AudioChunk {
         AudioChunk {
             sequence_number,
             audio_data,
-            audio_format,
         }
     }
+}
 
-    pub fn to_format(&self, format: AudioFormat) -> AudioChunk {
-        AudioChunk {
-            sequence_number: self.sequence_number,
-            audio_data: self.audio_data.clone(),
-            audio_format: format,
-        }
-    }
+pub trait ChunkSource {
+    fn format(&self) -> AudioFormat;
+    fn next_chunk(&mut self) -> impl Future<Output = Option<AudioChunk>> + Send;
+}
+
+pub trait ChunkSink {
+    fn format(&self) -> AudioFormat;
+    fn push_chunk(&mut self, chunk: AudioChunk);
 }

@@ -1,14 +1,14 @@
 use std::collections::VecDeque;
 
-
 use insanity_core::audio::{
+    AudioFormat,
+    sample::{SampleSource, SyncSampleSource},
     sample_ops::{interleave_channels, split_channels},
-    source::{AudioSource, SyncAudioSource},
 };
 use log::trace;
 use rubato::{Resampler, SincFixedIn};
 
-pub struct ResampledAudioSource<R: AudioSource> {
+pub struct ResampledAudioSource<R: SampleSource> {
     resampler: SincFixedIn<f32>,
     resampled_buffer: VecDeque<f32>,
     original_samples_buffer: VecDeque<f32>,
@@ -18,7 +18,7 @@ pub struct ResampledAudioSource<R: AudioSource> {
     bypass_hits: std::sync::atomic::AtomicUsize,
 }
 
-impl<R: AudioSource + Send + Sync> ResampledAudioSource<R> {
+impl<R: SampleSource + Send + Sync> ResampledAudioSource<R> {
     pub fn new(delegate: R, sample_rate: u32, chunk_size: usize) -> ResampledAudioSource<R> {
         let params = rubato::InterpolationParameters {
             sinc_len: 256,
@@ -28,10 +28,10 @@ impl<R: AudioSource + Send + Sync> ResampledAudioSource<R> {
             window: rubato::WindowFunction::BlackmanHarris2,
         };
         let resampler = SincFixedIn::<f32>::new(
-            sample_rate as f64 / delegate.sample_rate() as f64,
+            sample_rate as f64 / delegate.format().sample_rate as f64,
             params,
             chunk_size,
-            delegate.channels() as usize,
+            delegate.format().channel_count as usize,
         );
         ResampledAudioSource {
             resampler,
@@ -50,20 +50,21 @@ impl<R: AudioSource + Send + Sync> ResampledAudioSource<R> {
     }
 }
 
-impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
+impl<R: SampleSource + Send> SampleSource for ResampledAudioSource<R> {
     async fn next(&mut self) -> Option<f32> {
-        if self.delegate.sample_rate() == self.sample_rate {
+        if self.delegate.format().sample_rate == self.sample_rate {
             self.bypass_hits
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return self.delegate.next().await;
         }
         if self.resampled_buffer.is_empty() {
             // First, try to fill the original_samples buffer with enough samples to resample
-            let target_samples_count = self.chunk_size * self.delegate.channels() as usize;
+            let target_samples_count =
+                self.chunk_size * self.delegate.format().channel_count as usize;
             trace!(
                 "Audio chunk size: {}, channels: {}, target samples count: {}",
                 self.chunk_size,
-                self.delegate.channels(),
+                self.delegate.format().channel_count,
                 target_samples_count
             );
             if self.original_samples_buffer.len() < target_samples_count {
@@ -80,7 +81,7 @@ impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
                 self.original_samples_buffer.len()
             );
             let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
-            let channels = split_channels(&samples, self.delegate.channels() as usize);
+            let channels = split_channels(&samples, self.delegate.format().channel_count as usize);
             trace!("Separated into {} channels", channels.len());
             let Ok(resampled_channels) = self.resampler.process(&channels) else {
                 log::error!("Resampler failed, passing chunk through unprocessed");
@@ -93,29 +94,26 @@ impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
         self.resampled_buffer.pop_front()
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    fn channels(&self) -> u16 {
-        self.delegate.channels()
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.delegate.format().channel_count, self.sample_rate)
     }
 }
 
-impl<R: SyncAudioSource + Send> SyncAudioSource for ResampledAudioSource<R> {
+impl<R: SyncSampleSource + Send> SyncSampleSource for ResampledAudioSource<R> {
     fn next_sync(&mut self) -> Option<f32> {
-        if self.delegate.sample_rate() == self.sample_rate {
+        if self.delegate.format().sample_rate == self.sample_rate {
             self.bypass_hits
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return self.delegate.next_sync();
         }
         if self.resampled_buffer.is_empty() {
             // First, try to fill the original_samples buffer with enough samples to resample
-            let target_samples_count = self.chunk_size * self.delegate.channels() as usize;
+            let target_samples_count =
+                self.chunk_size * self.delegate.format().channel_count as usize;
             trace!(
                 "Audio chunk size: {}, channels: {}, target samples count: {}",
                 self.chunk_size,
-                self.delegate.channels(),
+                self.delegate.format().channel_count,
                 target_samples_count
             );
             if self.original_samples_buffer.len() < target_samples_count {
@@ -132,7 +130,7 @@ impl<R: SyncAudioSource + Send> SyncAudioSource for ResampledAudioSource<R> {
                 self.original_samples_buffer.len()
             );
             let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
-            let channels = split_channels(&samples, self.delegate.channels() as usize);
+            let channels = split_channels(&samples, self.delegate.format().channel_count as usize);
             trace!("Separated into {} channels", channels.len());
             let Ok(resampled_channels) = self.resampler.process(&channels) else {
                 log::error!("Resampler failed (sync), passing chunk through unprocessed");

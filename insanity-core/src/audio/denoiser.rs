@@ -1,4 +1,7 @@
-use crate::audio::{chunk::AudioChunk, sample_ops::{interleave_channels, split_channels}};
+use crate::audio::{
+    chunk::AudioChunk,
+    sample_ops::{interleave_channels, split_channels},
+};
 
 pub trait Denoiser {
     const FRAME_SIZE: usize;
@@ -35,10 +38,9 @@ impl<T: Denoiser> MultiChannelDenoiser<T> {
         }
     }
 
-    pub fn denoise_chunk(&mut self, chunk: &AudioChunk) -> AudioChunk {
+    pub fn denoise_chunk(&mut self, chunk: &AudioChunk, channels: u16) -> AudioChunk {
         let mut denoised_audio: Vec<f32> = Vec::new();
 
-        let channels = chunk.audio_format.channel_count;
         // Degenerate input: nothing to denoise, preserve as-is.
         // Also guards against `chunks_exact(0)` panicking when channels == 0.
         if channels == 0 || chunk.audio_data.is_empty() {
@@ -69,10 +71,6 @@ impl<T: Denoiser> MultiChannelDenoiser<T> {
         // pass it through unchanged so no samples are lost.
         denoised_audio.extend_from_slice(&chunk.audio_data[full_len..]);
 
-        AudioChunk::new(
-            chunk.sequence_number,
-            chunk.audio_format.clone(),
-            denoised_audio,
-        )
+        AudioChunk::new(chunk.sequence_number, denoised_audio)
     }
 }

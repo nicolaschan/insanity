@@ -1,4 +1,5 @@
-use insanity_core::audio::source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
+use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
 use insanity_native_tui_app::audio_test_support::{
@@ -6,7 +7,6 @@ use insanity_native_tui_app::audio_test_support::{
     transfer_tick_timeout,
 };
 use insanity_native_tui_app::clerver::{decode_frame_to_chunk, encode_hub_chunk};
-use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use opus::{Application, Channels, Decoder, Encoder};
 use std::collections::HashMap;
@@ -43,21 +43,17 @@ impl ChirpSource {
     }
 }
 
-impl AudioSource for ChirpSource {
+impl SampleSource for ChirpSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sr
-    }
-
-    fn channels(&self) -> u16 {
-        self.ch
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.ch, self.sr)
     }
 }
 
-impl SyncAudioSource for ChirpSource {
+impl SyncSampleSource for ChirpSource {
     fn next_sync(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -96,21 +92,17 @@ impl AmSpeechSource {
     }
 }
 
-impl AudioSource for AmSpeechSource {
+impl SampleSource for AmSpeechSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sr
-    }
-
-    fn channels(&self) -> u16 {
-        self.ch
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.ch, self.sr)
     }
 }
 
-impl SyncAudioSource for AmSpeechSource {
+impl SyncSampleSource for AmSpeechSource {
     fn next_sync(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -225,10 +217,7 @@ fn resampled_output_fill_budget() {
         None,
     );
     for seq in 0..3u128 {
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
-        );
+        mixer.handle_incoming(id, AudioChunk::new(seq, vec![0.4; 960]), 2);
     }
     for seq in 3..13u128 {
         let mut out = vec![0f32; 960];
@@ -237,10 +226,7 @@ fn resampled_output_fill_budget() {
             assert!(s.is_finite());
             assert!(s.abs() <= 1.0 + 1e-6);
         }
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
-        );
+        mixer.handle_incoming(id, AudioChunk::new(seq, vec![0.4; 960]), 2);
     }
     let snap = mixer.metrics_snapshot();
     assert_eq!(
@@ -289,14 +275,8 @@ async fn broadcast_lag_records_gap() {
             Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
             None,
         );
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.1; 960]),
-        );
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(jumped_seq, AudioFormat::new(2, 48000), vec![0.1; 960]),
-        );
+        mixer.handle_incoming(id, AudioChunk::new(jumped_seq, vec![0.1; 960]), 2);
+        mixer.handle_incoming(id, AudioChunk::new(0, vec![0.1; 960]), 2);
         let snap = mixer.metrics_snapshot();
         assert!(
             snap.gap_detected > 0,
@@ -368,7 +348,7 @@ fn opus_stereo_frame_roundtrip_shape() {
             })
             .collect();
         let frame = encode_hub_chunk(&mut enc, seq, &chunk).expect("encode");
-        let decoded = decode_frame_to_chunk(&mut dec, &frame, 2, 48000).expect("decode");
+        let decoded = decode_frame_to_chunk(&mut dec, &frame, 2).expect("decode");
         assert_eq!(decoded.sequence_number, seq);
         assert_eq!(decoded.audio_data.len(), 960);
         out = Some((decoded.audio_data, chunk));

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use insanity_core::audio::chunk::{AudioChunk, AudioFormat};
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Channels, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,6 @@ pub fn decode_frame_to_chunk(
     decoder: &mut Decoder,
     frame: &AudioFrame,
     channels: u16,
-    sample_rate: u32,
 ) -> Option<AudioChunk> {
     let Ok(nb) = decoder.get_nb_samples(&frame.1[..]) else {
         return None;
@@ -48,11 +47,7 @@ pub fn decode_frame_to_chunk(
     {
         return None;
     }
-    Some(AudioChunk::new(
-        frame.0,
-        AudioFormat::new(channels, sample_rate),
-        buf,
-    ))
+    Some(AudioChunk::new(frame.0, buf))
 }
 
 async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
@@ -124,15 +119,11 @@ async fn run_receiver(
         if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
                 ProtocolMessage::AudioFrame(frame) => {
-                    let Some(chunk) = decode_frame_to_chunk(
-                        &mut decoder,
-                        &frame,
-                        mixer.channels(),
-                        mixer.sample_rate(),
-                    ) else {
+                    let channels = mixer.channels();
+                    let Some(chunk) = decode_frame_to_chunk(&mut decoder, &frame, channels) else {
                         continue;
                     };
-                    mixer.handle_incoming(id, chunk);
+                    mixer.handle_incoming(id, chunk, channels);
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
