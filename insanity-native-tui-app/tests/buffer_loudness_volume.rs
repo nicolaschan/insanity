@@ -1,4 +1,7 @@
-use insanity_core::audio::source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::{
+    AudioFormat,
+    sample::{SampleSource, SyncSampleSource},
+};
 use insanity_core::loudness::calculate_loudness;
 use insanity_native_tui_app::audio::volume_multiplier;
 use insanity_native_tui_app::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
@@ -68,7 +71,7 @@ fn resampler_passthrough() {
         data: Vec<f32>,
         pos: usize,
     }
-    impl AudioSource for Passthrough {
+    impl SampleSource for Passthrough {
         async fn next(&mut self) -> Option<f32> {
             if self.pos < self.data.len() {
                 let v = self.data[self.pos];
@@ -78,14 +81,11 @@ fn resampler_passthrough() {
                 None
             }
         }
-        fn sample_rate(&self) -> u32 {
-            48000
-        }
-        fn channels(&self) -> u16 {
-            2
+        fn format(&self) -> AudioFormat {
+            AudioFormat::new(2, 48000)
         }
     }
-    impl SyncAudioSource for Passthrough {
+    impl SyncSampleSource for Passthrough {
         fn next_sync(&mut self) -> Option<f32> {
             if self.pos < self.data.len() {
                 let v = self.data[self.pos];

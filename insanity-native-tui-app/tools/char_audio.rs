@@ -1,4 +1,7 @@
-use insanity_core::audio::source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::{
+    AudioFormat,
+    sample::{SampleSource, SyncSampleSource},
+};
 use insanity_native_tui_app::audio_test_support::{
     VirtualNode, energy_ratio, goertzel_energy, loudness, max_normalized_xcorr, render_tick,
     run_mesh, transfer_tick_timeout,
@@ -35,19 +38,16 @@ impl ChirpSource {
     }
 }
 
-impl AudioSource for ChirpSource {
+impl SampleSource for ChirpSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-    fn sample_rate(&self) -> u32 {
-        self.sr
-    }
-    fn channels(&self) -> u16 {
-        self.ch
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.ch, self.sr)
     }
 }
 
-impl SyncAudioSource for ChirpSource {
+impl SyncSampleSource for ChirpSource {
     fn next_sync(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -87,19 +87,16 @@ impl AmSpeechSource {
     }
 }
 
-impl AudioSource for AmSpeechSource {
+impl SampleSource for AmSpeechSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-    fn sample_rate(&self) -> u32 {
-        self.sr
-    }
-    fn channels(&self) -> u16 {
-        self.ch
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.ch, self.sr)
     }
 }
 
-impl SyncAudioSource for AmSpeechSource {
+impl SyncSampleSource for AmSpeechSource {
     fn next_sync(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -128,19 +125,16 @@ impl NoiseSource {
     }
 }
 
-impl AudioSource for NoiseSource {
+impl SampleSource for NoiseSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-    fn sample_rate(&self) -> u32 {
-        self.sr
-    }
-    fn channels(&self) -> u16 {
-        self.ch
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.ch, self.sr)
     }
 }
 
-impl SyncAudioSource for NoiseSource {
+impl SyncSampleSource for NoiseSource {
     fn next_sync(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -151,19 +145,16 @@ struct SilenceSource {
     ch: u16,
 }
 
-impl AudioSource for SilenceSource {
+impl SampleSource for SilenceSource {
     async fn next(&mut self) -> Option<f32> {
         Some(0.0)
     }
-    fn sample_rate(&self) -> u32 {
-        self.sr
-    }
-    fn channels(&self) -> u16 {
-        self.ch
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.ch, self.sr)
     }
 }
 
-impl SyncAudioSource for SilenceSource {
+impl SyncSampleSource for SilenceSource {
     fn next_sync(&mut self) -> Option<f32> {
         Some(0.0)
     }

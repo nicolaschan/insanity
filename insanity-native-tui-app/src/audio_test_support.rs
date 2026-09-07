@@ -14,7 +14,10 @@
 use crate::audio::{AudioInputHub, AudioMixer};
 use crate::clerver::{decode_frame_to_chunk, encode_hub_chunk};
 use crate::protocol::ProtocolMessage;
-use insanity_core::audio::source::{AudioSource, SyncAudioSource};
+use insanity_core::audio::{
+    AudioFormat,
+    sample::{SampleSource, SyncSampleSource},
+};
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
 use opus::{Application, Channels, Decoder, Encoder};
@@ -64,21 +67,17 @@ impl SineSource {
     }
 }
 
-impl AudioSource for SineSource {
+impl SampleSource for SineSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sr
-    }
-
-    fn channels(&self) -> u16 {
-        self.ch
+    fn format(&self) -> AudioFormat {
+        AudioFormat::new(self.ch, self.sr)
     }
 }
 
-impl SyncAudioSource for SineSource {
+impl SyncSampleSource for SineSource {
     fn next_sync(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -116,11 +115,15 @@ impl VirtualNode {
     /// Register an inbound peer (creates jitter/denoise/volume state).
     pub fn with_source<S>(_name: &str, source: S) -> Self
     where
-        S: AudioSource + Send + Sync + 'static,
+        S: SampleSource + Send + Sync + 'static,
     {
         // Source must be stereo; any sample rate is OK (the hub resamples
         // to 48kHz, and the test codec is fixed Stereo/48000).
-        debug_assert_eq!(source.channels(), 2, "harness codec is stereo-only");
+        debug_assert_eq!(
+            source.format().channel_count,
+            2,
+            "harness codec is stereo-only"
+        );
         let hub = Arc::new(AudioInputHub::from_source(source));
         Self {
             hub,
@@ -206,12 +209,8 @@ impl VirtualNode {
             Some(d) => d,
             None => return false,
         };
-        let out = match decode_frame_to_chunk(
-            decoder,
-            &frame,
-            self.mixer.channels(),
-            self.mixer.sample_rate(),
-        ) {
+        let channels = self.mixer.channels();
+        let out = match decode_frame_to_chunk(decoder, &frame, channels) {
             Some(o) => o,
             None => return false,
         };
@@ -219,7 +218,7 @@ impl VirtualNode {
             Some(id) => *id,
             None => return false,
         };
-        self.mixer.handle_incoming(id, out);
+        self.mixer.handle_incoming(id, out, channels);
         true
     }
 }

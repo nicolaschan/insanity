@@ -1,6 +1,6 @@
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioMixer;
-use insanity_native_tui_app::processor::{AudioChunk, AudioFormat};
 use std::sync::{Arc, atomic::AtomicUsize};
 
 // Feed model: each fill pushes floor(callback/960) whole chunks, so
@@ -36,10 +36,7 @@ fn run_cell(callback: usize, capacity: usize, condition: &'static str) -> CellRe
     let mut next_seq: u128 = 0;
     let push = |mixer: &AudioMixer, next_seq: &mut u128, count: usize| {
         for _ in 0..count {
-            mixer.handle_incoming(
-                id,
-                AudioChunk::new(*next_seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
-            );
+            mixer.handle_incoming(id, AudioChunk::new(*next_seq, vec![0.4; 960]), 2);
             *next_seq += 1;
         }
     };
