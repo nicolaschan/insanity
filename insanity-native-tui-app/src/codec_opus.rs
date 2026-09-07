@@ -27,6 +27,10 @@ impl OpusEncoder {
             format: AudioFormat::new(channels, sample_rate),
         })
     }
+
+    pub fn format(&self) -> &AudioFormat {
+        &self.format
+    }
 }
 
 impl AudioEncoder for OpusEncoder {

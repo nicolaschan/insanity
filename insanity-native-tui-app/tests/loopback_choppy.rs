@@ -1,3 +1,4 @@
+use insanity_core::audio::codec::AudioEncoder;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
@@ -7,8 +8,10 @@ use insanity_native_tui_app::audio_test_support::{
     SineSource, energy_ratio, hub_from_source, loudness, max_normalized_xcorr, render_tick,
     run_mesh, transfer_tick_timeout,
 };
-use insanity_native_tui_app::clerver::{decode_frame_to_chunk, encode_hub_chunk};
-use opus::{Application, Channels, Decoder, Encoder};
+use insanity_native_tui_app::clerver::decode_frame_to_chunk;
+use insanity_native_tui_app::codec_opus::OpusEncoder;
+use insanity_native_tui_app::protocol::AudioFrame;
+use opus::{Channels, Decoder};
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
@@ -257,13 +260,12 @@ async fn broadcast_lag_records_gap() {
             .await
             .expect("lagging recv timeout");
         let jumped_seq = match first {
-            Ok((seq, _)) => seq,
+            Ok(chunk) => chunk.sequence_number,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                 let inner = tokio::time::timeout(Duration::from_secs(2), lagging.recv())
                     .await
                     .expect("post-lag recv timeout");
-                let (seq, _) = inner.expect("hub closed");
-                seq
+                inner.expect("hub closed").sequence_number
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => panic!("hub closed"),
         };
@@ -346,7 +348,7 @@ async fn burst_loss_still_realtime() {
 
 #[test]
 fn opus_stereo_frame_roundtrip_shape() {
-    let mut enc = Encoder::new(48000, Channels::Stereo, Application::Audio).expect("encoder");
+    let mut enc = OpusEncoder::new(48000, 2).expect("encoder");
     let mut dec = Decoder::new(48000, Channels::Stereo).expect("decoder");
     let mut out = None;
     for seq in 0..6u128 {
@@ -357,7 +359,14 @@ fn opus_stereo_frame_roundtrip_shape() {
                 vec![s, s]
             })
             .collect();
-        let frame = encode_hub_chunk(&mut enc, seq, &chunk).expect("encode");
+        let encoded = enc
+            .encode(&AudioChunk::new(
+                seq,
+                AudioFormat::new(2, 48000),
+                chunk.clone(),
+            ))
+            .expect("encode");
+        let frame = AudioFrame::from(encoded);
         let decoded = decode_frame_to_chunk(&mut dec, &frame, 2).expect("decode");
         assert_eq!(decoded.sequence_number, seq);
         assert_eq!(decoded.audio_data.len(), 960);

@@ -1,7 +1,10 @@
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+use insanity_core::audio::{
+    AudioFormat,
+    chunk::{AudioChunk, ChunkSource},
+};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::AudioMixer;
+use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
 use insanity_native_tui_app::audio_test_support::hub_from_source;
 use std::sync::{Arc, atomic::AtomicUsize};
 
@@ -47,23 +50,22 @@ async fn hub_fanout_same_chunk() {
         let mut rx1 = hub.subscribe();
         let mut rx2 = hub.subscribe();
         let mut rx3 = hub.subscribe();
-        let (s1, c1) = tokio::time::timeout(std::time::Duration::from_secs(2), rx1.recv())
+        let c1 = tokio::time::timeout(std::time::Duration::from_secs(2), rx1.recv())
             .await
             .unwrap()
             .unwrap();
-        let (s2, c2) = tokio::time::timeout(std::time::Duration::from_secs(2), rx2.recv())
+        let c2 = tokio::time::timeout(std::time::Duration::from_secs(2), rx2.recv())
             .await
             .unwrap()
             .unwrap();
-        let (s3, c3) = tokio::time::timeout(std::time::Duration::from_secs(2), rx3.recv())
+        let c3 = tokio::time::timeout(std::time::Duration::from_secs(2), rx3.recv())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(c1.len(), 960);
-        assert_eq!(s1, s2);
-        assert_eq!(s2, s3);
-        assert_eq!(&*c1, &*c2);
-        assert_eq!(&*c2, &*c3);
+        assert!(!c1.payload.is_empty());
+        assert_eq!(c1.format, AudioFormat::new(2, 48000));
+        assert_eq!(c1, c2);
+        assert_eq!(c2, c3);
     })
     .await;
     assert!(res.is_ok(), "hub_fanout_same_chunk timed out");
@@ -288,4 +290,51 @@ fn opus_roundtrip_perceptual() {
     let energy2: f64 = out.iter().map(|v| (*v as f64).powi(2)).sum();
     let ratio = energy2 / energy1.max(1e-9);
     assert!(ratio > 0.3 && ratio < 3.0, "energy ratio {ratio}");
+}
+
+struct FormatSwitch {
+    remaining: Vec<AudioFormat>,
+    next_sequence: u128,
+}
+
+impl ChunkSource for FormatSwitch {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let format = self.remaining.pop()?;
+        let sequence_number = self.next_sequence;
+        self.next_sequence += 1;
+        let len = 480 * format.channel_count as usize;
+        Some(AudioChunk::new(sequence_number, format, vec![0.1; len]))
+    }
+}
+
+#[tokio::test]
+async fn hub_rebuilds_encoder_on_format_change() {
+    let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let mono = AudioFormat::new(1, 48000);
+        let stereo = AudioFormat::new(2, 48000);
+        let mut remaining = vec![stereo.clone(); 3];
+        remaining.extend(vec![mono.clone(); 3]);
+        let hub = AudioInputHub::from_chunk_source(FormatSwitch {
+            remaining,
+            next_sequence: 0,
+        });
+        let mut rx = hub.subscribe();
+        let mut formats = Vec::new();
+        let mut sequences = Vec::new();
+        while let Ok(Ok(chunk)) =
+            tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await
+        {
+            formats.push(chunk.format);
+            sequences.push(chunk.sequence_number);
+        }
+        let expected = [&mono, &mono, &mono, &stereo, &stereo, &stereo];
+        assert_eq!(formats.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(sequences, [0, 1, 2, 3, 4, 5]);
+    })
+    .await;
+    assert!(
+        res.is_ok(),
+        "hub_rebuilds_encoder_on_format_change timed out"
+    );
 }

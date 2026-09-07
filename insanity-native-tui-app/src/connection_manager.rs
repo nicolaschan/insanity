@@ -271,13 +271,12 @@ fn manage_peers(
     }
     let mixer = Arc::new(AudioMixer::new(app_event_tx.clone()));
     let metrics_mixer = mixer.clone();
-    let hub_channels = hub.channels();
     let mixer_channels = mixer.channels();
     let mixer_rate = mixer.sample_rate();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
-            "Audio formats: input channels={hub_channels} output channels={mixer_channels} output rate={mixer_rate} jitter_chunks={JITTER_TARGET_CHUNKS}"
+            "Audio formats: output channels={mixer_channels} output rate={mixer_rate} jitter_chunks={JITTER_TARGET_CHUNKS}"
         );
         let mut prev = metrics_mixer.metrics_snapshot();
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));

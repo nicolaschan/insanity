@@ -21,6 +21,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, Rechunker};
+use insanity_core::audio::codec::{AudioEncoder, EncodedChunk};
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
@@ -30,6 +31,7 @@ use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
+use crate::codec_opus::OpusEncoder;
 use crate::cpal::stream_receiver::CpalStreamReceiver;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
 use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE, MAX_VOLUME};
@@ -146,15 +148,30 @@ impl SyncSampleSource for RealtimeAudioSource {
 
 // Single input hub
 
-/// Hub broadcast item: wall-clock sequence number + chunk. Seq advances every
-/// 10ms tick (including muted ticks, which are not sent).
-pub type HubChunk = (u128, Arc<Vec<f32>>);
+/// Yields a silent stereo chunk every 10ms when no input device exists.
+struct SilentChunkSource {
+    next_sequence: u128,
+}
 
+impl ChunkSource for SilentChunkSource {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let sequence_number = self.next_sequence;
+        self.next_sequence += 1;
+        Some(AudioChunk::new(
+            sequence_number,
+            AudioFormat::new(AUDIO_CHANNELS, AUDIO_SAMPLE_RATE),
+            vec![0.0; AUDIO_CHUNK_SIZE * AUDIO_CHANNELS as usize],
+        ))
+    }
+}
+
+/// Broadcasts Opus-encoded 10ms chunks. Sequence numbers advance on every
+/// chunk, including muted ones, which are not sent.
 pub struct AudioInputHub {
-    tx: broadcast::Sender<HubChunk>,
+    tx: broadcast::Sender<EncodedChunk>,
     muted: Arc<AtomicBool>,
     device_name: String,
-    channels: u16,
 }
 
 impl Default for AudioInputHub {
@@ -171,26 +188,21 @@ impl AudioInputHub {
     }
 
     pub fn from_device(device: Device) -> Self {
-        let channels = match get_input_config(&device) {
-            Ok((_, cfg)) => cfg.channels,
-            Err(_) => AUDIO_CHANNELS,
-        };
         let device_name = device.name().unwrap_or(UNKNOWN_DEVICE_NAME.into());
         match CpalStreamReceiver::try_from(device) {
-            Ok(receiver) => Self::spawn(receiver, channels, device_name),
-            Err(_) => Self::silent(device_name),
+            Ok(receiver) => Self::spawn(receiver, device_name),
+            Err(_) => Self::spawn(SilentChunkSource { next_sequence: 0 }, device_name),
         }
     }
 
-    /// Hub over any chunk source. Output is `channels` wide at 48kHz.
-    pub fn from_chunk_source<R>(source: R, channels: u16) -> Self
+    pub fn from_chunk_source<R>(source: R) -> Self
     where
         R: ChunkSource + Send + 'static,
     {
-        Self::spawn(source, channels, UNKNOWN_DEVICE_NAME.into())
+        Self::spawn(source, UNKNOWN_DEVICE_NAME.into())
     }
 
-    fn spawn<R>(source: R, channels: u16, device_name: String) -> Self
+    fn spawn<R>(source: R, device_name: String) -> Self
     where
         R: ChunkSource + Send + 'static,
     {
@@ -200,43 +212,25 @@ impl AudioInputHub {
             tx: tx.clone(),
             muted: muted.clone(),
             device_name,
-            channels,
         };
         tokio::spawn(async move {
             let resampled = ResampledChunkSource::new(source, AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
             let mut chunks = Rechunker::new(resampled, AUDIO_CHUNK_SIZE);
-            let mut next_seq: u128 = 0;
+            let mut encoder: Option<OpusEncoder> = None;
             while let Some(chunk) = chunks.next_chunk().await {
+                if muted.load(Ordering::Relaxed) || chunk.format.channel_count == 0 {
+                    continue;
+                }
+                let channels = chunk.format.channel_count.min(2);
                 let chunk = convert_to_mixer_channels(chunk, channels);
-                let seq = next_seq;
-                next_seq += 1;
-                if !muted.load(Ordering::Relaxed) {
-                    let _ = tx.send((seq, Arc::new(chunk.audio_data)));
+                if encoder.as_ref().map(OpusEncoder::format) != Some(&chunk.format) {
+                    encoder =
+                        OpusEncoder::new(chunk.format.sample_rate, chunk.format.channel_count);
                 }
-            }
-        });
-        hub
-    }
-
-    fn silent(device_name: String) -> Self {
-        let (tx, _) = broadcast::channel(32);
-        let muted = Arc::new(AtomicBool::new(false));
-        let hub = Self {
-            tx: tx.clone(),
-            muted: muted.clone(),
-            device_name,
-            channels: AUDIO_CHANNELS,
-        };
-        tokio::spawn(async move {
-            let silence = Arc::new(vec![0.0f32; AUDIO_CHUNK_SIZE * AUDIO_CHANNELS as usize]);
-            let mut next_seq: u128 = 0;
-            loop {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                let seq = next_seq;
-                next_seq += 1;
-                if !muted.load(Ordering::Relaxed) {
-                    let _ = tx.send((seq, silence.clone()));
-                }
+                let Some(encoded) = encoder.as_mut().and_then(|e| e.encode(&chunk)) else {
+                    continue;
+                };
+                let _ = tx.send(encoded);
             }
         });
         hub
@@ -246,12 +240,8 @@ impl AudioInputHub {
         &self.device_name
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<HubChunk> {
+    pub fn subscribe(&self) -> broadcast::Receiver<EncodedChunk> {
         self.tx.subscribe()
-    }
-
-    pub fn channels(&self) -> u16 {
-        self.channels
     }
 
     pub fn set_muted(&self, muted: bool) {

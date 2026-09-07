@@ -12,9 +12,9 @@
 //! [`max_normalized_xcorr`] slides the reference over ±lag before scoring.
 
 use crate::audio::{AudioInputHub, AudioMixer};
-use crate::clerver::{decode_frame_to_chunk, encode_hub_chunk};
+use crate::clerver::decode_frame_to_chunk;
 use crate::processor::{AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE};
-use crate::protocol::ProtocolMessage;
+use crate::protocol::{AudioFrame, ProtocolMessage};
 use insanity_core::audio::{
     AudioFormat,
     chunk::{AudioChunk, ChunkSource, SampleChunker},
@@ -23,7 +23,7 @@ use insanity_core::audio::{
 };
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
-use opus::{Application, Channels, Decoder, Encoder};
+use opus::{Channels, Decoder};
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
@@ -52,13 +52,11 @@ impl<S: SampleSource + Send> ChunkSource for PacedChunkSource<S> {
     }
 }
 
-/// Hub fed by a paced sample source, keeping the source's channel count.
 pub fn hub_from_source<S>(source: S) -> AudioInputHub
 where
     S: SampleSource + Send + 'static,
 {
-    let channels = source.format().channel_count;
-    AudioInputHub::from_chunk_source(PacedChunkSource::new(source), channels)
+    AudioInputHub::from_chunk_source(PacedChunkSource::new(source))
 }
 
 pub const PULL_TIMEOUT: Duration = Duration::from_millis(200);
@@ -123,14 +121,13 @@ pub struct VirtualNode {
     pub hub: Arc<AudioInputHub>,
     pub mixer: AudioMixer,
     pub peer_ids: HashMap<String, uuid::Uuid>,
-    /// One Opus encoder per outbound edge (mirrors production, where each
-    /// peer connection runs its own `run_audio_sender` + `Encoder`).
-    encoders: HashMap<String, Encoder>,
     decoders: HashMap<String, Decoder>,
     /// One hub broadcast receiver per outbound edge (mirrors production, where
     /// each peer connection holds its own `hub.subscribe()`).
-    hub_taps: HashMap<String, broadcast::Receiver<crate::audio::HubChunk>>,
-    /// Mic chunks consumed so far (post-resample 48kHz), for reference.
+    hub_taps: HashMap<String, broadcast::Receiver<EncodedChunk>>,
+    /// Decodes the hub's frames locally to build `mic_history`.
+    monitor: Decoder,
+    /// Mic chunks sent so far, decoded at the sender, for reference.
     /// Deduplicated by seq so fan-out edges don't double-count.
     pub mic_history: Vec<f32>,
     mic_last_seq: Option<u128>,
@@ -163,8 +160,8 @@ impl VirtualNode {
             hub_taps: HashMap::new(),
             mixer: AudioMixer::new_no_device(),
             peer_ids: HashMap::new(),
-            encoders: HashMap::new(),
             decoders: HashMap::new(),
+            monitor: Decoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo).expect("monitor decoder"),
             mic_history: Vec::new(),
             mic_last_seq: None,
             speaker_history: Vec::new(),
@@ -195,11 +192,6 @@ impl VirtualNode {
     pub fn add_outbound(&mut self, peer_name: &str) {
         self.hub_taps
             .insert(peer_name.to_string(), self.hub.subscribe());
-        self.encoders.insert(
-            peer_name.to_string(),
-            Encoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo, Application::Audio)
-                .expect("test encoder"),
-        );
     }
 
     pub fn set_muted(&self, muted: bool) {
@@ -212,24 +204,22 @@ impl VirtualNode {
 
     pub async fn pull_frame(&mut self, peer_name: &str) -> Option<Vec<u8>> {
         let tap = self.hub_taps.get_mut(peer_name)?;
-        let (seq, chunk) = match tokio::time::timeout(PULL_TIMEOUT, tap.recv()).await {
+        let encoded = match tokio::time::timeout(PULL_TIMEOUT, tap.recv()).await {
             Ok(Ok(c)) => c,
             Ok(Err(_)) | Err(_) => return None,
         };
-        let encoder = match self.encoders.get_mut(peer_name) {
-            Some(e) => e,
-            None => return None,
-        };
-        let frame = encode_hub_chunk(encoder, seq, &chunk[..])?;
+        let frame = AudioFrame::from(encoded);
+        let seq = frame.sequence_number;
+        if self.mic_last_seq != Some(seq) {
+            self.mic_last_seq = Some(seq);
+            let decoded = decode_frame_to_chunk(&mut self.monitor, &frame, 2)?;
+            self.mic_history.extend(decoded.audio_data);
+        }
         let mut buf = Vec::new();
         ProtocolMessage::AudioFrame(frame)
             .write_to_stream(&mut buf)
             .await
             .ok()?;
-        if self.mic_last_seq != Some(seq) {
-            self.mic_last_seq = Some(seq);
-            self.mic_history.extend(chunk.iter());
-        }
         Some(buf)
     }
 
