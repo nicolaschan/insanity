@@ -1,6 +1,9 @@
 use std::collections::VecDeque;
 
-use insanity_core::audio_source::{AudioSource, SyncAudioSource};
+use insanity_core::{
+    audio::sample_ops::{interleave_channels, split_channels},
+    audio_source::{AudioSource, SyncAudioSource},
+};
 use log::trace;
 use rubato::{Resampler, SincFixedIn};
 
@@ -46,40 +49,6 @@ impl<R: AudioSource + Send + Sync> ResampledAudioSource<R> {
     }
 }
 
-fn separate_channels(samples: &[f32], channel_count: usize) -> Vec<Vec<f32>> {
-    let mut channels = Vec::new();
-    for _ in 0..channel_count {
-        channels.push(Vec::new());
-    }
-    if channel_count == 0 {
-        return channels;
-    }
-    if !samples.len().is_multiple_of(channel_count) {
-        log::error!(
-            "non-frame-aligned input: {} samples for {} channels",
-            samples.len(),
-            channel_count
-        );
-    }
-    for (i, sample) in samples.iter().enumerate() {
-        channels[i % channel_count].push(*sample);
-    }
-    channels
-}
-
-fn interleave_channels(channels: &[Vec<f32>]) -> Vec<f32> {
-    let Some(first) = channels.first() else {
-        return Vec::new();
-    };
-    let mut samples = Vec::new();
-    for i in 0..first.len() {
-        for channel in channels {
-            samples.push(channel[i]);
-        }
-    }
-    samples
-}
-
 impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
     async fn next(&mut self) -> Option<f32> {
         if self.delegate.sample_rate() == self.sample_rate {
@@ -110,7 +79,7 @@ impl<R: AudioSource + Send> AudioSource for ResampledAudioSource<R> {
                 self.original_samples_buffer.len()
             );
             let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
-            let channels = separate_channels(&samples, self.delegate.channels() as usize);
+            let channels = split_channels(&samples, self.delegate.channels() as usize);
             trace!("Separated into {} channels", channels.len());
             let Ok(resampled_channels) = self.resampler.process(&channels) else {
                 log::error!("Resampler failed, passing chunk through unprocessed");
@@ -162,7 +131,7 @@ impl<R: SyncAudioSource + Send> SyncAudioSource for ResampledAudioSource<R> {
                 self.original_samples_buffer.len()
             );
             let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
-            let channels = separate_channels(&samples, self.delegate.channels() as usize);
+            let channels = split_channels(&samples, self.delegate.channels() as usize);
             trace!("Separated into {} channels", channels.len());
             let Ok(resampled_channels) = self.resampler.process(&channels) else {
                 log::error!("Resampler failed (sync), passing chunk through unprocessed");
@@ -173,32 +142,5 @@ impl<R: SyncAudioSource + Send> SyncAudioSource for ResampledAudioSource<R> {
             self.resampled_buffer = resampled_samples.into();
         }
         self.resampled_buffer.pop_front()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{interleave_channels, separate_channels};
-
-    #[test]
-    fn separate_empty_count_returns_empty() {
-        assert!(separate_channels(&[0.1, 0.2], 0).is_empty());
-        assert!(interleave_channels(&[]).is_empty());
-    }
-
-    #[test]
-    fn separate_ragged_distributes_round_robin() {
-        let out = separate_channels(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3);
-        assert_eq!(out.len(), 3);
-        assert_eq!(out[0], vec![0.0, 3.0, 6.0]);
-        assert_eq!(out[1], vec![1.0, 4.0]);
-        assert_eq!(out[2], vec![2.0, 5.0]);
-    }
-
-    #[test]
-    fn separate_aligned_roundtrips_through_interleave() {
-        let samples: Vec<f32> = (0..12).map(|v| v as f32).collect();
-        let channels = separate_channels(&samples, 3);
-        assert_eq!(interleave_channels(&channels), samples);
     }
 }
