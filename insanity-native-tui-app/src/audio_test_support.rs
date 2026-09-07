@@ -13,7 +13,7 @@
 
 use crate::audio::{AudioInputHub, AudioMixer};
 use crate::clerver::{decode_frame_to_chunk, encode_hub_chunk};
-use crate::processor::AUDIO_CHUNK_SIZE;
+use crate::processor::{AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE};
 use crate::protocol::ProtocolMessage;
 use insanity_core::audio::{
     AudioFormat,
@@ -144,7 +144,7 @@ impl VirtualNode {
     }
 
     pub fn with_amp(_name: &str, freq: f32, amp: f32) -> Self {
-        Self::with_source(_name, SineSource::new_amp(48000, 2, freq, amp))
+        Self::with_source(_name, SineSource::new_amp(AUDIO_SAMPLE_RATE, 2, freq, amp))
     }
 
     /// Register an inbound peer (creates jitter/denoise/volume state).
@@ -187,7 +187,7 @@ impl VirtualNode {
         );
         self.decoders.insert(
             peer_name.to_string(),
-            Decoder::new(48000, Channels::Stereo).expect("test decoder"),
+            Decoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo).expect("test decoder"),
         );
     }
 
@@ -197,7 +197,8 @@ impl VirtualNode {
             .insert(peer_name.to_string(), self.hub.subscribe());
         self.encoders.insert(
             peer_name.to_string(),
-            Encoder::new(48000, Channels::Stereo, Application::Audio).expect("test encoder"),
+            Encoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo, Application::Audio)
+                .expect("test encoder"),
         );
     }
 

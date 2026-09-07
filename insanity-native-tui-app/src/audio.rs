@@ -32,7 +32,7 @@ use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::cpal::stream_receiver::CpalStreamReceiver;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
-use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, MAX_VOLUME};
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE, MAX_VOLUME};
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::{ResampledAudioSource, ResampledChunkSource};
 
@@ -66,7 +66,7 @@ pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat,
         find_stereo_input(range).ok_or_else(|| anyhow::anyhow!("No supported input config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = std::cmp::min(SampleRate(48000), max);
+    let sample_rate = std::cmp::min(SampleRate(AUDIO_SAMPLE_RATE), max);
     let buffer_size = match cfg_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -87,7 +87,7 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
         find_stereo_output(range).ok_or_else(|| anyhow::anyhow!("No supported output config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = std::cmp::min(SampleRate(48000), max);
+    let sample_rate = std::cmp::min(SampleRate(AUDIO_SAMPLE_RATE), max);
     let buffer_size = match cfg_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -203,7 +203,7 @@ impl AudioInputHub {
             channels,
         };
         tokio::spawn(async move {
-            let resampled = ResampledChunkSource::new(source, 48000, AUDIO_CHUNK_SIZE);
+            let resampled = ResampledChunkSource::new(source, AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
             let mut chunks = Rechunker::new(resampled, AUDIO_CHUNK_SIZE);
             let mut next_seq: u128 = 0;
             while let Some(chunk) = chunks.next_chunk().await {
@@ -420,7 +420,7 @@ fn build_output_stream(
 
 impl AudioMixer {
     pub fn new_no_device() -> Self {
-        Self::new_no_device_with_format(48000, AUDIO_CHANNELS)
+        Self::new_no_device_with_format(AUDIO_SAMPLE_RATE, AUDIO_CHANNELS)
     }
 
     pub fn new_no_device_with_format(sample_rate: u32, channels: u16) -> Self {
@@ -489,18 +489,18 @@ impl AudioMixer {
                         .unwrap_or(false);
                     if !play_ok {
                         log::warn!("Failed to start output stream, falling back to dummy");
-                        (SampleRate(48000), AUDIO_CHANNELS, None)
+                        (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
                     } else {
                         (sr, ch, Some(wrapper))
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to get output config: {e}, falling back to dummy");
-                    (SampleRate(48000), AUDIO_CHANNELS, None)
+                    (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
                 }
             }
         } else {
-            (SampleRate(48000), AUDIO_CHANNELS, None)
+            (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
         };
 
         Self {
@@ -526,8 +526,11 @@ impl AudioMixer {
             // Reconnect
             lock(&peer.chunk_buffer, "chunk_buffer").clear();
             let mixer_channels = self.channels;
-            let audio_receiver =
-                RealtimeAudioSource::new(peer.chunk_buffer.clone(), 48000, mixer_channels);
+            let audio_receiver = RealtimeAudioSource::new(
+                peer.chunk_buffer.clone(),
+                AUDIO_SAMPLE_RATE,
+                mixer_channels,
+            );
             peer.audio_receiver = Mutex::new(ResampledAudioSource::new(
                 audio_receiver,
                 self.sample_rate.0,
@@ -544,7 +547,8 @@ impl AudioMixer {
         }
         let chunk_buffer = Arc::new(Mutex::new(JitterBuffer::new(self.jitter_chunks)));
         let mixer_channels = self.channels;
-        let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone(), 48000, mixer_channels);
+        let audio_receiver =
+            RealtimeAudioSource::new(chunk_buffer.clone(), AUDIO_SAMPLE_RATE, mixer_channels);
         let audio_receiver =
             ResampledAudioSource::new(audio_receiver, self.sample_rate.0, AUDIO_CHUNK_SIZE);
         let state = PeerState {
