@@ -12,11 +12,12 @@
 
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
+use insanity_core::audio::sample_ops::convert_to_mixer_channels;
+use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{
-    AudioMixer, JITTER_TARGET_CHUNKS, MAX_VOLUME, convert_to_mixer_channels, volume_multiplier,
-};
+use insanity_native_tui_app::audio::{AudioMixer, JITTER_TARGET_CHUNKS};
 use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
+use insanity_native_tui_app::processor::MAX_VOLUME;
 use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
 use std::sync::{Arc, atomic::AtomicUsize};
 

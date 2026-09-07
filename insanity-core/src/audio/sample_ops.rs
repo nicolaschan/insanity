@@ -1,3 +1,5 @@
+use crate::audio::chunk::AudioChunk;
+
 pub fn split_channels(samples: &[f32], channel_count: usize) -> Vec<Vec<f32>> {
     if channel_count == 0 {
         return Vec::new();
@@ -19,6 +21,39 @@ pub fn interleave_channels(channels: &[Vec<f32>]) -> Vec<f32> {
         }
     }
     samples
+}
+
+pub fn convert_to_mixer_channels(
+    mut chunk: AudioChunk,
+    src_channels: u16,
+    mixer_channels: u16,
+) -> AudioChunk {
+    if src_channels == mixer_channels
+        || src_channels == 0
+        || mixer_channels == 0
+        || chunk.audio_data.is_empty()
+    {
+        return chunk;
+    }
+    let frames = chunk.audio_data.len() / src_channels as usize;
+    let mut out = Vec::with_capacity(frames * mixer_channels as usize);
+    if src_channels == 1 && mixer_channels == 2 {
+        for &m in chunk.audio_data.iter() {
+            out.push(m);
+            out.push(m);
+        }
+    } else if src_channels == 2 && mixer_channels == 1 {
+        let (pairs, _) = chunk.audio_data.as_chunks::<2>();
+        out.extend(pairs.iter().map(|pair| (pair[0] + pair[1]) * 0.5));
+    } else {
+        for f in 0..frames {
+            for t in 0..mixer_channels as usize {
+                out.push(chunk.audio_data[f * src_channels as usize + (t % src_channels as usize)]);
+            }
+        }
+    }
+    chunk.audio_data = out;
+    chunk
 }
 
 #[cfg(test)]

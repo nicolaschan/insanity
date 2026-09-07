@@ -1,4 +1,7 @@
-use tui::{style::Style, widgets::{Block, BorderType, Borders}};
+use tui::{
+    style::Style,
+    widgets::{Block, BorderType, Borders},
+};
 
 use crate::style::BG_GRAY;
 
