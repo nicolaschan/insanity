@@ -22,6 +22,7 @@ use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamC
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
+use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::sample_ops::convert_to_mixer_channels;
 use insanity_core::audio::transform::volume_multiplier;
@@ -32,7 +33,6 @@ use tokio::sync::{broadcast, mpsc::UnboundedSender};
 use crate::cpal::stream_receiver::CpalStreamReceiver;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
 use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, MAX_VOLUME};
-use crate::realtime_buffer::RealTimeBuffer;
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::ResampledAudioSource;
 
@@ -102,7 +102,7 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
 
 // RealtimeAudioSource used for output per-peer
 pub struct RealtimeAudioSource {
-    chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
+    chunk_buffer: Arc<Mutex<JitterBuffer<AudioChunk>>>,
     sample_buffer: VecDeque<f32>,
     sample_rate: u32,
     channels: u16,
@@ -110,7 +110,7 @@ pub struct RealtimeAudioSource {
 
 impl RealtimeAudioSource {
     pub fn new(
-        chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
+        chunk_buffer: Arc<Mutex<JitterBuffer<AudioChunk>>>,
         sample_rate: u32,
         channels: u16,
     ) -> Self {
@@ -379,7 +379,7 @@ pub fn format_metrics_line(
 pub const PLC_FADE_SAMPLES: usize = 960;
 
 struct PeerState {
-    chunk_buffer: Arc<Mutex<RealTimeBuffer<AudioChunk>>>,
+    chunk_buffer: Arc<Mutex<JitterBuffer<AudioChunk>>>,
     audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
     nn_denoiser: Mutex<MultiChannelDenoiser<NnnoiselessDenoiser>>,
     volume: Arc<AtomicUsize>,
@@ -572,7 +572,7 @@ impl AudioMixer {
             peer.app_event_sender = app_event_sender;
             return;
         }
-        let chunk_buffer = Arc::new(Mutex::new(RealTimeBuffer::new(self.jitter_chunks)));
+        let chunk_buffer = Arc::new(Mutex::new(JitterBuffer::new(self.jitter_chunks)));
         let mixer_channels = self.channels;
         let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone(), 48000, mixer_channels);
         let audio_receiver =

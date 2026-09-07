@@ -1,4 +1,4 @@
-pub struct RealTimeBuffer<T> {
+pub struct JitterBuffer<T> {
     head: u128, // next item to retrieve
     current_size: usize,
     max_size: usize,
@@ -7,14 +7,11 @@ pub struct RealTimeBuffer<T> {
     seen_any: bool,
 }
 
-impl<T> RealTimeBuffer<T> {
-    pub fn new(max_size: usize) -> RealTimeBuffer<T> {
-        assert!(max_size > 0, "RealTimeBuffer capacity must be > 0");
-        let mut buffer: Vec<Option<(u128, T)>> = Vec::with_capacity(max_size);
-        for i in 0..max_size {
-            buffer.insert(i, None);
-        }
-        RealTimeBuffer {
+impl<T> JitterBuffer<T> {
+    pub fn new(max_size: usize) -> JitterBuffer<T> {
+        assert!(max_size > 0, "JitterBuffer capacity must be > 0");
+        let buffer: Vec<Option<(u128, T)>> = (0..max_size).map(|_| None).collect();
+        JitterBuffer {
             head: 0,
             current_size: 0,
             prev: 0,

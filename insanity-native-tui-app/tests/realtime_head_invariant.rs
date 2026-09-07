@@ -1,8 +1,8 @@
-use insanity_native_tui_app::realtime_buffer::RealTimeBuffer;
+use insanity_core::audio::jitter::JitterBuffer;
 
 #[test]
 fn next_item_advances_head_by_at_most_one() {
-    let mut buf = RealTimeBuffer::new(3);
+    let mut buf = JitterBuffer::new(3);
     let mut seq: u128 = 0;
     for step in 0..500 {
         match step % 4 {
@@ -26,7 +26,7 @@ fn next_item_advances_head_by_at_most_one() {
 
 #[test]
 fn far_jump_then_drain_advances_one_slot_per_call() {
-    let mut buf = RealTimeBuffer::new(3);
+    let mut buf = JitterBuffer::new(3);
     buf.set(0, 0);
     buf.set(10, 10);
     let h0 = buf.head();
