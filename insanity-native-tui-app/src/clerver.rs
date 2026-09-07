@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use insanity_core::audio::chunk::AudioChunk;
+use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_tui_adapter::AppEvent;
 use opus::{Application, Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,7 @@ use veq::veq::VeqSessionAlias;
 use crate::{
     audio::{AudioInputHub, AudioMixer},
     codec_opus::u16_to_channels,
+    processor::AUDIO_SAMPLE_RATE,
     protocol::ProtocolMessage,
 };
 
@@ -48,12 +49,16 @@ pub fn decode_frame_to_chunk(
     {
         return None;
     }
-    Some(AudioChunk::new(frame.0, buf))
+    Some(AudioChunk::new(
+        frame.0,
+        AudioFormat::new(channels, AUDIO_SAMPLE_RATE),
+        buf,
+    ))
 }
 
 async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
     let channels = u16_to_channels(hub.channels());
-    let Ok(mut encoder) = Encoder::new(48000, channels, Application::Audio) else {
+    let Ok(mut encoder) = Encoder::new(AUDIO_SAMPLE_RATE, channels, Application::Audio) else {
         log::error!("Failed to create Opus encoder; audio sender for hub disabled");
         return;
     };
@@ -103,7 +108,7 @@ async fn run_receiver(
     id: uuid::Uuid,
 ) {
     let id_str = id.to_string();
-    let Ok(mut decoder) = Decoder::new(48000, u16_to_channels(mixer.channels())) else {
+    let Ok(mut decoder) = Decoder::new(AUDIO_SAMPLE_RATE, u16_to_channels(mixer.channels())) else {
         log::error!("Failed to create Opus decoder for peer {id}; receiver disabled");
         return;
     };
@@ -116,7 +121,7 @@ async fn run_receiver(
                     let Some(chunk) = decode_frame_to_chunk(&mut decoder, &frame, channels) else {
                         continue;
                     };
-                    mixer.handle_incoming(id, chunk, channels);
+                    mixer.handle_incoming(id, chunk);
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}

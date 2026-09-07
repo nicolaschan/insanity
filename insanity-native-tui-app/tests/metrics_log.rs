@@ -1,4 +1,4 @@
-use insanity_core::audio::chunk::AudioChunk;
+use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{AudioMixer, MixerMetricsSnapshot, format_metrics_line};
 use std::sync::{Arc, atomic::AtomicUsize};
@@ -69,7 +69,10 @@ fn occupancies_reflect_buffered_chunks() {
         Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
         None,
     );
-    mixer.handle_incoming(id, AudioChunk::new(0, vec![0.1; 960]), 2);
+    mixer.handle_incoming(
+        id,
+        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.1; 960]),
+    );
     let occupancies = mixer.peer_occupancies();
     assert_eq!(occupancies.len(), 1);
     assert_eq!(occupancies[0].0, id.to_string());

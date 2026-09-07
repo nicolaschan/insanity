@@ -2,10 +2,10 @@ use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
+use insanity_native_tui_app::audio::AudioMixer;
 use insanity_native_tui_app::audio_test_support::{
-    SineSource, energy_ratio, loudness, max_normalized_xcorr, render_tick, run_mesh,
-    transfer_tick_timeout,
+    SineSource, energy_ratio, hub_from_source, loudness, max_normalized_xcorr, render_tick,
+    run_mesh, transfer_tick_timeout,
 };
 use insanity_native_tui_app::clerver::{decode_frame_to_chunk, encode_hub_chunk};
 use opus::{Application, Channels, Decoder, Encoder};
@@ -217,7 +217,10 @@ fn resampled_output_fill_budget() {
         None,
     );
     for seq in 0..3u128 {
-        mixer.handle_incoming(id, AudioChunk::new(seq, vec![0.4; 960]), 2);
+        mixer.handle_incoming(
+            id,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
+        );
     }
     for seq in 3..13u128 {
         let mut out = vec![0f32; 960];
@@ -226,7 +229,10 @@ fn resampled_output_fill_budget() {
             assert!(s.is_finite());
             assert!(s.abs() <= 1.0 + 1e-6);
         }
-        mixer.handle_incoming(id, AudioChunk::new(seq, vec![0.4; 960]), 2);
+        mixer.handle_incoming(
+            id,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
+        );
     }
     let snap = mixer.metrics_snapshot();
     assert_eq!(
@@ -244,9 +250,7 @@ fn resampled_output_fill_budget() {
 #[tokio::test]
 async fn broadcast_lag_records_gap() {
     let res = tokio::time::timeout(Duration::from_secs(15), async {
-        let hub = Arc::new(AudioInputHub::from_source(SineSource::new_amp(
-            48000, 2, 440.0, 0.5,
-        )));
+        let hub = Arc::new(hub_from_source(SineSource::new_amp(48000, 2, 440.0, 0.5)));
         let mut lagging = hub.subscribe();
         tokio::time::sleep(Duration::from_millis(600)).await;
         let first = tokio::time::timeout(Duration::from_secs(2), lagging.recv())
@@ -275,8 +279,14 @@ async fn broadcast_lag_records_gap() {
             Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
             None,
         );
-        mixer.handle_incoming(id, AudioChunk::new(jumped_seq, vec![0.1; 960]), 2);
-        mixer.handle_incoming(id, AudioChunk::new(0, vec![0.1; 960]), 2);
+        mixer.handle_incoming(
+            id,
+            AudioChunk::new(jumped_seq, AudioFormat::new(2, 48000), vec![0.1; 960]),
+        );
+        mixer.handle_incoming(
+            id,
+            AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.1; 960]),
+        );
         let snap = mixer.metrics_snapshot();
         assert!(
             snap.gap_detected > 0,

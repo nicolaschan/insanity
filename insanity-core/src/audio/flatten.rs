@@ -57,8 +57,12 @@ mod tests {
     fn flattens_chunks_in_order() {
         let mut flattener = ChunkFlattener::new(AudioFormat::new(2, 48000));
         assert!(flattener.is_empty());
-        flattener.push_chunk(AudioChunk::new(0, vec![0.1, 0.2]));
-        flattener.push_chunk(AudioChunk::new(1, vec![0.3]));
+        flattener.push_chunk(AudioChunk::new(
+            0,
+            AudioFormat::new(2, 48000),
+            vec![0.1, 0.2],
+        ));
+        flattener.push_chunk(AudioChunk::new(1, AudioFormat::new(2, 48000), vec![0.3]));
         assert_eq!(flattener.len(), 3);
         assert_eq!(flattener.next_sync(), Some(0.1));
         assert_eq!(flattener.next_sync(), Some(0.2));

@@ -1,7 +1,8 @@
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
+use insanity_native_tui_app::audio::AudioMixer;
+use insanity_native_tui_app::audio_test_support::hub_from_source;
 use std::sync::{Arc, atomic::AtomicUsize};
 
 struct SineSource {
@@ -42,7 +43,7 @@ impl SyncSampleSource for SineSource {
 async fn hub_fanout_same_chunk() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 2, 440.0);
-        let hub = Arc::new(AudioInputHub::from_source(src));
+        let hub = Arc::new(hub_from_source(src));
         let mut rx1 = hub.subscribe();
         let mut rx2 = hub.subscribe();
         let mut rx3 = hub.subscribe();
@@ -72,7 +73,7 @@ async fn hub_fanout_same_chunk() {
 async fn hub_mute_skips_send() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 2, 440.0);
-        let hub = AudioInputHub::from_source(src);
+        let hub = hub_from_source(src);
         hub.set_muted(true);
         let mut rx = hub.subscribe();
         // should timeout if muted
@@ -97,10 +98,10 @@ fn mixer_sum_and_clip() {
     let id2 = uuid::Uuid::new_v4();
     mixer.add_peer(id1, v1, d1, None);
     mixer.add_peer(id2, v2, d2, None);
-    let chunk1 = AudioChunk::new(0, vec![0.6f32; 960]);
-    let chunk2 = AudioChunk::new(0, vec![0.6f32; 960]);
-    mixer.handle_incoming(id1, chunk1, 2);
-    mixer.handle_incoming(id2, chunk2, 2);
+    let chunk1 = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.6f32; 960]);
+    let chunk2 = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.6f32; 960]);
+    mixer.handle_incoming(id1, chunk1);
+    mixer.handle_incoming(id2, chunk2);
     let mut out = vec![0f32; 960];
     mixer.fill_buffer(&mut out);
     // sum 1.2 clipped to 1.0
@@ -116,8 +117,8 @@ fn mixer_per_peer_volume() {
     let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v.clone(), d, None);
-    let chunk = AudioChunk::new(0, vec![1.0f32; 960]);
-    mixer.handle_incoming(id, chunk, 2);
+    let chunk = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0f32; 960]);
+    mixer.handle_incoming(id, chunk);
     let mut out = vec![0f32; 10];
     mixer.fill_buffer(&mut out);
     // volume 50 -> ~0.289
@@ -144,10 +145,10 @@ fn mixer_denoise_before_mix() {
     let noisy: Vec<f32> = (0..960)
         .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
         .collect();
-    let c1 = AudioChunk::new(0, noisy.clone());
-    let c2 = AudioChunk::new(0, noisy.clone());
-    mixer.handle_incoming(id1, c1, 2);
-    mixer.handle_incoming(id2, c2, 2);
+    let c1 = AudioChunk::new(0, AudioFormat::new(2, 48000), noisy.clone());
+    let c2 = AudioChunk::new(0, AudioFormat::new(2, 48000), noisy.clone());
+    mixer.handle_incoming(id1, c1);
+    mixer.handle_incoming(id2, c2);
     // just verify both peers store without panic and fill produces something mixable
     let mut out = vec![0f32; 10];
     mixer.fill_buffer(&mut out);
@@ -161,7 +162,10 @@ fn mixer_master_volume() {
     let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(id, AudioChunk::new(0, vec![1.0; 960]), 2);
+    mixer.handle_incoming(
+        id,
+        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0; 960]),
+    );
     mixer.set_master_volume(50);
     let mut out = vec![0f32; 10];
     mixer.fill_buffer(&mut out);
@@ -184,7 +188,10 @@ fn mixer_zero_peers_silence() {
     let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id = uuid::Uuid::new_v4();
     mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(id, AudioChunk::new(0, vec![0.5; 960]), 2);
+    mixer.handle_incoming(
+        id,
+        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.5; 960]),
+    );
     mixer.remove_peer(&id);
     let mut out2 = vec![0f32; 10];
     mixer.fill_buffer(&mut out2);
@@ -201,7 +208,10 @@ fn mixer_many_peers_clipping() {
         let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
         let id = uuid::Uuid::new_v4();
         mixer.add_peer(id, v, d, None);
-        mixer.handle_incoming(id, AudioChunk::new(0, vec![0.2; 960]), 2);
+        mixer.handle_incoming(
+            id,
+            AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.2; 960]),
+        );
     }
     let mut out = vec![0f32; 960];
     mixer.fill_buffer(&mut out);
@@ -221,7 +231,10 @@ fn mixer_volume_extremes() {
     let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id0 = uuid::Uuid::new_v4();
     mixer.add_peer(id0, v0, d, None);
-    mixer.handle_incoming(id0, AudioChunk::new(0, vec![1.0; 960]), 2);
+    mixer.handle_incoming(
+        id0,
+        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0; 960]),
+    );
     let mut out = vec![0f32; 10];
     mixer.fill_buffer(&mut out);
     for s in out.iter() {
@@ -234,7 +247,10 @@ fn mixer_volume_extremes() {
     let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
     let id999 = uuid::Uuid::new_v4();
     mixer2.add_peer(id999, v999, d2, None);
-    mixer2.handle_incoming(id999, AudioChunk::new(0, vec![1.0; 960]), 2);
+    mixer2.handle_incoming(
+        id999,
+        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0; 960]),
+    );
     let mut out2 = vec![0f32; 10];
     mixer2.fill_buffer(&mut out2);
     for s in out2.iter() {

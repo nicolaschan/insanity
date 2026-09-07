@@ -73,7 +73,11 @@ impl AudioDecoder for OpusDecoder {
         {
             return None;
         }
-        Some(AudioChunk::new(frame.sequence_number, buf))
+        Some(AudioChunk::new(
+            frame.sequence_number,
+            frame.format.clone(),
+            buf,
+        ))
     }
 }
 
@@ -88,7 +92,7 @@ mod tests {
     fn opus_roundtrip_preserves_shape() {
         let mut encoder = OpusEncoder::new(48000, 2).expect("encoder");
         let mut decoder = OpusDecoder::new(48000, 2).expect("decoder");
-        let chunk = AudioChunk::new(5, vec![0.4f32; 960]);
+        let chunk = AudioChunk::new(5, AudioFormat::new(2, 48000), vec![0.4f32; 960]);
         let frame = encoder.encode(&chunk).expect("encode");
         assert_eq!(frame.sequence_number, 5);
         assert_eq!(frame.codec, AudioCodec::Opus);

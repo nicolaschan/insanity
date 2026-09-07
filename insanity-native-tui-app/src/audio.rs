@@ -20,7 +20,7 @@ fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> MutexGuard<'a, T> {
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::AudioChunk;
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource, Rechunker};
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
@@ -32,9 +32,9 @@ use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::cpal::stream_receiver::CpalStreamReceiver;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
-use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, MAX_VOLUME};
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE, MAX_VOLUME};
 use insanity_core::loudness::calculate_loudness;
-use rubato_audio_source::ResampledAudioSource;
+use rubato_audio_source::{ResampledAudioSource, ResampledChunkSource};
 
 const UNKNOWN_DEVICE_NAME: &str = "unknown device";
 
@@ -66,7 +66,7 @@ pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat,
         find_stereo_input(range).ok_or_else(|| anyhow::anyhow!("No supported input config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = std::cmp::min(SampleRate(48000), max);
+    let sample_rate = std::cmp::min(SampleRate(AUDIO_SAMPLE_RATE), max);
     let buffer_size = match cfg_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -87,7 +87,7 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
         find_stereo_output(range).ok_or_else(|| anyhow::anyhow!("No supported output config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = std::cmp::min(SampleRate(48000), max);
+    let sample_rate = std::cmp::min(SampleRate(AUDIO_SAMPLE_RATE), max);
     let buffer_size = match cfg_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -171,105 +171,75 @@ impl AudioInputHub {
     }
 
     pub fn from_device(device: Device) -> Self {
-        let (btx, _) = broadcast::channel(32);
-        let muted = Arc::new(AtomicBool::new(false));
-        let muted_clone = muted.clone();
-        let btx_clone = btx.clone();
-
-        // Synchronously probe input device to determine correct channel count for the encoder.
-        // Fallback to stereo if no device.
-        let initial_channels = if let Ok((_fmt, cfg)) = get_input_config(&device) {
-            cfg.channels
-        } else {
-            AUDIO_CHANNELS
+        let channels = match get_input_config(&device) {
+            Ok((_, cfg)) => cfg.channels,
+            Err(_) => AUDIO_CHANNELS,
         };
         let device_name = device.name().unwrap_or(UNKNOWN_DEVICE_NAME.into());
-
-        // spawn task that captures single input and resamples to 48000
-        tokio::spawn(async move {
-            let Some(receiver): Option<CpalStreamReceiver> = device.try_into().ok() else {
-                // no input device: send silence periodically so senders don't block forever
-                let mut next_seq: u128 = 0;
-                let silence: Arc<Vec<f32>> =
-                    Arc::new(vec![0.0f32; AUDIO_CHUNK_SIZE * AUDIO_CHANNELS as usize]);
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    let seq = next_seq;
-                    next_seq += 1;
-                    if muted_clone.load(Ordering::Relaxed) {
-                        continue;
-                    }
-                    let _ = btx_clone.send((seq, silence.clone()));
-                }
-            };
-            let channels = receiver.format().channel_count;
-            let mut resampled = ResampledAudioSource::new(receiver, 48000, AUDIO_CHUNK_SIZE);
-            let mut next_seq: u128 = 0;
-            loop {
-                let mut chunk = Vec::with_capacity(AUDIO_CHUNK_SIZE * channels as usize);
-                for _ in 0..AUDIO_CHUNK_SIZE * channels as usize {
-                    if let Some(s) = resampled.next().await {
-                        chunk.push(s);
-                    } else {
-                        return;
-                    }
-                }
-                let seq = next_seq;
-                next_seq += 1;
-                if muted_clone.load(Ordering::Relaxed) {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    continue;
-                }
-                let _ = btx_clone.send((seq, Arc::new(chunk)));
-            }
-        });
-
-        Self {
-            tx: btx,
-            muted,
-            device_name,
-            channels: initial_channels,
+        match CpalStreamReceiver::try_from(device) {
+            Ok(receiver) => Self::spawn(receiver, channels, device_name),
+            Err(_) => Self::silent(device_name),
         }
     }
 
-    // test seam: single input from any SampleSource
-    pub fn from_source<R>(source: R) -> Self
+    /// Hub over any chunk source. Output is `channels` wide at 48kHz.
+    pub fn from_chunk_source<R>(source: R, channels: u16) -> Self
     where
-        R: SampleSource + Send + Sync + 'static,
+        R: ChunkSource + Send + 'static,
     {
-        let (btx, _) = broadcast::channel(32);
+        Self::spawn(source, channels, UNKNOWN_DEVICE_NAME.into())
+    }
+
+    fn spawn<R>(source: R, channels: u16, device_name: String) -> Self
+    where
+        R: ChunkSource + Send + 'static,
+    {
+        let (tx, _) = broadcast::channel(32);
         let muted = Arc::new(AtomicBool::new(false));
-        let muted_clone = muted.clone();
-        let btx_clone = btx.clone();
-        let channels = source.format().channel_count;
+        let hub = Self {
+            tx: tx.clone(),
+            muted: muted.clone(),
+            device_name,
+            channels,
+        };
         tokio::spawn(async move {
-            let mut resampled = ResampledAudioSource::new(source, 48000, AUDIO_CHUNK_SIZE);
+            let resampled = ResampledChunkSource::new(source, AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
+            let mut chunks = Rechunker::new(resampled, AUDIO_CHUNK_SIZE);
             let mut next_seq: u128 = 0;
-            loop {
-                let mut chunk = Vec::with_capacity(AUDIO_CHUNK_SIZE * channels as usize);
-                for _ in 0..AUDIO_CHUNK_SIZE * channels as usize {
-                    if let Some(s) = resampled.next().await {
-                        chunk.push(s);
-                    } else {
-                        return;
-                    }
-                }
+            while let Some(chunk) = chunks.next_chunk().await {
+                let chunk = convert_to_mixer_channels(chunk, channels);
                 let seq = next_seq;
                 next_seq += 1;
-                if muted_clone.load(Ordering::Relaxed) {
-                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                    continue;
+                if !muted.load(Ordering::Relaxed) {
+                    let _ = tx.send((seq, Arc::new(chunk.audio_data)));
                 }
-                let _ = btx_clone.send((seq, Arc::new(chunk)));
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         });
-        Self {
-            tx: btx,
-            muted,
-            device_name: UNKNOWN_DEVICE_NAME.into(),
-            channels,
-        }
+        hub
+    }
+
+    fn silent(device_name: String) -> Self {
+        let (tx, _) = broadcast::channel(32);
+        let muted = Arc::new(AtomicBool::new(false));
+        let hub = Self {
+            tx: tx.clone(),
+            muted: muted.clone(),
+            device_name,
+            channels: AUDIO_CHANNELS,
+        };
+        tokio::spawn(async move {
+            let silence = Arc::new(vec![0.0f32; AUDIO_CHUNK_SIZE * AUDIO_CHANNELS as usize]);
+            let mut next_seq: u128 = 0;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                let seq = next_seq;
+                next_seq += 1;
+                if !muted.load(Ordering::Relaxed) {
+                    let _ = tx.send((seq, silence.clone()));
+                }
+            }
+        });
+        hub
     }
 
     pub fn name(&self) -> &str {
@@ -450,7 +420,7 @@ fn build_output_stream(
 
 impl AudioMixer {
     pub fn new_no_device() -> Self {
-        Self::new_no_device_with_format(48000, AUDIO_CHANNELS)
+        Self::new_no_device_with_format(AUDIO_SAMPLE_RATE, AUDIO_CHANNELS)
     }
 
     pub fn new_no_device_with_format(sample_rate: u32, channels: u16) -> Self {
@@ -519,18 +489,18 @@ impl AudioMixer {
                         .unwrap_or(false);
                     if !play_ok {
                         log::warn!("Failed to start output stream, falling back to dummy");
-                        (SampleRate(48000), AUDIO_CHANNELS, None)
+                        (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
                     } else {
                         (sr, ch, Some(wrapper))
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to get output config: {e}, falling back to dummy");
-                    (SampleRate(48000), AUDIO_CHANNELS, None)
+                    (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
                 }
             }
         } else {
-            (SampleRate(48000), AUDIO_CHANNELS, None)
+            (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
         };
 
         Self {
@@ -556,8 +526,11 @@ impl AudioMixer {
             // Reconnect
             lock(&peer.chunk_buffer, "chunk_buffer").clear();
             let mixer_channels = self.channels;
-            let audio_receiver =
-                RealtimeAudioSource::new(peer.chunk_buffer.clone(), 48000, mixer_channels);
+            let audio_receiver = RealtimeAudioSource::new(
+                peer.chunk_buffer.clone(),
+                AUDIO_SAMPLE_RATE,
+                mixer_channels,
+            );
             peer.audio_receiver = Mutex::new(ResampledAudioSource::new(
                 audio_receiver,
                 self.sample_rate.0,
@@ -574,7 +547,8 @@ impl AudioMixer {
         }
         let chunk_buffer = Arc::new(Mutex::new(JitterBuffer::new(self.jitter_chunks)));
         let mixer_channels = self.channels;
-        let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone(), 48000, mixer_channels);
+        let audio_receiver =
+            RealtimeAudioSource::new(chunk_buffer.clone(), AUDIO_SAMPLE_RATE, mixer_channels);
         let audio_receiver =
             ResampledAudioSource::new(audio_receiver, self.sample_rate.0, AUDIO_CHUNK_SIZE);
         let state = PeerState {
@@ -596,11 +570,8 @@ impl AudioMixer {
         lock(&self.state, "mixer state").peers.remove(id);
     }
 
-    pub fn handle_incoming(&self, id: uuid::Uuid, mut chunk: AudioChunk, src_channels: u16) {
-        // Convert sender channels to mixer channels first (passthrough when
-        // equal; mono->stereo dup / stereo->mono (L+R)/2 only on mismatch),
-        // so denoise/gain/buffer all operate in mixer channel space.
-        chunk = convert_to_mixer_channels(chunk, src_channels, self.channels);
+    pub fn handle_incoming(&self, id: uuid::Uuid, mut chunk: AudioChunk) {
+        chunk = convert_to_mixer_channels(chunk, self.channels);
         let mut guard = lock(&self.state, "mixer state");
         let Some(peer) = guard.peers.get_mut(&id) else {
             return;
@@ -610,7 +581,7 @@ impl AudioMixer {
             DenoiseSelection::None => {}
             DenoiseSelection::Nnnoiseless => {
                 let mut d = lock(&peer.nn_denoiser, "nn_denoiser");
-                chunk = d.denoise_chunk(&chunk, self.channels);
+                chunk = d.denoise_chunk(&chunk);
             }
         }
 

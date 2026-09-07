@@ -1,7 +1,7 @@
 //! Shared e2e audio harness: virtual insanity nodes + waveform assertions.
 //!
 //! Each [`VirtualNode`] is one insanity program with a synthetic mic
-//! ([`SineSource`] via [`AudioInputHub::from_source`]) and a virtual speaker
+//! ([`SineSource`] via [`PacedChunkSource`]) and a virtual speaker
 //! ([`AudioMixer::new_no_device`]). [`transfer_tick`] moves one 10ms chunk
 //! along a directed edge through the **production** pipeline
 //! (hub seq → Opus encode → bincode round-trip → Opus decode →
@@ -13,10 +13,11 @@
 
 use crate::audio::{AudioInputHub, AudioMixer};
 use crate::clerver::{decode_frame_to_chunk, encode_hub_chunk};
+use crate::processor::{AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE};
 use crate::protocol::ProtocolMessage;
 use insanity_core::audio::{
     AudioFormat,
-    chunk::AudioChunk,
+    chunk::{AudioChunk, ChunkSource, SampleChunker},
     codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk},
     sample::{SampleSource, SyncSampleSource},
 };
@@ -27,6 +28,38 @@ use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
 use tokio::sync::broadcast;
+
+/// Sample source cut into 10ms chunks, sleeping 10ms after each one. The
+/// sleep drifts the same way the harness speaker loops do, keeping the
+/// producer and consumer rates matched.
+pub struct PacedChunkSource<S> {
+    inner: SampleChunker<S>,
+}
+
+impl<S: SampleSource + Send> PacedChunkSource<S> {
+    pub fn new(source: S) -> Self {
+        PacedChunkSource {
+            inner: SampleChunker::new(source, AUDIO_CHUNK_SIZE),
+        }
+    }
+}
+
+impl<S: SampleSource + Send> ChunkSource for PacedChunkSource<S> {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        let chunk = self.inner.next_chunk().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        chunk
+    }
+}
+
+/// Hub fed by a paced sample source, keeping the source's channel count.
+pub fn hub_from_source<S>(source: S) -> AudioInputHub
+where
+    S: SampleSource + Send + 'static,
+{
+    let channels = source.format().channel_count;
+    AudioInputHub::from_chunk_source(PacedChunkSource::new(source), channels)
+}
 
 pub const PULL_TIMEOUT: Duration = Duration::from_millis(200);
 pub const TRANSFER_TIMEOUT: Duration = Duration::from_millis(500);
@@ -111,22 +144,20 @@ impl VirtualNode {
     }
 
     pub fn with_amp(_name: &str, freq: f32, amp: f32) -> Self {
-        Self::with_source(_name, SineSource::new_amp(48000, 2, freq, amp))
+        Self::with_source(_name, SineSource::new_amp(AUDIO_SAMPLE_RATE, 2, freq, amp))
     }
 
     /// Register an inbound peer (creates jitter/denoise/volume state).
     pub fn with_source<S>(_name: &str, source: S) -> Self
     where
-        S: SampleSource + Send + Sync + 'static,
+        S: SampleSource + Send + 'static,
     {
-        // Source must be stereo; any sample rate is OK (the hub resamples
-        // to 48kHz, and the test codec is fixed Stereo/48000).
         debug_assert_eq!(
             source.format().channel_count,
             2,
             "harness codec is stereo-only"
         );
-        let hub = Arc::new(AudioInputHub::from_source(source));
+        let hub = Arc::new(hub_from_source(source));
         Self {
             hub,
             hub_taps: HashMap::new(),
@@ -156,7 +187,7 @@ impl VirtualNode {
         );
         self.decoders.insert(
             peer_name.to_string(),
-            Decoder::new(48000, Channels::Stereo).expect("test decoder"),
+            Decoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo).expect("test decoder"),
         );
     }
 
@@ -166,7 +197,8 @@ impl VirtualNode {
             .insert(peer_name.to_string(), self.hub.subscribe());
         self.encoders.insert(
             peer_name.to_string(),
-            Encoder::new(48000, Channels::Stereo, Application::Audio).expect("test encoder"),
+            Encoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo, Application::Audio)
+                .expect("test encoder"),
         );
     }
 
@@ -220,7 +252,7 @@ impl VirtualNode {
             Some(id) => *id,
             None => return false,
         };
-        self.mixer.handle_incoming(id, out, channels);
+        self.mixer.handle_incoming(id, out);
         true
     }
 }
@@ -394,6 +426,7 @@ impl AudioDecoder for PassthroughDecoder {
         }
         Some(AudioChunk::new(
             frame.sequence_number,
+            frame.format.clone(),
             frame
                 .payload
                 .as_chunks::<4>()
@@ -417,7 +450,7 @@ mod tests {
         let format = AudioFormat::new(2, 48000);
         let mut encoder = PassthroughEncoder::new(format.clone());
         let mut decoder = PassthroughDecoder;
-        let chunk = AudioChunk::new(3, vec![0.5, -0.25, 0.0, 1.0]);
+        let chunk = AudioChunk::new(3, format.clone(), vec![0.5, -0.25, 0.0, 1.0]);
         let frame = encoder.encode(&chunk).expect("encode");
         assert_eq!(frame.sequence_number, 3);
         let out = decoder.decode(&frame).expect("decode");

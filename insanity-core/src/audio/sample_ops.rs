@@ -23,16 +23,9 @@ pub fn interleave_channels(channels: &[Vec<f32>]) -> Vec<f32> {
     samples
 }
 
-pub fn convert_to_mixer_channels(
-    mut chunk: AudioChunk,
-    src_channels: u16,
-    mixer_channels: u16,
-) -> AudioChunk {
-    if src_channels == mixer_channels
-        || src_channels == 0
-        || mixer_channels == 0
-        || chunk.audio_data.is_empty()
-    {
+pub fn convert_to_mixer_channels(mut chunk: AudioChunk, mixer_channels: u16) -> AudioChunk {
+    let src_channels = chunk.format.channel_count;
+    if src_channels == mixer_channels || src_channels == 0 || mixer_channels == 0 {
         return chunk;
     }
     let frames = chunk.audio_data.len() / src_channels as usize;
@@ -53,6 +46,7 @@ pub fn convert_to_mixer_channels(
         }
     }
     chunk.audio_data = out;
+    chunk.format.channel_count = mixer_channels;
     chunk
 }
 

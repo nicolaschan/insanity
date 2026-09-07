@@ -1,8 +1,8 @@
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
+use insanity_native_tui_app::audio::AudioMixer;
 use insanity_native_tui_app::audio_test_support::{
-    SineSource, energy_ratio, loudness, max_normalized_xcorr,
+    SineSource, energy_ratio, hub_from_source, loudness, max_normalized_xcorr,
 };
 use insanity_native_tui_app::clerver::run_clerver;
 use insanity_native_tui_app::protocol::ProtocolMessage;
@@ -50,12 +50,8 @@ async fn connected_peers_exchange_audio() {
         .expect("connect timed out");
         let (session_a, session_b) = (session_a.expect("connect a"), session_b.expect("connect b"));
 
-        let hub_a = Arc::new(AudioInputHub::from_source(SineSource::new_amp(
-            48000, 2, 440.0, 0.5,
-        )));
-        let hub_b = Arc::new(AudioInputHub::from_source(SineSource::new_amp(
-            48000, 2, 880.0, 0.5,
-        )));
+        let hub_a = Arc::new(hub_from_source(SineSource::new_amp(48000, 2, 440.0, 0.5)));
+        let hub_b = Arc::new(hub_from_source(SineSource::new_amp(48000, 2, 880.0, 0.5)));
         let mixer_a = Arc::new(AudioMixer::new_no_device());
         let mixer_b = Arc::new(AudioMixer::new_no_device());
         for (mixer, id) in [(&mixer_a, peer_id), (&mixer_b, peer_id)] {

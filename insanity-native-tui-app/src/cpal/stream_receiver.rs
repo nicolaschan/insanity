@@ -3,23 +3,36 @@ use cpal::{
     Device, Sample, SampleFormat, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
-use insanity_core::audio::{AudioFormat, sample::SampleSource};
+use insanity_core::audio::{
+    AudioFormat,
+    chunk::{AudioChunk, ChunkSource},
+};
 
 use crate::audio::get_input_config;
 
 pub struct CpalStreamReceiver {
     _stream: send_safe::SendWrapperThread<Option<Stream>>,
-    receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
-    sample_rate: u32,
-    channels: u16,
+    receiver: tokio::sync::mpsc::UnboundedReceiver<Vec<f32>>,
+    format: AudioFormat,
+    next_sequence: u128,
 }
 
-impl SampleSource for CpalStreamReceiver {
-    async fn next(&mut self) -> Option<f32> {
-        self.receiver.recv().await
+impl CpalStreamReceiver {
+    pub fn format(&self) -> AudioFormat {
+        self.format.clone()
     }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.channels, self.sample_rate)
+}
+
+impl ChunkSource for CpalStreamReceiver {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        let audio_data = self.receiver.recv().await?;
+        let sequence_number = self.next_sequence;
+        self.next_sequence += 1;
+        Some(AudioChunk::new(
+            sequence_number,
+            self.format.clone(),
+            audio_data,
+        ))
     }
 }
 
@@ -68,8 +81,8 @@ pub fn make_single_input(device: Device) -> Result<CpalStreamReceiver, anyhow::E
     Ok(CpalStreamReceiver {
         _stream: wrapper,
         receiver: rx,
-        sample_rate: cfg.sample_rate.0,
-        channels: cfg.channels,
+        format: AudioFormat::new(cfg.channels, cfg.sample_rate.0),
+        next_sequence: 0,
     })
 }
 
@@ -77,7 +90,7 @@ fn setup_input_stream(
     sample_format: &SampleFormat,
     config: &StreamConfig,
     device: &Device,
-    sender: tokio::sync::mpsc::UnboundedSender<f32>,
+    sender: tokio::sync::mpsc::UnboundedSender<Vec<f32>>,
 ) -> anyhow::Result<Stream> {
     match sample_format {
         SampleFormat::F32 => run_input::<f32>(config, device, sender),
@@ -89,16 +102,14 @@ fn setup_input_stream(
 fn run_input<T: Sample>(
     config: &StreamConfig,
     device: &Device,
-    sender: tokio::sync::mpsc::UnboundedSender<f32>,
+    sender: tokio::sync::mpsc::UnboundedSender<Vec<f32>>,
 ) -> anyhow::Result<Stream> {
     let err_fn = |err| eprintln!("input stream error: {err}");
     device
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                for s in data.iter() {
-                    let _ = sender.send(s.to_f32());
-                }
+                let _ = sender.send(data.iter().map(Sample::to_f32).collect());
             },
             err_fn,
         )
