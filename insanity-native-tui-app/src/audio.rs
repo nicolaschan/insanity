@@ -149,6 +149,7 @@ impl SyncSampleSource for RealtimeAudioSource {
 // Single input hub
 
 /// Yields a silent stereo chunk every 10ms when no input device exists.
+#[derive(Default)]
 struct SilentChunkSource {
     next_sequence: u128,
 }
@@ -191,7 +192,7 @@ impl AudioInputHub {
         let device_name = device.name().unwrap_or(UNKNOWN_DEVICE_NAME.into());
         match CpalStreamReceiver::try_from(device) {
             Ok(receiver) => Self::spawn(receiver, device_name),
-            Err(_) => Self::spawn(SilentChunkSource { next_sequence: 0 }, device_name),
+            Err(_) => Self::spawn(SilentChunkSource::default(), device_name),
         }
     }
 
