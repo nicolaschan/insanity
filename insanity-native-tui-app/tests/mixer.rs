@@ -11,15 +11,13 @@ use std::sync::{Arc, atomic::AtomicUsize};
 struct SineSource {
     phase: f32,
     sr: u32,
-    ch: u16,
     freq: f32,
 }
 impl SineSource {
-    fn new(sr: u32, ch: u16, freq: f32) -> Self {
+    fn new(sr: u32, freq: f32) -> Self {
         Self {
             phase: 0.0,
             sr,
-            ch,
             freq,
         }
     }
@@ -29,9 +27,6 @@ impl SampleSource for SineSource {
         let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.5;
         self.phase = (self.phase + self.freq / self.sr as f32) % 1.0;
         Some(v)
-    }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
     }
 }
 impl SyncSampleSource for SineSource {
@@ -45,8 +40,8 @@ impl SyncSampleSource for SineSource {
 #[tokio::test]
 async fn hub_fanout_same_chunk() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let src = SineSource::new(48000, 2, 440.0);
-        let hub = Arc::new(hub_from_source(src));
+        let src = SineSource::new(48000, 440.0);
+        let hub = Arc::new(hub_from_source(src, AudioFormat::new(2, 48000)));
         let mut rx1 = hub.subscribe();
         let mut rx2 = hub.subscribe();
         let mut rx3 = hub.subscribe();
@@ -77,8 +72,8 @@ async fn hub_fanout_same_chunk() {
 #[tokio::test]
 async fn hub_mute_skips_send() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        let src = SineSource::new(48000, 2, 440.0);
-        let hub = hub_from_source(src);
+        let src = SineSource::new(48000, 440.0);
+        let hub = hub_from_source(src, AudioFormat::new(2, 48000));
         hub.set_muted(true);
         let mut rx = hub.subscribe();
         // should timeout if muted

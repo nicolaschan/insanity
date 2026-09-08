@@ -18,12 +18,13 @@ use crate::protocol::ProtocolMessage;
 use insanity_core::audio::{
     AudioFormat,
     chunk::{AudioChunk, ChunkSource, SampleChunker},
-    codec::AudioFrame,
+    codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk},
     sample::{SampleSource, SyncSampleSource},
 };
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
 use opus::{Channels, Decoder};
+use rubato_audio_source::ResampledAudioSource;
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
@@ -37,26 +38,32 @@ pub struct PacedChunkSource<S> {
 }
 
 impl<S: SampleSource + Send> PacedChunkSource<S> {
-    pub fn new(source: S) -> Self {
+    pub fn new(source: S, format: AudioFormat) -> Self {
         PacedChunkSource {
-            inner: SampleChunker::new(source, AUDIO_CHUNK_SIZE),
+            inner: SampleChunker::new(source, AUDIO_CHUNK_SIZE, format),
         }
     }
 }
 
 impl<S: SampleSource + Send> ChunkSource for PacedChunkSource<S> {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        let chunk = self.inner.next_chunk().await;
+        let chunk = self.inner.next_chunk().await?;
         tokio::time::sleep(Duration::from_millis(10)).await;
-        chunk
+        Some(chunk)
     }
 }
 
-pub fn hub_from_source<S>(source: S) -> AudioInputHub
+pub fn hub_from_source<S>(source: S, format: AudioFormat) -> AudioInputHub
 where
-    S: SampleSource + Send + 'static,
+    S: SampleSource + Send + Sync + 'static,
 {
-    AudioInputHub::from_chunk_source(PacedChunkSource::new(source))
+    let resampled =
+        ResampledAudioSource::new(source, format.clone(), AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
+    let chunked = PacedChunkSource::new(
+        resampled,
+        AudioFormat::new(format.channel_count, AUDIO_SAMPLE_RATE),
+    );
+    AudioInputHub::from_chunk_source(chunked)
 }
 
 pub const PULL_TIMEOUT: Duration = Duration::from_millis(200);
@@ -77,17 +84,15 @@ pub fn mesh_timeout(ticks: usize, edges: usize) -> Duration {
 pub struct SineSource {
     phase: f32,
     sr: u32,
-    ch: u16,
     freq: f32,
     amp: f32,
 }
 
 impl SineSource {
-    pub fn new_amp(sr: u32, ch: u16, freq: f32, amp: f32) -> Self {
+    pub fn new_amp(sr: u32, freq: f32, amp: f32) -> Self {
         Self {
             phase: 0.0,
             sr,
-            ch,
             freq,
             amp,
         }
@@ -103,10 +108,6 @@ impl SineSource {
 impl SampleSource for SineSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
-    }
-
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
     }
 }
 
@@ -124,7 +125,7 @@ pub struct VirtualNode {
     decoders: HashMap<String, Decoder>,
     /// One hub broadcast receiver per outbound edge (mirrors production, where
     /// each peer connection holds its own `hub.subscribe()`).
-    hub_taps: HashMap<String, broadcast::Receiver<AudioFrame>>,
+    hub_taps: HashMap<String, broadcast::Receiver<EncodedChunk>>,
     /// Decodes the hub's frames locally to build `mic_history`.
     monitor: Decoder,
     /// Mic chunks sent so far, decoded at the sender, for reference.
@@ -141,20 +142,21 @@ impl VirtualNode {
     }
 
     pub fn with_amp(_name: &str, freq: f32, amp: f32) -> Self {
-        Self::with_source(_name, SineSource::new_amp(AUDIO_SAMPLE_RATE, 2, freq, amp))
+        let format = AudioFormat::new(2, AUDIO_SAMPLE_RATE);
+        Self::with_source(
+            _name,
+            SineSource::new_amp(AUDIO_SAMPLE_RATE, freq, amp),
+            format,
+        )
     }
 
     /// Register an inbound peer (creates jitter/denoise/volume state).
-    pub fn with_source<S>(_name: &str, source: S) -> Self
+    pub fn with_source<S>(_name: &str, source: S, format: AudioFormat) -> Self
     where
-        S: SampleSource + Send + 'static,
+        S: SampleSource + Send + Sync + 'static,
     {
-        debug_assert_eq!(
-            source.format().channel_count,
-            2,
-            "harness codec is stereo-only"
-        );
-        let hub = Arc::new(hub_from_source(source));
+        debug_assert_eq!(format.channel_count, 2, "harness codec is stereo-only");
+        let hub = Arc::new(hub_from_source(source, format));
         Self {
             hub,
             hub_taps: HashMap::new(),
@@ -215,7 +217,7 @@ impl VirtualNode {
             self.mic_history.extend(decoded.audio_data);
         }
         let mut buf = Vec::new();
-        ProtocolMessage::AudioFrame(frame)
+        ProtocolMessage::Encoded(frame)
             .write_to_stream(&mut buf)
             .await
             .ok()?;
@@ -223,7 +225,7 @@ impl VirtualNode {
     }
 
     pub async fn push_frame(&mut self, peer_name: &str, bytes: &[u8]) -> bool {
-        let Ok(ProtocolMessage::AudioFrame(frame)) =
+        let Ok(ProtocolMessage::Encoded(frame)) =
             ProtocolMessage::read_from_stream(&mut &bytes[..]).await
         else {
             return false;
@@ -379,4 +381,75 @@ pub fn goertzel_energy(samples: &[f32], freq: f32, sr: f32) -> f64 {
     let real = u1 * cw - u2;
     let imag = u1 * sw;
     real * real + imag * imag
+}
+
+pub struct PassthroughEncoder;
+
+impl AudioEncoder for PassthroughEncoder {
+    fn encode(&mut self, chunk: &AudioChunk) -> Option<EncodedChunk> {
+        let mut payload = Vec::with_capacity(chunk.audio_data.len() * 4);
+        for sample in chunk.audio_data.iter() {
+            payload.extend_from_slice(&sample.to_le_bytes());
+        }
+        Some(EncodedChunk {
+            sequence_number: chunk.sequence_number,
+            codec: AudioCodec::Raw,
+            payload,
+            format: chunk.format.clone(),
+        })
+    }
+}
+
+pub struct PassthroughDecoder;
+
+impl AudioDecoder for PassthroughDecoder {
+    fn decode(&mut self, frame: &EncodedChunk) -> Option<AudioChunk> {
+        if frame.codec != AudioCodec::Raw || !frame.payload.len().is_multiple_of(4) {
+            return None;
+        }
+        Some(AudioChunk::new(
+            frame.sequence_number,
+            frame.format.clone(),
+            frame
+                .payload
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
+                .collect(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PassthroughDecoder, PassthroughEncoder};
+    use insanity_core::audio::AudioFormat;
+    use insanity_core::audio::chunk::AudioChunk;
+    use insanity_core::audio::codec::{AudioDecoder, AudioEncoder};
+
+    #[test]
+    fn passthrough_codec_roundtrips() {
+        let format = AudioFormat::new(2, 48000);
+        let mut encoder = PassthroughEncoder;
+        let mut decoder = PassthroughDecoder;
+        let chunk = AudioChunk::new(3, format, vec![0.5, -0.25, 0.0, 1.0]);
+        let frame = encoder.encode(&chunk).expect("encode");
+        assert_eq!(frame.sequence_number, 3);
+        let out = decoder.decode(&frame).expect("decode");
+        assert_eq!(out, chunk);
+    }
+
+    #[test]
+    fn passthrough_decoder_rejects_non_raw() {
+        use insanity_core::audio::codec::{AudioCodec, EncodedChunk};
+        let mut decoder = PassthroughDecoder;
+        let frame = EncodedChunk {
+            sequence_number: 0,
+            codec: AudioCodec::Opus,
+            payload: vec![0, 1, 2, 3],
+            format: AudioFormat::new(2, 48000),
+        };
+        assert!(decoder.decode(&frame).is_none());
+    }
 }

@@ -12,18 +12,16 @@ use std::path::PathBuf;
 struct ChirpSource {
     n: u64,
     sr: u32,
-    ch: u16,
     amp: f32,
     total: u64,
     phase: f64,
 }
 
 impl ChirpSource {
-    fn new(sr: u32, ch: u16, amp: f32, total: u64) -> Self {
+    fn new(sr: u32, amp: f32, total: u64) -> Self {
         Self {
             n: 0,
             sr,
-            ch,
             amp,
             total,
             phase: 0.0,
@@ -42,9 +40,6 @@ impl SampleSource for ChirpSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
-    }
 }
 
 impl SyncSampleSource for ChirpSource {
@@ -56,18 +51,16 @@ impl SyncSampleSource for ChirpSource {
 struct AmSpeechSource {
     n: u64,
     sr: u32,
-    ch: u16,
     amp: f32,
     phase_a: f64,
     phase_b: f64,
 }
 
 impl AmSpeechSource {
-    fn new(sr: u32, ch: u16, amp: f32) -> Self {
+    fn new(sr: u32, amp: f32) -> Self {
         Self {
             n: 0,
             sr,
-            ch,
             amp,
             phase_a: 0.0,
             phase_b: 0.0,
@@ -91,9 +84,6 @@ impl SampleSource for AmSpeechSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
-    }
 }
 
 impl SyncSampleSource for AmSpeechSource {
@@ -104,19 +94,12 @@ impl SyncSampleSource for AmSpeechSource {
 
 struct NoiseSource {
     state: u64,
-    sr: u32,
-    ch: u16,
     amp: f32,
 }
 
 impl NoiseSource {
-    fn new(sr: u32, ch: u16, amp: f32, seed: u64) -> Self {
-        Self {
-            state: seed,
-            sr,
-            ch,
-            amp,
-        }
+    fn new(amp: f32, seed: u64) -> Self {
+        Self { state: seed, amp }
     }
     fn step(&mut self) -> f32 {
         self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -129,9 +112,6 @@ impl SampleSource for NoiseSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
-    }
 }
 
 impl SyncSampleSource for NoiseSource {
@@ -140,17 +120,11 @@ impl SyncSampleSource for NoiseSource {
     }
 }
 
-struct SilenceSource {
-    sr: u32,
-    ch: u16,
-}
+struct SilenceSource;
 
 impl SampleSource for SilenceSource {
     async fn next(&mut self) -> Option<f32> {
         Some(0.0)
-    }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
     }
 }
 
@@ -192,10 +166,20 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
         "sine440_05" => VirtualNode::new("a", 440.0),
         "sine880_05" => VirtualNode::new("a", 880.0),
         "sine440_025" => VirtualNode::with_amp("a", 440.0, 0.25),
-        "chirp" => VirtualNode::with_source("a", ChirpSource::new(48000, 2, 0.4, 40 * 960)),
-        "amspeech" => VirtualNode::with_source("a", AmSpeechSource::new(48000, 2, 0.5)),
-        "noise" => VirtualNode::with_source("a", NoiseSource::new(48000, 2, 0.4, seed)),
-        "silence" => VirtualNode::with_source("a", SilenceSource { sr: 48000, ch: 2 }),
+        "chirp" => VirtualNode::with_source(
+            "a",
+            ChirpSource::new(48000, 0.4, 40 * 960),
+            AudioFormat::new(2, 48000),
+        ),
+        "amspeech" => VirtualNode::with_source(
+            "a",
+            AmSpeechSource::new(48000, 0.5),
+            AudioFormat::new(2, 48000),
+        ),
+        "noise" => {
+            VirtualNode::with_source("a", NoiseSource::new(0.4, seed), AudioFormat::new(2, 48000))
+        }
+        "silence" => VirtualNode::with_source("a", SilenceSource, AudioFormat::new(2, 48000)),
         _ => VirtualNode::with_amp("a", 440.0, 0.5),
     }
 }
@@ -203,7 +187,7 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
 fn make_pair(signal: &str, seed: u64) -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
     let mut a = make_sender(signal, seed);
-    let mut b = VirtualNode::with_source("b", SilenceSource { sr: 48000, ch: 2 });
+    let mut b = VirtualNode::with_source("b", SilenceSource, AudioFormat::new(2, 48000));
     a.add_outbound("b");
     b.add_inbound("a");
     nodes.insert("a".to_string(), a);
