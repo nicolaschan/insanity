@@ -36,7 +36,7 @@ pub trait ChunkSink {
     fn push_chunk(&mut self, chunk: AudioChunk);
 }
 
-pub struct SampleChunker<S> {
+pub struct SampleChunker<S: SampleSource + Send> {
     source: S,
     frames: usize,
     format: AudioFormat,

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
     Arc, Mutex, MutexGuard,
-    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
+    atomic::{AtomicU32, AtomicUsize, Ordering},
 };
 
 /// Lock a mutex, recovering from poisoning with an error log instead of
@@ -23,13 +23,16 @@ use cpal::{
     StreamConfig,
 };
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
+use insanity_core::audio::capture::{Capture, CaptureOutput, ChunkEncoder};
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::codec::{AudioEncoder, EncodedChunk};
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::sample_ops::convert_to_mixer_channels;
-use insanity_core::audio::transform::volume_multiplier;
+use insanity_core::audio::transform::{
+    ChannelMap, ChunkTransform, Mute, MuteControl, volume_multiplier,
+};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
@@ -39,7 +42,7 @@ use crate::cpal::stream_receiver::make_single_input;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
 use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE, MAX_VOLUME};
 use insanity_core::loudness::calculate_loudness;
-use rubato_audio_source::ResampledAudioSource;
+use rubato_audio_source::RubatoResampler;
 
 const UNKNOWN_DEVICE_NAME: &str = "unknown device";
 
@@ -163,7 +166,7 @@ impl ChunkSource for SilentChunkSource {
 /// chunk, including muted ones, which are not sent.
 pub struct AudioInputHub {
     tx: broadcast::Sender<EncodedChunk>,
-    muted: Arc<AtomicBool>,
+    mute_control: Arc<MuteControl>,
     device_name: String,
 }
 
@@ -187,22 +190,28 @@ impl AudioInputHub {
             .unwrap_or(UNKNOWN_DEVICE_NAME.into());
         match make_single_input(device) {
             Ok((receiver, format)) => {
-                let resampled = ResampledAudioSource::new(
+                let resampled = RubatoResampler::new(
                     receiver,
                     format.clone(),
                     AUDIO_SAMPLE_RATE,
                     AUDIO_CHUNK_SIZE,
                 );
-                let chunked = SampleChunker::new(
+                let (mute, mute_control) = Mute::shared(false);
+                let transform = mute.chain(ChannelMap::capped(AUDIO_CHANNELS));
+                let capture = Capture::new(
                     resampled,
-                    AUDIO_CHUNK_SIZE,
                     AudioFormat::new(format.channel_count, AUDIO_SAMPLE_RATE),
+                    AUDIO_CHUNK_SIZE,
+                    transform,
+                    |format: &AudioFormat| {
+                        OpusEncoder::new(format.sample_rate, format.channel_count)
+                    },
                 );
-                Self::spawn(chunked, device_name)
+                Self::spawn_capture(capture, device_name, mute_control)
             }
             Err(e) => {
                 log::warn!("{e}");
-                Self::spawn(SilentChunkSource::default(), device_name)
+                Self::spawn_silent(device_name)
             }
         }
     }
@@ -211,43 +220,75 @@ impl AudioInputHub {
     where
         R: ChunkSource + Send + 'static,
     {
-        Self::spawn(source, UNKNOWN_DEVICE_NAME.into())
+        Self::spawn_chunk_source(source, UNKNOWN_DEVICE_NAME.into())
     }
 
-    fn spawn<R>(mut source: R, device_name: String) -> Self
+    fn spawn_silent(device_name: String) -> Self {
+        Self::spawn_chunk_source(SilentChunkSource::default(), device_name)
+    }
+
+    fn spawn_chunk_source<R>(mut source: R, device_name: String) -> Self
     where
         R: ChunkSource + Send + 'static,
     {
-        let (tx, _) = broadcast::channel(32);
-        let muted = Arc::new(AtomicBool::new(false));
-        let hub = Self {
-            tx: tx.clone(),
-            muted: muted.clone(),
-            device_name,
-        };
+        let (mute, mute_control) = Mute::shared(false);
+        let mut transform = mute.chain(ChannelMap::capped(AUDIO_CHANNELS));
+        let mut encoder = ChunkEncoder::new(Self::rebuild_opus, AUDIO_CHUNK_SIZE);
+        let (hub, tx) = Self::with_channel(device_name, mute_control);
         tokio::spawn(async move {
-            let mut encoder: Option<OpusEncoder> = None;
             while let Some(chunk) = source.next_chunk().await {
-                if muted.load(Ordering::Relaxed) || chunk.format.channel_count == 0 {
-                    continue;
-                }
-                let channels = chunk.format.channel_count.min(2);
-                let chunk = convert_to_mixer_channels(chunk, channels);
-                debug_assert_eq!(
-                    chunk.audio_data.len(),
-                    AUDIO_CHUNK_SIZE * chunk.format.channel_count as usize
-                );
-                if encoder.as_ref().map(OpusEncoder::format) != Some(&chunk.format) {
-                    encoder =
-                        OpusEncoder::new(chunk.format.sample_rate, chunk.format.channel_count);
-                }
-                let Some(frame) = encoder.as_mut().and_then(|e| e.encode(&chunk)) else {
+                let Some(chunk) = transform.transform(chunk) else {
                     continue;
                 };
-                let _ = tx.send(frame);
+                if let Some(frame) = encoder.encode_chunk(chunk) {
+                    let _ = tx.send(frame);
+                }
             }
         });
         hub
+    }
+
+    fn rebuild_opus(format: &AudioFormat) -> Option<OpusEncoder> {
+        OpusEncoder::new(format.sample_rate, format.channel_count)
+    }
+
+    fn spawn_capture<R, T, E, F>(
+        mut capture: Capture<R, T, E, F>,
+        device_name: String,
+        mute_control: Arc<MuteControl>,
+    ) -> Self
+    where
+        R: SampleSource + Send + 'static,
+        T: ChunkTransform + Send + 'static,
+        E: AudioEncoder + Send + 'static,
+        F: FnMut(&AudioFormat) -> Option<E> + Send + 'static,
+    {
+        let (hub, tx) = Self::with_channel(device_name, mute_control);
+        tokio::spawn(async move {
+            loop {
+                match capture.next_output().await {
+                    CaptureOutput::EndOfStream => break,
+                    CaptureOutput::Skipped => {}
+                    CaptureOutput::Encoded(frame) => {
+                        let _ = tx.send(frame);
+                    }
+                }
+            }
+        });
+        hub
+    }
+
+    fn with_channel(
+        device_name: String,
+        mute_control: Arc<MuteControl>,
+    ) -> (Self, broadcast::Sender<EncodedChunk>) {
+        let (tx, _) = broadcast::channel(32);
+        let hub = Self {
+            tx: tx.clone(),
+            mute_control,
+            device_name,
+        };
+        (hub, tx)
     }
 
     pub fn name(&self) -> &str {
@@ -259,11 +300,11 @@ impl AudioInputHub {
     }
 
     pub fn set_muted(&self, muted: bool) {
-        self.muted.store(muted, Ordering::Relaxed);
+        self.mute_control.set(muted);
     }
 
     pub fn is_muted(&self) -> bool {
-        self.muted.load(Ordering::Relaxed)
+        self.mute_control.is_muted()
     }
 }
 
@@ -354,7 +395,7 @@ pub const PLC_FADE_SAMPLES: usize = 960;
 
 struct PeerState {
     chunk_buffer: Arc<Mutex<JitterBuffer<AudioChunk>>>,
-    audio_receiver: Mutex<ResampledAudioSource<RealtimeAudioSource>>,
+    audio_receiver: Mutex<RubatoResampler<RealtimeAudioSource>>,
     nn_denoiser: Mutex<MultiChannelDenoiser<NnnoiselessDenoiser>>,
     volume: Arc<AtomicUsize>,
     denoise: Arc<Mutex<DenoiseSelection>>,
@@ -542,7 +583,7 @@ impl AudioMixer {
             lock(&peer.chunk_buffer, "chunk_buffer").clear();
             let mixer_channels = self.channels;
             let audio_receiver = RealtimeAudioSource::new(peer.chunk_buffer.clone());
-            peer.audio_receiver = Mutex::new(ResampledAudioSource::new(
+            peer.audio_receiver = Mutex::new(RubatoResampler::new(
                 audio_receiver,
                 AudioFormat::new(mixer_channels, AUDIO_SAMPLE_RATE),
                 self.sample_rate,
@@ -560,7 +601,7 @@ impl AudioMixer {
         let chunk_buffer = Arc::new(Mutex::new(JitterBuffer::new(self.jitter_chunks)));
         let mixer_channels = self.channels;
         let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone());
-        let audio_receiver = ResampledAudioSource::new(
+        let audio_receiver = RubatoResampler::new(
             audio_receiver,
             AudioFormat::new(mixer_channels, AUDIO_SAMPLE_RATE),
             self.sample_rate,

@@ -29,7 +29,7 @@ pub trait ChunkTransform: Send {
     }
 }
 
-pub struct Link<A, B> {
+pub struct Link<A: ChunkTransform, B: ChunkTransform> {
     first: A,
     second: B,
 }
@@ -252,17 +252,33 @@ impl ChunkTransform for MetricsReader {
 
 pub struct ChannelMap {
     dst_channels: u16,
+    cap_channels: bool,
 }
 
 impl ChannelMap {
     pub fn new(dst_channels: u16) -> Self {
-        ChannelMap { dst_channels }
+        ChannelMap {
+            dst_channels,
+            cap_channels: false,
+        }
+    }
+
+    pub fn capped(max_channels: u16) -> Self {
+        ChannelMap {
+            dst_channels: max_channels,
+            cap_channels: true,
+        }
     }
 }
 
 impl ChunkTransform for ChannelMap {
     fn transform(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        Some(convert_to_mixer_channels(chunk, self.dst_channels))
+        let dst = if self.cap_channels {
+            chunk.format.channel_count.min(self.dst_channels)
+        } else {
+            self.dst_channels
+        };
+        Some(convert_to_mixer_channels(chunk, dst))
     }
 }
 
@@ -367,6 +383,20 @@ mod tests {
         let mut map = ChannelMap::new(2);
         let out = map.transform(chunk(vec![0.5; 4])).expect("live");
         assert_eq!(out.audio_data, vec![0.5; 4]);
+    }
+
+    #[test]
+    fn channel_map_capped_never_upmixes() {
+        let mut map = ChannelMap::capped(2);
+        let out = map.transform(chunk_with(1, vec![0.5; 4])).expect("live");
+        assert_eq!(out.format.channel_count, 1);
+        assert_eq!(out.audio_data, vec![0.5; 4]);
+        let out = map.transform(chunk(vec![0.25, 0.75])).expect("live");
+        assert_eq!(out.format.channel_count, 2);
+        assert_eq!(out.audio_data, vec![0.25, 0.75]);
+        let out = map.transform(chunk_with(3, vec![0.5; 6])).expect("live");
+        assert_eq!(out.format.channel_count, 2);
+        assert_eq!(out.audio_data.len(), 4);
     }
 
     #[test]

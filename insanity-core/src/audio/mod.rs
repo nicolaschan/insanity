@@ -1,10 +1,10 @@
+pub mod capture;
 pub mod chunk;
 pub mod codec;
 pub mod denoiser;
 pub mod device;
 pub mod flatten;
 pub mod jitter;
-pub mod resample;
 pub mod sample;
 pub mod sample_ops;
 pub mod transform;
