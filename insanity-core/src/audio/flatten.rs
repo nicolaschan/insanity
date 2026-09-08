@@ -1,19 +1,16 @@
 use std::collections::VecDeque;
 
-use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
 use crate::audio::sample::{SampleSource, SyncSampleSource};
 
 pub struct ChunkFlattener {
     sample_buffer: VecDeque<f32>,
-    format: AudioFormat,
 }
 
 impl ChunkFlattener {
-    pub fn new(format: AudioFormat) -> Self {
+    pub fn new() -> Self {
         ChunkFlattener {
             sample_buffer: VecDeque::new(),
-            format,
         }
     }
 
@@ -30,13 +27,15 @@ impl ChunkFlattener {
     }
 }
 
+impl Default for ChunkFlattener {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SampleSource for ChunkFlattener {
     async fn next(&mut self) -> Option<f32> {
         self.next_sync()
-    }
-
-    fn format(&self) -> AudioFormat {
-        self.format.clone()
     }
 }
 
@@ -51,11 +50,11 @@ mod tests {
     use super::ChunkFlattener;
     use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
-    use crate::audio::sample::{SampleSource, SyncSampleSource};
+    use crate::audio::sample::SyncSampleSource;
 
     #[test]
     fn flattens_chunks_in_order() {
-        let mut flattener = ChunkFlattener::new(AudioFormat::new(2, 48000));
+        let mut flattener = ChunkFlattener::new();
         assert!(flattener.is_empty());
         flattener.push_chunk(AudioChunk::new(
             0,
@@ -73,8 +72,7 @@ mod tests {
 
     #[test]
     fn empty_flattener_yields_none() {
-        let mut flattener = ChunkFlattener::new(AudioFormat::new(1, 48000));
+        let mut flattener = ChunkFlattener::new();
         assert_eq!(flattener.next_sync(), None);
-        assert_eq!(flattener.format(), AudioFormat::new(1, 48000));
     }
 }

@@ -81,9 +81,6 @@ fn resampler_passthrough() {
                 None
             }
         }
-        fn format(&self) -> AudioFormat {
-            AudioFormat::new(2, 48000)
-        }
     }
     impl SyncSampleSource for Passthrough {
         fn next_sync(&mut self) -> Option<f32> {
@@ -101,7 +98,8 @@ fn resampler_passthrough() {
         data: data.clone(),
         pos: 0,
     };
-    let mut res = ResampledAudioSource::new(src, 48000, AUDIO_CHUNK_SIZE);
+    let mut res =
+        ResampledAudioSource::new(src, AudioFormat::new(2, 48000), 48000, AUDIO_CHUNK_SIZE);
     // passthrough should be identical
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

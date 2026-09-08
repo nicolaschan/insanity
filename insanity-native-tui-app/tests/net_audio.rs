@@ -1,3 +1,4 @@
+use insanity_core::audio::AudioFormat;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioMixer;
@@ -18,7 +19,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 const CHUNK: usize = 960;
 
 fn reference(freq: f32, len: usize) -> Vec<f32> {
-    let mut src = SineSource::new_amp(48000, 2, freq, 0.5);
+    let mut src = SineSource::new_amp(48000, freq, 0.5);
     (0..len).map(|_| src.next_sync().expect("sine")).collect()
 }
 
@@ -50,8 +51,14 @@ async fn connected_peers_exchange_audio() {
         .expect("connect timed out");
         let (session_a, session_b) = (session_a.expect("connect a"), session_b.expect("connect b"));
 
-        let hub_a = Arc::new(hub_from_source(SineSource::new_amp(48000, 2, 440.0, 0.5)));
-        let hub_b = Arc::new(hub_from_source(SineSource::new_amp(48000, 2, 880.0, 0.5)));
+        let hub_a = Arc::new(hub_from_source(
+            SineSource::new_amp(48000, 440.0, 0.5),
+            AudioFormat::new(2, 48000),
+        ));
+        let hub_b = Arc::new(hub_from_source(
+            SineSource::new_amp(48000, 880.0, 0.5),
+            AudioFormat::new(2, 48000),
+        ));
         let mixer_a = Arc::new(AudioMixer::new_no_device());
         let mixer_b = Arc::new(AudioMixer::new_no_device());
         for (mixer, id) in [(&mixer_a, peer_id), (&mixer_b, peer_id)] {

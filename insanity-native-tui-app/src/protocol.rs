@@ -1,12 +1,12 @@
 use bincode::ErrorKind;
-use insanity_core::audio::codec::AudioFrame;
+use insanity_core::audio::codec::EncodedChunk;
 use serde::{Deserialize, Serialize};
 
 use std::io::{Error, Write};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum ProtocolMessage {
-    AudioFrame(AudioFrame),
+    Encoded(EncodedChunk),
     IdentityDeclaration(PeerIdentity),
     PeerDiscovery(Vec<PeerIdentity>),
     ChatMessage(String),

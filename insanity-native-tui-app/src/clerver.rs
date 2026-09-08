@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use insanity_core::audio::codec::AudioFrame;
+use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_tui_adapter::AppEvent;
 use opus::Decoder;
@@ -18,7 +18,7 @@ use crate::{
 
 pub fn decode_frame_to_chunk(
     decoder: &mut Decoder,
-    frame: &AudioFrame,
+    frame: &EncodedChunk,
     channels: u16,
 ) -> Option<AudioChunk> {
     let Ok(nb) = decoder.get_nb_samples(&frame.payload[..]) else {
@@ -51,7 +51,7 @@ async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
         };
 
         let mut buf = Vec::new();
-        let protocol_message = ProtocolMessage::AudioFrame(frame);
+        let protocol_message = ProtocolMessage::Encoded(frame);
         if protocol_message.write_to_stream(&mut buf).await.is_err() {
             break;
         }
@@ -88,7 +88,7 @@ async fn run_receiver(
     while let Ok(packet) = conn.recv().await {
         if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
-                ProtocolMessage::AudioFrame(frame) => {
+                ProtocolMessage::Encoded(frame) => {
                     let channels = mixer.channels();
                     let Some(chunk) = decode_frame_to_chunk(&mut decoder, &frame, channels) else {
                         continue;

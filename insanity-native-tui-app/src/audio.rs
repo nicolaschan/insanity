@@ -23,8 +23,8 @@ use cpal::{
     StreamConfig,
 };
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, ChunkSource, Rechunker};
-use insanity_core::audio::codec::{AudioEncoder, AudioFrame};
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
+use insanity_core::audio::codec::{AudioEncoder, EncodedChunk};
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
@@ -35,11 +35,11 @@ use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc::UnboundedSender};
 
 use crate::codec_opus::OpusEncoder;
-use crate::cpal::stream_receiver::CpalStreamReceiver;
+use crate::cpal::stream_receiver::make_single_input;
 use crate::denoise::nnnoiseless::NnnoiselessDenoiser;
 use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE, MAX_VOLUME};
 use insanity_core::loudness::calculate_loudness;
-use rubato_audio_source::{ResampledAudioSource, ResampledChunkSource};
+use rubato_audio_source::ResampledAudioSource;
 
 const UNKNOWN_DEVICE_NAME: &str = "unknown device";
 
@@ -109,21 +109,13 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
 pub struct RealtimeAudioSource {
     chunk_buffer: Arc<Mutex<JitterBuffer<AudioChunk>>>,
     sample_buffer: VecDeque<f32>,
-    sample_rate: u32,
-    channels: u16,
 }
 
 impl RealtimeAudioSource {
-    pub fn new(
-        chunk_buffer: Arc<Mutex<JitterBuffer<AudioChunk>>>,
-        sample_rate: u32,
-        channels: u16,
-    ) -> Self {
+    pub fn new(chunk_buffer: Arc<Mutex<JitterBuffer<AudioChunk>>>) -> Self {
         Self {
             chunk_buffer,
             sample_buffer: VecDeque::new(),
-            sample_rate,
-            channels,
         }
     }
 }
@@ -131,9 +123,6 @@ impl RealtimeAudioSource {
 impl SampleSource for RealtimeAudioSource {
     async fn next(&mut self) -> Option<f32> {
         self.next_sync()
-    }
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.channels, self.sample_rate)
     }
 }
 
@@ -173,7 +162,7 @@ impl ChunkSource for SilentChunkSource {
 /// Broadcasts Opus-encoded 10ms chunks. Sequence numbers advance on every
 /// chunk, including muted ones, which are not sent.
 pub struct AudioInputHub {
-    tx: broadcast::Sender<AudioFrame>,
+    tx: broadcast::Sender<EncodedChunk>,
     muted: Arc<AtomicBool>,
     device_name: String,
 }
@@ -196,9 +185,25 @@ impl AudioInputHub {
             .description()
             .map(|d| d.name().to_string())
             .unwrap_or(UNKNOWN_DEVICE_NAME.into());
-        match CpalStreamReceiver::try_from(device) {
-            Ok(receiver) => Self::spawn(receiver, device_name),
-            Err(_) => Self::spawn(SilentChunkSource::default(), device_name),
+        match make_single_input(device) {
+            Ok((receiver, format)) => {
+                let resampled = ResampledAudioSource::new(
+                    receiver,
+                    format.clone(),
+                    AUDIO_SAMPLE_RATE,
+                    AUDIO_CHUNK_SIZE,
+                );
+                let chunked = SampleChunker::new(
+                    resampled,
+                    AUDIO_CHUNK_SIZE,
+                    AudioFormat::new(format.channel_count, AUDIO_SAMPLE_RATE),
+                );
+                Self::spawn(chunked, device_name)
+            }
+            Err(e) => {
+                log::warn!("{e}");
+                Self::spawn(SilentChunkSource::default(), device_name)
+            }
         }
     }
 
@@ -209,7 +214,7 @@ impl AudioInputHub {
         Self::spawn(source, UNKNOWN_DEVICE_NAME.into())
     }
 
-    fn spawn<R>(source: R, device_name: String) -> Self
+    fn spawn<R>(mut source: R, device_name: String) -> Self
     where
         R: ChunkSource + Send + 'static,
     {
@@ -221,15 +226,17 @@ impl AudioInputHub {
             device_name,
         };
         tokio::spawn(async move {
-            let resampled = ResampledChunkSource::new(source, AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
-            let mut chunks = Rechunker::new(resampled, AUDIO_CHUNK_SIZE);
             let mut encoder: Option<OpusEncoder> = None;
-            while let Some(chunk) = chunks.next_chunk().await {
+            while let Some(chunk) = source.next_chunk().await {
                 if muted.load(Ordering::Relaxed) || chunk.format.channel_count == 0 {
                     continue;
                 }
                 let channels = chunk.format.channel_count.min(2);
                 let chunk = convert_to_mixer_channels(chunk, channels);
+                debug_assert_eq!(
+                    chunk.audio_data.len(),
+                    AUDIO_CHUNK_SIZE * chunk.format.channel_count as usize
+                );
                 if encoder.as_ref().map(OpusEncoder::format) != Some(&chunk.format) {
                     encoder =
                         OpusEncoder::new(chunk.format.sample_rate, chunk.format.channel_count);
@@ -247,7 +254,7 @@ impl AudioInputHub {
         &self.device_name
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<AudioFrame> {
+    pub fn subscribe(&self) -> broadcast::Receiver<EncodedChunk> {
         self.tx.subscribe()
     }
 
@@ -534,13 +541,10 @@ impl AudioMixer {
             // Reconnect
             lock(&peer.chunk_buffer, "chunk_buffer").clear();
             let mixer_channels = self.channels;
-            let audio_receiver = RealtimeAudioSource::new(
-                peer.chunk_buffer.clone(),
-                AUDIO_SAMPLE_RATE,
-                mixer_channels,
-            );
+            let audio_receiver = RealtimeAudioSource::new(peer.chunk_buffer.clone());
             peer.audio_receiver = Mutex::new(ResampledAudioSource::new(
                 audio_receiver,
+                AudioFormat::new(mixer_channels, AUDIO_SAMPLE_RATE),
                 self.sample_rate,
                 AUDIO_CHUNK_SIZE,
             ));
@@ -555,10 +559,13 @@ impl AudioMixer {
         }
         let chunk_buffer = Arc::new(Mutex::new(JitterBuffer::new(self.jitter_chunks)));
         let mixer_channels = self.channels;
-        let audio_receiver =
-            RealtimeAudioSource::new(chunk_buffer.clone(), AUDIO_SAMPLE_RATE, mixer_channels);
-        let audio_receiver =
-            ResampledAudioSource::new(audio_receiver, self.sample_rate, AUDIO_CHUNK_SIZE);
+        let audio_receiver = RealtimeAudioSource::new(chunk_buffer.clone());
+        let audio_receiver = ResampledAudioSource::new(
+            audio_receiver,
+            AudioFormat::new(mixer_channels, AUDIO_SAMPLE_RATE),
+            self.sample_rate,
+            AUDIO_CHUNK_SIZE,
+        );
         let state = PeerState {
             chunk_buffer,
             audio_receiver: Mutex::new(audio_receiver),

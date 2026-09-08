@@ -18,18 +18,16 @@ use std::time::Duration;
 struct ChirpSource {
     n: u64,
     sr: u32,
-    ch: u16,
     amp: f32,
     total: u64,
     phase: f64,
 }
 
 impl ChirpSource {
-    fn new(sr: u32, ch: u16, amp: f32, total: u64) -> Self {
+    fn new(sr: u32, amp: f32, total: u64) -> Self {
         Self {
             n: 0,
             sr,
-            ch,
             amp,
             total,
             phase: 0.0,
@@ -49,10 +47,6 @@ impl SampleSource for ChirpSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
-    }
 }
 
 impl SyncSampleSource for ChirpSource {
@@ -64,18 +58,16 @@ impl SyncSampleSource for ChirpSource {
 struct AmSpeechSource {
     n: u64,
     sr: u32,
-    ch: u16,
     amp: f32,
     phase_a: f64,
     phase_b: f64,
 }
 
 impl AmSpeechSource {
-    fn new(sr: u32, ch: u16, amp: f32) -> Self {
+    fn new(sr: u32, amp: f32) -> Self {
         Self {
             n: 0,
             sr,
-            ch,
             amp,
             phase_a: 0.0,
             phase_b: 0.0,
@@ -98,10 +90,6 @@ impl SampleSource for AmSpeechSource {
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
-
-    fn format(&self) -> AudioFormat {
-        AudioFormat::new(self.ch, self.sr)
-    }
 }
 
 impl SyncSampleSource for AmSpeechSource {
@@ -118,11 +106,13 @@ fn music_pair() -> HashMap<String, insanity_native_tui_app::audio_test_support::
     let mut nodes = HashMap::new();
     let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
         "a",
-        AmSpeechSource::new(48000, 2, 0.5),
+        AmSpeechSource::new(48000, 0.5),
+        AudioFormat::new(2, 48000),
     );
     let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
         "b",
-        ChirpSource::new(48000, 2, 0.0, 1),
+        ChirpSource::new(48000, 0.0, 1),
+        AudioFormat::new(2, 48000),
     );
     a.add_outbound("b");
     b.add_inbound("a");
@@ -171,11 +161,13 @@ async fn non48k_input_resample_loopback() {
         let mut nodes = HashMap::new();
         let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
             "a",
-            SineSource::new_amp(44100, 2, 440.0, 0.5),
+            SineSource::new_amp(44100, 440.0, 0.5),
+            AudioFormat::new(2, 44100),
         );
         let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
             "b",
-            SineSource::new_amp(48000, 2, 880.0, 0.0),
+            SineSource::new_amp(48000, 880.0, 0.0),
+            AudioFormat::new(2, 48000),
         );
         a.add_outbound("b");
         b.add_inbound("a");
@@ -188,7 +180,7 @@ async fn non48k_input_resample_loopback() {
             !nodes["a"].mic_history.is_empty(),
             "resampled mic must produce audio"
         );
-        let mut reference = SineSource::new_amp(48000, 2, 440.0, 0.5);
+        let mut reference = SineSource::new_amp(48000, 440.0, 0.5);
         let expected: Vec<f32> = (0..20 * 960)
             .map(|_| reference.next_sync().expect("sine"))
             .collect();
@@ -252,7 +244,10 @@ fn resampled_output_fill_budget() {
 #[tokio::test]
 async fn broadcast_lag_records_gap() {
     let res = tokio::time::timeout(Duration::from_secs(15), async {
-        let hub = Arc::new(hub_from_source(SineSource::new_amp(48000, 2, 440.0, 0.5)));
+        let hub = Arc::new(hub_from_source(
+            SineSource::new_amp(48000, 440.0, 0.5),
+            AudioFormat::new(2, 48000),
+        ));
         let mut lagging = hub.subscribe();
         tokio::time::sleep(Duration::from_millis(600)).await;
         let first = tokio::time::timeout(Duration::from_secs(2), lagging.recv())

@@ -33,22 +33,22 @@ pub trait ChunkSource {
 }
 
 pub trait ChunkSink {
-    fn format(&self) -> AudioFormat;
     fn push_chunk(&mut self, chunk: AudioChunk);
 }
 
-/// Groups a sample stream into fixed-frame chunks tagged with its format.
 pub struct SampleChunker<S> {
     source: S,
     frames: usize,
+    format: AudioFormat,
     next_sequence: u128,
 }
 
 impl<S: SampleSource + Send> SampleChunker<S> {
-    pub fn new(source: S, frames: usize) -> Self {
+    pub fn new(source: S, frames: usize, format: AudioFormat) -> Self {
         SampleChunker {
             source,
             frames,
+            format,
             next_sequence: 0,
         }
     }
@@ -56,15 +56,18 @@ impl<S: SampleSource + Send> SampleChunker<S> {
 
 impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        let format = self.source.format();
-        let len = self.frames * format.channel_count as usize;
+        let len = self.frames * self.format.channel_count as usize;
         let mut audio_data = Vec::with_capacity(len);
         for _ in 0..len {
             audio_data.push(self.source.next().await?);
         }
         let sequence_number = self.next_sequence;
         self.next_sequence += 1;
-        Some(AudioChunk::new(sequence_number, format, audio_data))
+        Some(AudioChunk::new(
+            sequence_number,
+            self.format.clone(),
+            audio_data,
+        ))
     }
 }
 
@@ -139,14 +142,9 @@ pub(crate) mod tests {
 
     pub(crate) struct Counting {
         next: f32,
-        format: AudioFormat,
     }
 
     impl SampleSource for Counting {
-        fn format(&self) -> AudioFormat {
-            self.format.clone()
-        }
-
         async fn next(&mut self) -> Option<f32> {
             let value = self.next;
             self.next += 1.0;
@@ -171,18 +169,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn sample_chunker_tags_format_and_counts_sequence() {
-        let format = AudioFormat::new(2, 44100);
-        let mut chunker = SampleChunker::new(
-            Counting {
-                next: 0.0,
-                format: format.clone(),
-            },
-            3,
-        );
+    fn sample_chunker_frames_and_counts_sequence() {
+        let mut chunker = SampleChunker::new(Counting { next: 0.0 }, 3, AudioFormat::new(2, 44100));
         let first = block_on(chunker.next_chunk()).expect("chunk");
         assert_eq!(first.sequence_number, 0);
-        assert_eq!(first.format, format);
+        assert_eq!(first.format, AudioFormat::new(2, 44100));
         assert_eq!(first.audio_data, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
         let second = block_on(chunker.next_chunk()).expect("chunk");
         assert_eq!(second.sequence_number, 1);
