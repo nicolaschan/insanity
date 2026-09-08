@@ -24,7 +24,7 @@ use insanity_core::audio::{
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
 use opus::{Channels, Decoder};
-use rubato_audio_source::ResampledAudioSource;
+use rubato_audio_source::RubatoResampler;
 use std::collections::HashMap;
 use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
@@ -33,7 +33,7 @@ use tokio::sync::broadcast;
 /// Sample source cut into 10ms chunks, sleeping 10ms after each one. The
 /// sleep drifts the same way the harness speaker loops do, keeping the
 /// producer and consumer rates matched.
-pub struct PacedChunkSource<S> {
+pub struct PacedChunkSource<S: SampleSource + Send> {
     inner: SampleChunker<S>,
 }
 
@@ -58,7 +58,7 @@ where
     S: SampleSource + Send + Sync + 'static,
 {
     let resampled =
-        ResampledAudioSource::new(source, format.clone(), AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
+        RubatoResampler::new(source, format.clone(), AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
     let chunked = PacedChunkSource::new(
         resampled,
         AudioFormat::new(format.channel_count, AUDIO_SAMPLE_RATE),

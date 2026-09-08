@@ -6,7 +6,7 @@ use insanity_core::audio::{
 };
 use insanity_core::loudness::calculate_loudness;
 use insanity_native_tui_app::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE};
-use rubato_audio_source::ResampledAudioSource;
+use rubato_audio_source::RubatoResampler;
 
 // keep tests simple
 
@@ -98,8 +98,7 @@ fn resampler_passthrough() {
         data: data.clone(),
         pos: 0,
     };
-    let mut res =
-        ResampledAudioSource::new(src, AudioFormat::new(2, 48000), 48000, AUDIO_CHUNK_SIZE);
+    let mut res = RubatoResampler::new(src, AudioFormat::new(2, 48000), 48000, AUDIO_CHUNK_SIZE);
     // passthrough should be identical
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
