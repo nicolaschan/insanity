@@ -18,7 +18,10 @@ fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> MutexGuard<'a, T> {
 }
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use cpal::{
+    BufferSize, Device, FromSample, Sample, SampleFormat, SampleRate, SizedSample, Stream,
+    StreamConfig,
+};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, Rechunker};
 use insanity_core::audio::codec::{AudioEncoder, AudioFrame};
@@ -68,7 +71,7 @@ pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat,
         find_stereo_input(range).ok_or_else(|| anyhow::anyhow!("No supported input config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = std::cmp::min(SampleRate(AUDIO_SAMPLE_RATE), max);
+    let sample_rate = AUDIO_SAMPLE_RATE.min(max);
     let buffer_size = match cfg_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -89,7 +92,7 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
         find_stereo_output(range).ok_or_else(|| anyhow::anyhow!("No supported output config"))?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = std::cmp::min(SampleRate(AUDIO_SAMPLE_RATE), max);
+    let sample_rate = AUDIO_SAMPLE_RATE.min(max);
     let buffer_size = match cfg_range.buffer_size() {
         cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -189,7 +192,10 @@ impl AudioInputHub {
     }
 
     pub fn from_device(device: Device) -> Self {
-        let device_name = device.name().unwrap_or(UNKNOWN_DEVICE_NAME.into());
+        let device_name = device
+            .description()
+            .map(|d| d.name().to_string())
+            .unwrap_or(UNKNOWN_DEVICE_NAME.into());
         match CpalStreamReceiver::try_from(device) {
             Ok(receiver) => Self::spawn(receiver, device_name),
             Err(_) => Self::spawn(SilentChunkSource::default(), device_name),
@@ -369,44 +375,54 @@ pub struct AudioMixer {
     jitter_chunks: usize,
 }
 
-fn build_output_stream(
-    sample_format: &SampleFormat,
-    config: &StreamConfig,
-    device: &Device,
+struct OutputTarget {
     state: Arc<Mutex<MixerState>>,
     master: Arc<AtomicUsize>,
     metrics: Arc<MixerMetrics>,
+}
+
+fn build_output_stream(
+    sample_format: SampleFormat,
+    config: StreamConfig,
+    device: &Device,
+    target: OutputTarget,
 ) -> anyhow::Result<Stream> {
-    let err_fn = |err| eprintln!("output stream error: {err}");
     match sample_format {
-        SampleFormat::F32 => device
-            .build_output_stream(
-                config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    fill_buffer_inner(&state, &master, &metrics, data);
-                },
-                err_fn,
-            )
-            .map_err(|e| anyhow::anyhow!("build f32 output stream: {e}")),
-        SampleFormat::I16 => device
-            .build_output_stream(
-                config,
-                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    fill_buffer_inner(&state, &master, &metrics, data);
-                },
-                err_fn,
-            )
-            .map_err(|e| anyhow::anyhow!("build i16 output stream: {e}")),
-        SampleFormat::U16 => device
-            .build_output_stream(
-                config,
-                move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    fill_buffer_inner(&state, &master, &metrics, data);
-                },
-                err_fn,
-            )
-            .map_err(|e| anyhow::anyhow!("build u16 output stream: {e}")),
+        SampleFormat::I8 => run_output::<i8>(config, device, target),
+        SampleFormat::I16 => run_output::<i16>(config, device, target),
+        SampleFormat::I32 => run_output::<i32>(config, device, target),
+        SampleFormat::I64 => run_output::<i64>(config, device, target),
+        SampleFormat::U8 => run_output::<u8>(config, device, target),
+        SampleFormat::U16 => run_output::<u16>(config, device, target),
+        SampleFormat::U32 => run_output::<u32>(config, device, target),
+        SampleFormat::U64 => run_output::<u64>(config, device, target),
+        SampleFormat::F32 => run_output::<f32>(config, device, target),
+        SampleFormat::F64 => run_output::<f64>(config, device, target),
+        other => Err(anyhow::anyhow!(
+            "unsupported output sample format {other:?}"
+        )),
     }
+}
+
+fn run_output<T>(
+    config: StreamConfig,
+    device: &Device,
+    target: OutputTarget,
+) -> anyhow::Result<Stream>
+where
+    T: SizedSample + FromSample<f32>,
+{
+    let err_fn = |err| eprintln!("output stream error: {err}");
+    device
+        .build_output_stream(
+            config,
+            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                fill_buffer_inner(&target.state, &target.master, &target.metrics, data);
+            },
+            err_fn,
+            None,
+        )
+        .map_err(|e| anyhow::anyhow!("build output stream: {e}"))
 }
 
 impl AudioMixer {
@@ -433,7 +449,7 @@ impl AudioMixer {
             master_volume,
             metrics,
             _stream: None,
-            sample_rate: SampleRate(sample_rate),
+            sample_rate,
             channels,
             jitter_chunks,
         }
@@ -457,12 +473,13 @@ impl AudioMixer {
                 Ok((fmt, cfg)) => {
                     let sr = cfg.sample_rate;
                     let ch = cfg.channels;
-                    let cfg2 = cfg.clone();
-                    let state2 = state_clone.clone();
-                    let master2 = master_clone.clone();
-                    let metrics2 = metrics_clone.clone();
+                    let target = OutputTarget {
+                        state: state_clone.clone(),
+                        master: master_clone.clone(),
+                        metrics: metrics_clone.clone(),
+                    };
                     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-                        match build_output_stream(&fmt, &cfg2, &device, state2, master2, metrics2) {
+                        match build_output_stream(fmt, cfg, &device, target) {
                             Ok(s) => Some(s),
                             Err(e) => {
                                 log::warn!(
@@ -480,18 +497,18 @@ impl AudioMixer {
                         .unwrap_or(false);
                     if !play_ok {
                         log::warn!("Failed to start output stream, falling back to dummy");
-                        (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
+                        (AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, None)
                     } else {
                         (sr, ch, Some(wrapper))
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to get output config: {e}, falling back to dummy");
-                    (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
+                    (AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, None)
                 }
             }
         } else {
-            (SampleRate(AUDIO_SAMPLE_RATE), AUDIO_CHANNELS, None)
+            (AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, None)
         };
 
         Self {
@@ -524,7 +541,7 @@ impl AudioMixer {
             );
             peer.audio_receiver = Mutex::new(ResampledAudioSource::new(
                 audio_receiver,
-                self.sample_rate.0,
+                self.sample_rate,
                 AUDIO_CHUNK_SIZE,
             ));
             peer.nn_denoiser = Mutex::new(MultiChannelDenoiser::default());
@@ -541,7 +558,7 @@ impl AudioMixer {
         let audio_receiver =
             RealtimeAudioSource::new(chunk_buffer.clone(), AUDIO_SAMPLE_RATE, mixer_channels);
         let audio_receiver =
-            ResampledAudioSource::new(audio_receiver, self.sample_rate.0, AUDIO_CHUNK_SIZE);
+            ResampledAudioSource::new(audio_receiver, self.sample_rate, AUDIO_CHUNK_SIZE);
         let state = PeerState {
             chunk_buffer,
             audio_receiver: Mutex::new(audio_receiver),
@@ -612,7 +629,7 @@ impl AudioMixer {
         self.master_volume.load(Ordering::Relaxed)
     }
 
-    pub fn fill_buffer<T: Sample>(&self, data: &mut [T]) {
+    pub fn fill_buffer<T: Sample + FromSample<f32>>(&self, data: &mut [T]) {
         fill_buffer_inner(&self.state, &self.master_volume, &self.metrics, data);
     }
 
@@ -648,7 +665,7 @@ impl AudioMixer {
     }
 
     pub fn sample_rate(&self) -> u32 {
-        self.sample_rate.0
+        self.sample_rate
     }
 
     pub fn channels(&self) -> u16 {
@@ -657,7 +674,7 @@ impl AudioMixer {
 }
 
 fn render_silence<T: Sample>(data: &mut [T], metrics: &Arc<MixerMetrics>, t0: std::time::Instant) {
-    data.fill(Sample::from(&0.0f32));
+    data.fill(T::EQUILIBRIUM);
     metrics
         .fill_nanos_total
         .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -717,7 +734,7 @@ fn drain_peer_samples(
     peer_temps
 }
 
-fn fill_buffer_inner<T: Sample>(
+fn fill_buffer_inner<T: Sample + FromSample<f32>>(
     state: &Arc<Mutex<MixerState>>,
     master_volume: &Arc<AtomicUsize>,
     metrics: &Arc<MixerMetrics>,
@@ -748,7 +765,7 @@ fn fill_buffer_inner<T: Sample>(
         if clipped != mixed {
             metrics.clip_hits.fetch_add(1, Ordering::Relaxed);
         }
-        *out = Sample::from(&clipped);
+        *out = T::from_sample(clipped);
     }
     metrics
         .fill_nanos_total

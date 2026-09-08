@@ -16,7 +16,7 @@ impl Debug for CpalAudioDevice {
 
 impl AudioDevice for CpalAudioDevice {
     fn try_name(&self) -> Option<String> {
-        self.0.name().ok()
+        self.0.description().ok().map(|d| d.name().to_string())
     }
 }
 
