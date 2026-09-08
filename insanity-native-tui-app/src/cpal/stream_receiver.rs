@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use cpal::{
-    Device, Sample, SampleFormat, Stream, StreamConfig,
+    Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
 use insanity_core::audio::{
@@ -57,9 +57,8 @@ pub fn make_single_input(device: Device) -> Result<CpalStreamReceiver, anyhow::E
             "Failed to get input config falling back to silence"
         ));
     };
-    let cfg2 = cfg.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        match setup_input_stream(&fmt, &cfg2, &device, tx) {
+        match setup_input_stream(fmt, cfg, &device, tx) {
             Ok(s) => Some(s),
             Err(e) => {
                 log::warn!("Failed to build input stream, falling back to silence: {e:?}");
@@ -81,37 +80,50 @@ pub fn make_single_input(device: Device) -> Result<CpalStreamReceiver, anyhow::E
     Ok(CpalStreamReceiver {
         _stream: wrapper,
         receiver: rx,
-        format: AudioFormat::new(cfg.channels, cfg.sample_rate.0),
+        format: AudioFormat::new(cfg.channels, cfg.sample_rate),
         next_sequence: 0,
     })
 }
 
 fn setup_input_stream(
-    sample_format: &SampleFormat,
-    config: &StreamConfig,
+    sample_format: SampleFormat,
+    config: StreamConfig,
     device: &Device,
     sender: tokio::sync::mpsc::UnboundedSender<Vec<f32>>,
 ) -> anyhow::Result<Stream> {
     match sample_format {
-        SampleFormat::F32 => run_input::<f32>(config, device, sender),
+        SampleFormat::I8 => run_input::<i8>(config, device, sender),
         SampleFormat::I16 => run_input::<i16>(config, device, sender),
+        SampleFormat::I32 => run_input::<i32>(config, device, sender),
+        SampleFormat::I64 => run_input::<i64>(config, device, sender),
+        SampleFormat::U8 => run_input::<u8>(config, device, sender),
         SampleFormat::U16 => run_input::<u16>(config, device, sender),
+        SampleFormat::U32 => run_input::<u32>(config, device, sender),
+        SampleFormat::U64 => run_input::<u64>(config, device, sender),
+        SampleFormat::F32 => run_input::<f32>(config, device, sender),
+        SampleFormat::F64 => run_input::<f64>(config, device, sender),
+        other => Err(anyhow!("unsupported input sample format {other:?}")),
     }
 }
 
-fn run_input<T: Sample>(
-    config: &StreamConfig,
+fn run_input<T>(
+    config: StreamConfig,
     device: &Device,
     sender: tokio::sync::mpsc::UnboundedSender<Vec<f32>>,
-) -> anyhow::Result<Stream> {
+) -> anyhow::Result<Stream>
+where
+    T: SizedSample,
+    f32: FromSample<T>,
+{
     let err_fn = |err| eprintln!("input stream error: {err}");
     device
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                let _ = sender.send(data.iter().map(Sample::to_f32).collect());
+                let _ = sender.send(data.iter().map(|s| s.to_sample::<f32>()).collect());
             },
             err_fn,
+            None,
         )
         .map_err(|e| anyhow::anyhow!("build input stream: {e}"))
 }

@@ -75,6 +75,9 @@
               ]
               else [
                 alsa-lib
+                # for `cargo build --features pipewire`
+                pipewire
+                rustPlatform.bindgenHook
                 gcc
               ]
             );
