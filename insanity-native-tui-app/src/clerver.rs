@@ -47,7 +47,10 @@ async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
         let frame = match rx.recv().await {
             Ok(f) => f,
             Err(broadcast::error::RecvError::Closed) => break,
-            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                log::debug!("audio sender lagged, skipped={skipped}");
+                continue;
+            }
         };
 
         let mut buf = Vec::new();
@@ -90,7 +93,9 @@ async fn run_receiver(
             match message {
                 ProtocolMessage::Encoded(frame) => {
                     let channels = mixer.channels();
+                    let seq = frame.sequence_number;
                     let Some(chunk) = decode_frame_to_chunk(&mut decoder, &frame, channels) else {
+                        log::debug!("audio decode failed peer={id} seq={seq}");
                         continue;
                     };
                     mixer.handle_incoming(id, chunk);

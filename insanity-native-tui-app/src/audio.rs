@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{
     Arc, Mutex, MutexGuard,
-    atomic::{AtomicU32, AtomicUsize, Ordering},
+    atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 /// Lock a mutex, recovering from poisoning with an error log instead of
@@ -162,12 +162,48 @@ impl ChunkSource for SilentChunkSource {
     }
 }
 
+struct Pacer {
+    period: tokio::time::Duration,
+    next_deadline: Option<tokio::time::Instant>,
+}
+
+impl Pacer {
+    fn new(period: tokio::time::Duration) -> Self {
+        Self {
+            period,
+            next_deadline: None,
+        }
+    }
+
+    fn chunk_period() -> tokio::time::Duration {
+        tokio::time::Duration::from_millis(
+            (AUDIO_CHUNK_SIZE as u64 * 1000) / u64::from(AUDIO_SAMPLE_RATE),
+        )
+    }
+
+    async fn pace(&mut self) {
+        let now = tokio::time::Instant::now();
+        let Some(deadline) = self.next_deadline else {
+            self.next_deadline = Some(now + self.period);
+            return;
+        };
+        if now < deadline {
+            tokio::time::sleep_until(deadline).await;
+            self.next_deadline = Some(deadline + self.period);
+        } else {
+            self.next_deadline = Some(now + self.period);
+        }
+    }
+}
+
 /// Broadcasts Opus-encoded 10ms chunks. Sequence numbers advance on every
 /// chunk, including muted ones, which are not sent.
 pub struct AudioInputHub {
     tx: broadcast::Sender<EncodedChunk>,
     mute_control: Arc<MuteControl>,
     device_name: String,
+    produced: Arc<AtomicU64>,
+    cadence: Arc<CadenceStats>,
 }
 
 impl Default for AudioInputHub {
@@ -235,13 +271,21 @@ impl AudioInputHub {
         let mut transform = mute.chain(ChannelMap::capped(AUDIO_CHANNELS));
         let mut encoder = ChunkEncoder::new(Self::rebuild_opus, AUDIO_CHUNK_SIZE);
         let (hub, tx) = Self::with_channel(device_name, mute_control);
+        let produced = hub.produced.clone();
+        let cadence = hub.cadence.clone();
         tokio::spawn(async move {
+            let mut pacer = Pacer::new(Pacer::chunk_period());
             while let Some(chunk) = source.next_chunk().await {
                 let Some(chunk) = transform.transform(chunk) else {
                     continue;
                 };
-                if let Some(frame) = encoder.encode_chunk(chunk) {
-                    let _ = tx.send(frame);
+                let Some(frame) = encoder.encode_chunk(chunk) else {
+                    continue;
+                };
+                pacer.pace().await;
+                if tx.send(frame).is_ok() {
+                    produced.fetch_add(1, Ordering::Relaxed);
+                    cadence.record();
                 }
             }
         });
@@ -264,13 +308,20 @@ impl AudioInputHub {
         F: FnMut(&AudioFormat) -> Option<E> + Send + 'static,
     {
         let (hub, tx) = Self::with_channel(device_name, mute_control);
+        let produced = hub.produced.clone();
+        let cadence = hub.cadence.clone();
         tokio::spawn(async move {
+            let mut pacer = Pacer::new(Pacer::chunk_period());
             loop {
                 match capture.next_output().await {
                     CaptureOutput::EndOfStream => break,
                     CaptureOutput::Skipped => {}
                     CaptureOutput::Encoded(frame) => {
-                        let _ = tx.send(frame);
+                        pacer.pace().await;
+                        if tx.send(frame).is_ok() {
+                            produced.fetch_add(1, Ordering::Relaxed);
+                            cadence.record();
+                        }
                     }
                 }
             }
@@ -287,6 +338,8 @@ impl AudioInputHub {
             tx: tx.clone(),
             mute_control,
             device_name,
+            produced: Arc::new(AtomicU64::new(0)),
+            cadence: Arc::new(CadenceStats::default()),
         };
         (hub, tx)
     }
@@ -297,6 +350,14 @@ impl AudioInputHub {
 
     pub fn subscribe(&self) -> broadcast::Receiver<EncodedChunk> {
         self.tx.subscribe()
+    }
+
+    pub fn produced_count(&self) -> u64 {
+        self.produced.load(Ordering::Relaxed)
+    }
+
+    pub fn emission_cadence(&self) -> (u64, u64, u64) {
+        self.cadence.snapshot()
     }
 
     pub fn set_muted(&self, muted: bool) {
@@ -324,6 +385,43 @@ pub struct MixerMetricsSnapshot {
     pub fills: usize,
 }
 
+#[derive(Debug, Default)]
+pub struct CadenceStats {
+    pub total: AtomicU64,
+    pub bursts: AtomicU64,
+    pub gaps: AtomicU64,
+    pub last_nanos: AtomicU64,
+}
+
+impl CadenceStats {
+    pub fn record(&self) {
+        let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+            self.total.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let now_nanos = now.as_nanos().min(u128::from(u64::MAX)) as u64;
+        let prev = self.last_nanos.swap(now_nanos, Ordering::Relaxed);
+        self.total.fetch_add(1, Ordering::Relaxed);
+        if prev == 0 {
+            return;
+        }
+        let delta_ms = now_nanos.saturating_sub(prev) / 1_000_000;
+        if delta_ms < 5 {
+            self.bursts.fetch_add(1, Ordering::Relaxed);
+        } else if delta_ms > 20 {
+            self.gaps.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.total.load(Ordering::Relaxed),
+            self.bursts.load(Ordering::Relaxed),
+            self.gaps.load(Ordering::Relaxed),
+        )
+    }
+}
+
 /// Live counters. All relaxed-order atomics; hot-path increments only.
 /// `underrun` counts missed slots (events); `plc_hold` counts synthesized samples.
 #[derive(Debug, Default)]
@@ -335,6 +433,10 @@ pub struct MixerMetrics {
     pub clip_hits: AtomicUsize,
     pub fills: AtomicUsize,
     pub fill_nanos_total: std::sync::atomic::AtomicU64,
+    pub chunks_received: AtomicUsize,
+    pub fill_samples_total: std::sync::atomic::AtomicU64,
+    pub fill_max_len: AtomicUsize,
+    pub arrivals: CadenceStats,
 }
 
 impl MixerMetrics {
@@ -355,6 +457,26 @@ impl MixerMetrics {
             return 0;
         }
         self.fill_nanos_total.load(Ordering::Relaxed) / fills
+    }
+
+    pub fn chunks_received(&self) -> usize {
+        self.chunks_received.load(Ordering::Relaxed)
+    }
+
+    pub fn fill_avg_len(&self) -> u64 {
+        let fills = self.fills.load(Ordering::Relaxed) as u64;
+        if fills == 0 {
+            return 0;
+        }
+        self.fill_samples_total.load(Ordering::Relaxed) / fills
+    }
+
+    pub fn fill_max_len(&self) -> usize {
+        self.fill_max_len.load(Ordering::Relaxed)
+    }
+
+    pub fn arrival_cadence(&self) -> (u64, u64, u64) {
+        self.arrivals.snapshot()
     }
 }
 
@@ -658,14 +780,38 @@ impl AudioMixer {
         let virgin = buf.is_empty() && buf.head() == 0 && buf.prev() == 0;
         if seq < buf.head() {
             self.metrics.late_dropped.fetch_add(1, Ordering::Relaxed);
+            log::debug!(
+                "audio late peer={} seq={} head={} prev={} occ={}",
+                peer.peer_id,
+                seq,
+                buf.head(),
+                buf.prev(),
+                buf.len()
+            );
         } else if virgin {
             if seq != 0 {
                 self.metrics.gap_detected.fetch_add(1, Ordering::Relaxed);
+                log::debug!(
+                    "audio virgin-gap peer={} seq={} occ={}",
+                    peer.peer_id,
+                    seq,
+                    buf.len()
+                );
             }
         } else if seq > buf.prev() && seq != buf.prev() + 1 {
             self.metrics.gap_detected.fetch_add(1, Ordering::Relaxed);
+            log::debug!(
+                "audio gap peer={} seq={} head={} prev={} occ={}",
+                peer.peer_id,
+                seq,
+                buf.head(),
+                buf.prev(),
+                buf.len()
+            );
         }
         buf.set(seq, chunk);
+        self.metrics.chunks_received.fetch_add(1, Ordering::Relaxed);
+        self.metrics.arrivals.record();
     }
 
     pub fn set_master_volume(&self, vol: usize) {
@@ -689,6 +835,22 @@ impl AudioMixer {
         self.metrics.fill_avg_nanos()
     }
 
+    pub fn chunks_received_count(&self) -> usize {
+        self.metrics.chunks_received()
+    }
+
+    pub fn arrival_cadence(&self) -> (u64, u64, u64) {
+        self.metrics.arrival_cadence()
+    }
+
+    pub fn fill_avg_len(&self) -> u64 {
+        self.metrics.fill_avg_len()
+    }
+
+    pub fn fill_max_len(&self) -> usize {
+        self.metrics.fill_max_len()
+    }
+
     /// Current queued chunks for a peer (jitter occupancy). `None` if unknown.
     pub fn peer_occupancy(&self, id: &uuid::Uuid) -> Option<usize> {
         let guard = lock(&self.state, "mixer state");
@@ -708,6 +870,18 @@ impl AudioMixer {
                     p.peer_id.clone(),
                     lock(&p.chunk_buffer, "chunk_buffer").len(),
                 )
+            })
+            .collect()
+    }
+
+    pub fn peer_jitter_cursors(&self) -> Vec<(String, usize, u128, u128)> {
+        let guard = lock(&self.state, "mixer state");
+        guard
+            .peers
+            .values()
+            .map(|p| {
+                let buf = lock(&p.chunk_buffer, "chunk_buffer");
+                (p.peer_id.clone(), buf.len(), buf.head(), buf.prev())
             })
             .collect()
     }
@@ -790,6 +964,12 @@ fn fill_buffer_inner<T: Sample + FromSample<f32>>(
 ) {
     let t0 = std::time::Instant::now();
     metrics.fills.fetch_add(1, Ordering::Relaxed);
+    metrics
+        .fill_samples_total
+        .fetch_add(data.len() as u64, Ordering::Relaxed);
+    metrics
+        .fill_max_len
+        .fetch_max(data.len(), Ordering::Relaxed);
     let master_vol = master_volume.load(Ordering::Relaxed);
     let master_mult = volume_multiplier(master_vol);
     let use_master = master_vol != 100;
