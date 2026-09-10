@@ -17,7 +17,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    audio::{AudioInputHub, AudioMixer, JITTER_TARGET_CHUNKS, format_metrics_line},
+    audio::{
+        AUDIO_CALLBACK_FRAMES, AudioInputHub, AudioMixer, JITTER_TARGET_CHUNKS, format_metrics_line,
+    },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
 use veq::snow_types::SnowPublicKey;
@@ -277,7 +279,7 @@ fn manage_peers(
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
-            "Audio formats: output channels={mixer_channels} output rate={mixer_rate} jitter_chunks={JITTER_TARGET_CHUNKS}"
+            "Audio formats: output channels={mixer_channels} output rate={mixer_rate} jitter_chunks={JITTER_TARGET_CHUNKS} buffer_frames={AUDIO_CALLBACK_FRAMES}"
         );
         let interval_secs: u64 = std::env::var("INSANITY_METRICS_SECS")
             .ok()

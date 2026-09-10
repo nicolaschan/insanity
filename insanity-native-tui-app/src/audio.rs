@@ -46,6 +46,19 @@ use rubato_audio_source::RubatoResampler;
 
 const UNKNOWN_DEVICE_NAME: &str = "unknown device";
 
+pub const AUDIO_CALLBACK_FRAMES: u32 = 480;
+
+fn callback_buffer_size(supported: &cpal::SupportedBufferSize) -> BufferSize {
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            let clamped = AUDIO_CALLBACK_FRAMES.clamp(*min, *max);
+            log::debug!("requesting fixed stream buffer of {clamped} frames");
+            BufferSize::Fixed(clamped)
+        }
+        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
+    }
+}
+
 // shared config helpers
 
 pub(crate) fn find_stereo_input(
@@ -75,10 +88,7 @@ pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat,
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = AUDIO_SAMPLE_RATE.min(max);
-    let buffer_size = match cfg_range.buffer_size() {
-        cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
-        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
-    };
+    let buffer_size = callback_buffer_size(cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
         sample_rate,
@@ -96,10 +106,7 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = AUDIO_SAMPLE_RATE.min(max);
-    let buffer_size = match cfg_range.buffer_size() {
-        cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
-        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
-    };
+    let buffer_size = callback_buffer_size(cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
         sample_rate,
