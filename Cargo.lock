@@ -523,7 +523,7 @@ dependencies = [
  "ed25519-dalek",
  "failsafe",
  "futures",
- "itertools 0.13.0",
+ "itertools",
  "rand 0.8.6",
  "reqwest",
  "rusqlite",
@@ -576,7 +576,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools",
  "proc-macro2",
  "quote",
  "regex",
@@ -2296,7 +2296,6 @@ dependencies = [
  "indicatif",
  "insanity-core",
  "insanity-tui-adapter",
- "itertools 0.12.1",
  "log",
  "nnnoiseless",
  "opus",
@@ -2362,15 +2361,6 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
-name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
 
 [[package]]
 name = "itertools"
