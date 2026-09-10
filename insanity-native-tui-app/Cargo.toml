@@ -51,7 +51,6 @@ fern = "0.6.2"
 chrono = "0.4"
 veq = { git = "https://github.com/nicolaschan/udpp.git" }
 baybridge = { git = "https://github.com/nicolaschan/baybridge.git" }
-itertools = "0.12.1"
 anyhow = "1.0.82"
 tokio-util = { version = "0.7.10", features = ["full"] }
 bon = "2.1.0"

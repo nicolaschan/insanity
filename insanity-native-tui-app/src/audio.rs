@@ -46,24 +46,64 @@ use rubato_audio_source::RubatoResampler;
 
 const UNKNOWN_DEVICE_NAME: &str = "unknown device";
 
+pub const AUDIO_CALLBACK_FRAMES: u32 = 480;
+
+fn callback_buffer_size(supported: &cpal::SupportedBufferSize) -> BufferSize {
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } => {
+            let clamped = AUDIO_CALLBACK_FRAMES.clamp(*min, *max);
+            log::debug!("requesting fixed stream buffer of {clamped} frames");
+            BufferSize::Fixed(clamped)
+        }
+        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
+    }
+}
+
 // shared config helpers
 
-pub(crate) fn find_stereo_input(
-    range: cpal::SupportedInputConfigs,
+pub(crate) fn sample_format_rank(format: SampleFormat) -> Option<u8> {
+    match format {
+        SampleFormat::F32 => Some(100),
+        SampleFormat::F64 => Some(90),
+        SampleFormat::I32 => Some(80),
+        SampleFormat::U32 => Some(79),
+        SampleFormat::I16 => Some(60),
+        SampleFormat::U16 => Some(59),
+        SampleFormat::I8 => Some(50),
+        SampleFormat::U8 => Some(49),
+        _ => None,
+    }
+}
+
+fn best_stereo_config(
+    ranges: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
 ) -> Option<cpal::SupportedStreamConfigRange> {
-    use itertools::Itertools;
-    range
-        .into_iter()
-        .find_or_last(|x| x.channels() == AUDIO_CHANNELS)
+    let mut ranges: Vec<cpal::SupportedStreamConfigRange> = ranges.collect();
+    let best = ranges
+        .iter()
+        .filter(|r| r.channels() == AUDIO_CHANNELS)
+        .filter_map(|r| sample_format_rank(r.sample_format()).map(|rank| (rank, r)))
+        .reduce(|best, candidate| {
+            if candidate.0 > best.0 {
+                candidate
+            } else {
+                best
+            }
+        })
+        .map(|(_, r)| *r);
+    best.or_else(|| ranges.pop())
+}
+
+pub(crate) fn find_stereo_input(
+    range: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
+) -> Option<cpal::SupportedStreamConfigRange> {
+    best_stereo_config(range)
 }
 
 pub(crate) fn find_stereo_output(
-    range: cpal::SupportedOutputConfigs,
+    range: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
 ) -> Option<cpal::SupportedStreamConfigRange> {
-    use itertools::Itertools;
-    range
-        .into_iter()
-        .find_or_last(|x| x.channels() == AUDIO_CHANNELS)
+    best_stereo_config(range)
 }
 
 pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat, StreamConfig)> {
@@ -75,10 +115,7 @@ pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat,
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = AUDIO_SAMPLE_RATE.min(max);
-    let buffer_size = match cfg_range.buffer_size() {
-        cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
-        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
-    };
+    let buffer_size = callback_buffer_size(cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
         sample_rate,
@@ -96,10 +133,7 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = AUDIO_SAMPLE_RATE.min(max);
-    let buffer_size = match cfg_range.buffer_size() {
-        cpal::SupportedBufferSize::Range { min: _, max: _ } => BufferSize::Default,
-        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
-    };
+    let buffer_size = callback_buffer_size(cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
         sample_rate,
@@ -159,6 +193,40 @@ impl ChunkSource for SilentChunkSource {
             AudioFormat::new(AUDIO_CHANNELS, AUDIO_SAMPLE_RATE),
             vec![0.0; AUDIO_CHUNK_SIZE * AUDIO_CHANNELS as usize],
         ))
+    }
+}
+
+struct Pacer {
+    period: tokio::time::Duration,
+    next_deadline: Option<tokio::time::Instant>,
+}
+
+impl Pacer {
+    fn new(period: tokio::time::Duration) -> Self {
+        Self {
+            period,
+            next_deadline: None,
+        }
+    }
+
+    fn chunk_period() -> tokio::time::Duration {
+        tokio::time::Duration::from_millis(
+            (AUDIO_CHUNK_SIZE as u64 * 1000) / u64::from(AUDIO_SAMPLE_RATE),
+        )
+    }
+
+    async fn pace(&mut self) {
+        let now = tokio::time::Instant::now();
+        let Some(deadline) = self.next_deadline else {
+            self.next_deadline = Some(now + self.period);
+            return;
+        };
+        if now < deadline {
+            tokio::time::sleep_until(deadline).await;
+            self.next_deadline = Some(deadline + self.period);
+        } else {
+            self.next_deadline = Some(now + self.period);
+        }
     }
 }
 
@@ -236,13 +304,16 @@ impl AudioInputHub {
         let mut encoder = ChunkEncoder::new(Self::rebuild_opus, AUDIO_CHUNK_SIZE);
         let (hub, tx) = Self::with_channel(device_name, mute_control);
         tokio::spawn(async move {
+            let mut pacer = Pacer::new(Pacer::chunk_period());
             while let Some(chunk) = source.next_chunk().await {
                 let Some(chunk) = transform.transform(chunk) else {
                     continue;
                 };
-                if let Some(frame) = encoder.encode_chunk(chunk) {
-                    let _ = tx.send(frame);
-                }
+                let Some(frame) = encoder.encode_chunk(chunk) else {
+                    continue;
+                };
+                pacer.pace().await;
+                let _ = tx.send(frame);
             }
         });
         hub
@@ -265,11 +336,13 @@ impl AudioInputHub {
     {
         let (hub, tx) = Self::with_channel(device_name, mute_control);
         tokio::spawn(async move {
+            let mut pacer = Pacer::new(Pacer::chunk_period());
             loop {
                 match capture.next_output().await {
                     CaptureOutput::EndOfStream => break,
                     CaptureOutput::Skipped => {}
                     CaptureOutput::Encoded(frame) => {
+                        pacer.pace().await;
                         let _ = tx.send(frame);
                     }
                 }
@@ -818,4 +891,117 @@ fn fill_buffer_inner<T: Sample + FromSample<f32>>(
     metrics
         .fill_nanos_total
         .fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod format_selection_tests {
+    use super::{find_stereo_input, find_stereo_output, sample_format_rank};
+    use cpal::SampleFormat;
+
+    fn range(channels: u16, format: cpal::SampleFormat) -> cpal::SupportedStreamConfigRange {
+        cpal::SupportedStreamConfigRange::new(
+            channels,
+            44100,
+            48000,
+            cpal::SupportedBufferSize::Unknown,
+            format,
+        )
+    }
+
+    #[test]
+    fn fidelity_ordering_prefers_float_then_width_then_signed() {
+        let ranked = [
+            SampleFormat::F32,
+            SampleFormat::F64,
+            SampleFormat::I32,
+            SampleFormat::U32,
+            SampleFormat::I16,
+            SampleFormat::U16,
+            SampleFormat::I8,
+            SampleFormat::U8,
+        ];
+        let scores: Vec<u8> = ranked
+            .iter()
+            .map(|f| sample_format_rank(*f).expect("usable"))
+            .collect();
+        let mut ordered = scores.clone();
+        ordered.sort();
+        ordered.reverse();
+        assert_eq!(scores, ordered);
+    }
+
+    #[test]
+    fn packed_and_dsd_formats_are_unusable() {
+        for format in [
+            SampleFormat::I24,
+            SampleFormat::U24,
+            SampleFormat::DsdU8,
+            SampleFormat::DsdU16,
+            SampleFormat::DsdU32,
+        ] {
+            assert_eq!(sample_format_rank(format), None);
+        }
+    }
+
+    #[test]
+    fn u8_first_list_selects_f32() {
+        let configs = vec![
+            range(2, SampleFormat::U8),
+            range(2, SampleFormat::I16),
+            range(2, SampleFormat::F32),
+        ];
+        let picked = find_stereo_input(configs.into_iter()).expect("config");
+        assert_eq!(picked.sample_format(), SampleFormat::F32);
+        assert_eq!(picked.channels(), 2);
+        let configs = vec![
+            range(2, SampleFormat::U8),
+            range(2, SampleFormat::I16),
+            range(2, SampleFormat::F32),
+        ];
+        let picked = find_stereo_output(configs.into_iter()).expect("config");
+        assert_eq!(picked.sample_format(), SampleFormat::F32);
+    }
+
+    #[test]
+    fn mono_configs_never_win_over_stereo() {
+        let configs = vec![range(1, SampleFormat::F32), range(2, SampleFormat::U8)];
+        let picked = find_stereo_input(configs.into_iter()).expect("config");
+        assert_eq!(picked.channels(), 2);
+        assert_eq!(picked.sample_format(), SampleFormat::U8);
+    }
+
+    #[test]
+    fn dsd_stereo_is_skipped_for_fallback() {
+        let configs = vec![range(2, SampleFormat::DsdU8), range(1, SampleFormat::F32)];
+        let picked = find_stereo_input(configs.into_iter()).expect("config");
+        assert_ne!(picked.sample_format(), SampleFormat::DsdU8);
+    }
+
+    #[test]
+    fn empty_list_selects_nothing() {
+        let picked = find_stereo_input(Vec::new().into_iter());
+        assert!(picked.is_none());
+        let picked = find_stereo_output(Vec::new().into_iter());
+        assert!(picked.is_none());
+    }
+
+    #[test]
+    fn fidelity_tie_keeps_first_range() {
+        let first = cpal::SupportedStreamConfigRange::new(
+            2,
+            44100,
+            48000,
+            cpal::SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        );
+        let second = cpal::SupportedStreamConfigRange::new(
+            2,
+            8000,
+            96000,
+            cpal::SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        );
+        let picked = find_stereo_output(vec![first, second].into_iter()).expect("config");
+        assert_eq!(picked.max_sample_rate(), 48000);
+    }
 }
