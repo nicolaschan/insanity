@@ -1,7 +1,6 @@
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk, chunk::ChunkSource};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer, CadenceStats};
-use insanity_native_tui_app::audio_test_support::{SineSource, hub_from_source};
+use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
 use std::sync::{Arc, atomic::AtomicUsize};
 use std::time::Duration;
 
@@ -59,12 +58,6 @@ fn empty_buffer_4096_matches_log_signature() {
         "one underrun event per 960-sample fade run: {snap:?}"
     );
     assert_eq!(mixer.peer_occupancy(&id), Some(0));
-    assert_eq!(mixer.chunks_received_count(), 0);
-    assert_eq!(mixer.fill_avg_len(), callback as u64);
-    assert_eq!(mixer.fill_max_len(), callback);
-    let cursors = mixer.peer_jitter_cursors();
-    assert_eq!(cursors.len(), 1);
-    assert_eq!(cursors[0].1, 0);
 }
 
 #[test]
@@ -100,7 +93,7 @@ fn sustained_960_with_steady_feed_stays_clean() {
     let snap = mixer.metrics_snapshot();
     assert_eq!(snap.gap_detected, 0, "{snap:?}");
     assert_eq!(snap.underrun, 0, "{snap:?}");
-    assert_eq!(mixer.chunks_received_count(), 40);
+    assert_eq!(snap.fills, 30);
 }
 
 #[test]
@@ -125,64 +118,6 @@ fn fully_starved_output_shows_repeated_dips() {
     }
     let dips = count_dips(&out, 960, 10.0);
     assert!(dips > 0, "repeated PLC fades must read as periodic dips");
-}
-
-#[tokio::test]
-async fn hub_produced_counter_advances() {
-    let hub = hub_from_source(
-        SineSource::new_amp(48000, 440.0, 0.5),
-        AudioFormat::new(2, 48000),
-    );
-    let mut rx = hub.subscribe();
-    let mut got = 0;
-    for _ in 0..5 {
-        if tokio::time::timeout(Duration::from_secs(2), rx.recv())
-            .await
-            .is_ok()
-        {
-            got += 1;
-        }
-    }
-    assert!(got > 0, "hub must produce frames");
-    assert!(
-        hub.produced_count() >= got,
-        "produced counter must track sends"
-    );
-}
-
-#[test]
-fn cadence_stats_classifies_bursts_and_gaps() {
-    let stats = CadenceStats::default();
-    stats.record();
-    stats.record();
-    let (_, bursts, _) = stats.snapshot();
-    assert_eq!(bursts, 1, "back-to-back records are a burst");
-    std::thread::sleep(Duration::from_millis(30));
-    stats.record();
-    let (total, _, gaps) = stats.snapshot();
-    assert_eq!(total, 3);
-    assert_eq!(gaps, 1, "30ms pause is a gap");
-}
-
-#[test]
-fn mixer_arrival_cadence_tracks_incoming() {
-    let mixer = AudioMixer::new_no_device();
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(
-        id,
-        Arc::new(AtomicUsize::new(100)),
-        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
-        None,
-    );
-    for seq in 0..3u128 {
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.1; 960]),
-        );
-    }
-    let (total, bursts, _) = mixer.arrival_cadence();
-    assert_eq!(total, 3);
-    assert_eq!(bursts, 2, "rapid test feed is bursty by design");
 }
 
 struct BurstySource {

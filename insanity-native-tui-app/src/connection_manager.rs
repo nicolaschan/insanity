@@ -273,7 +273,6 @@ fn manage_peers(
     }
     let mixer = Arc::new(AudioMixer::new(app_event_tx.clone()));
     let metrics_mixer = mixer.clone();
-    let metrics_hub = hub.clone();
     let mixer_channels = mixer.channels();
     let mixer_rate = mixer.sample_rate();
     let metrics_token = cancellation_token.clone();
@@ -281,17 +280,8 @@ fn manage_peers(
         log::info!(
             "Audio formats: output channels={mixer_channels} output rate={mixer_rate} jitter_chunks={JITTER_TARGET_CHUNKS} buffer_frames={AUDIO_CALLBACK_FRAMES}"
         );
-        let interval_secs: u64 = std::env::var("INSANITY_METRICS_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .filter(|v| *v > 0)
-            .unwrap_or(10);
         let mut prev = metrics_mixer.metrics_snapshot();
-        let mut prev_chunks = 0usize;
-        let mut prev_produced = 0u64;
-        let mut prev_emit = (0u64, 0u64, 0u64);
-        let mut prev_arr = (0u64, 0u64, 0u64);
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
@@ -303,27 +293,7 @@ fn manage_peers(
                         &metrics_mixer.peer_occupancies(),
                     );
                     log::info!("{line}");
-                    let chunks = metrics_mixer.chunks_received_count();
-                    let produced = metrics_hub.produced_count();
-                    let emit = metrics_hub.emission_cadence();
-                    let arr = metrics_mixer.arrival_cadence();
-                    let cursors = metrics_mixer.peer_jitter_cursors();
-                    log::debug!(
-                        "audio detail produced_delta={} received_delta={} emit_bursts_delta={} emit_gaps_delta={} arr_bursts_delta={} arr_gaps_delta={} fill_avg_len={} fill_max_len={} cursors={cursors:?}",
-                        produced.saturating_sub(prev_produced),
-                        chunks.saturating_sub(prev_chunks),
-                        emit.1.saturating_sub(prev_emit.1),
-                        emit.2.saturating_sub(prev_emit.2),
-                        arr.1.saturating_sub(prev_arr.1),
-                        arr.2.saturating_sub(prev_arr.2),
-                        metrics_mixer.fill_avg_len(),
-                        metrics_mixer.fill_max_len(),
-                    );
                     prev = current;
-                    prev_chunks = chunks;
-                    prev_produced = produced;
-                    prev_emit = emit;
-                    prev_arr = arr;
                 }
                 _ = metrics_token.cancelled() => {
                     log::debug!("Audio metrics shutdown.");
