@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use insanity_core::audio::{
     AudioFormat,
-    sample::{SampleSource, SyncSampleSource},
+    sample::{Resampler, SampleSource, SyncSampleSource},
     sample_ops::{interleave_channels, split_channels},
 };
 use log::trace;
@@ -141,12 +141,78 @@ impl<R: SyncSampleSource + Send> SyncSampleSource for RubatoResampler<R> {
     }
 }
 
+pub struct StreamResampler {
+    resampler: Option<SincFixedIn<f32>>,
+    pending_in: VecDeque<f32>,
+    pending_out: VecDeque<f32>,
+    source_channels: usize,
+    block_frames: usize,
+}
+
+impl StreamResampler {
+    pub fn new(source: AudioFormat, target_rate: u32, block_frames: usize) -> Self {
+        let bypass =
+            source.sample_rate == target_rate || source.channel_count == 0 || block_frames == 0;
+        let resampler = if bypass {
+            None
+        } else {
+            let params = rubato::InterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: rubato::InterpolationType::Linear,
+                oversampling_factor: 256,
+                window: rubato::WindowFunction::BlackmanHarris2,
+            };
+            Some(SincFixedIn::<f32>::new(
+                target_rate as f64 / source.sample_rate as f64,
+                params,
+                block_frames,
+                source.channel_count as usize,
+            ))
+        };
+        StreamResampler {
+            resampler,
+            pending_in: VecDeque::new(),
+            pending_out: VecDeque::new(),
+            source_channels: source.channel_count as usize,
+            block_frames,
+        }
+    }
+}
+
+impl Resampler for StreamResampler {
+    fn push_sample(&mut self, sample: f32) {
+        let Some(resampler) = self.resampler.as_mut() else {
+            self.pending_out.push_back(sample);
+            return;
+        };
+        self.pending_in.push_back(sample);
+        let block = self.block_frames * self.source_channels;
+        if self.pending_in.len() < block {
+            return;
+        }
+        let input: Vec<f32> = self.pending_in.drain(..block).collect();
+        let channels = split_channels(&input, self.source_channels);
+        match resampler.process(&channels) {
+            Ok(converted) => self.pending_out.extend(interleave_channels(&converted)),
+            Err(_) => {
+                log::error!("Resampler failed, passing chunk through unprocessed");
+                self.pending_out.extend(input);
+            }
+        }
+    }
+
+    fn pop_sample(&mut self) -> Option<f32> {
+        self.pending_out.pop_front()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::RubatoResampler;
+    use super::{RubatoResampler, StreamResampler};
     use insanity_core::audio::AudioFormat;
-    use insanity_core::audio::chunk::{ChunkSource, SampleChunker};
-    use insanity_core::audio::sample::SampleSource;
+    use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
+    use insanity_core::audio::sample::{Resampler, SampleSource};
     use std::future::Future;
     use std::pin::pin;
     use std::task::{Context, Poll, Waker};
@@ -202,5 +268,85 @@ mod tests {
             (total as f64 - expected).abs() < 2.0,
             "got {total}, expected {expected}"
         );
+    }
+
+    fn drain(resampler: &mut StreamResampler) -> Vec<f32> {
+        let mut out = Vec::new();
+        while let Some(sample) = resampler.pop_sample() {
+            out.push(sample);
+        }
+        out
+    }
+
+    fn push_all(resampler: &mut StreamResampler, chunk: AudioChunk) {
+        for sample in chunk.audio_data {
+            resampler.push_sample(sample);
+        }
+    }
+
+    #[test]
+    fn equal_rates_pass_through_exactly() {
+        let mut resampler = StreamResampler::new(AudioFormat::new(2, 48000), 48000, 480);
+        let data: Vec<f32> = (0..960).map(|v| v as f32).collect();
+        push_all(
+            &mut resampler,
+            AudioChunk::new(0, AudioFormat::new(2, 48000), data.clone()),
+        );
+        assert_eq!(drain(&mut resampler), data);
+    }
+
+    #[test]
+    fn resample_yields_expected_sample_count() {
+        let mut resampler = StreamResampler::new(AudioFormat::new(2, 44100), 48000, 480);
+        let mut total = 0usize;
+        for seq in 0..20 {
+            push_all(
+                &mut resampler,
+                AudioChunk::new(seq, AudioFormat::new(2, 44100), vec![0.4; 960]),
+            );
+            let out = drain(&mut resampler);
+            assert!(out.iter().all(|sample| sample.is_finite()));
+            if seq == 0 {
+                continue;
+            }
+            assert!(out.len() == 1044 || out.len() == 1046);
+            total += out.len();
+        }
+        let expected = 19.0 * 960.0 * 48000.0 / 44100.0;
+        assert!(
+            (total as f64 - expected).abs() < 19.0,
+            "got {total}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn partial_block_waits_for_rest() {
+        let mut resampler = StreamResampler::new(AudioFormat::new(2, 44100), 48000, 480);
+        push_all(
+            &mut resampler,
+            AudioChunk::new(0, AudioFormat::new(2, 44100), vec![0.4; 100]),
+        );
+        assert_eq!(resampler.pop_sample(), None);
+        push_all(
+            &mut resampler,
+            AudioChunk::new(1, AudioFormat::new(2, 44100), vec![0.4; 860]),
+        );
+        assert!(resampler.pop_sample().is_some());
+    }
+
+    #[test]
+    fn degenerate_formats_do_not_panic() {
+        let mut resampler = StreamResampler::new(AudioFormat::new(0, 48000), 48000, 480);
+        push_all(
+            &mut resampler,
+            AudioChunk::new(0, AudioFormat::new(0, 48000), Vec::new()),
+        );
+        assert_eq!(resampler.pop_sample(), None);
+        let mut resampler = StreamResampler::new(AudioFormat::new(2, 44100), 48000, 0);
+        push_all(
+            &mut resampler,
+            AudioChunk::new(0, AudioFormat::new(2, 44100), vec![0.4; 960]),
+        );
+        assert_eq!(drain(&mut resampler), vec![0.4; 960]);
     }
 }

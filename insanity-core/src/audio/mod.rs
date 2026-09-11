@@ -5,6 +5,7 @@ pub mod denoiser;
 pub mod device;
 pub mod flatten;
 pub mod jitter;
+pub mod mixer;
 pub mod sample;
 pub mod sample_ops;
 pub mod transform;

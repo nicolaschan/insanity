@@ -146,6 +146,36 @@ impl ChunkTransform for Gain {
     }
 }
 
+pub struct Clip {
+    pub clip_hits: usize,
+}
+
+impl Clip {
+    pub fn new() -> Self {
+        Clip { clip_hits: 0 }
+    }
+}
+
+impl Default for Clip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ChunkTransform for Clip {
+    fn transform(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let mut chunk = chunk;
+        for sample in chunk.audio_data.iter_mut() {
+            let clamped = (*sample).clamp(-1.0, 1.0);
+            if clamped != *sample {
+                self.clip_hits += 1;
+            }
+            *sample = clamped;
+        }
+        Some(chunk)
+    }
+}
+
 pub struct DenoiseControl {
     selection: Mutex<DenoiseSelection>,
 }
@@ -285,7 +315,7 @@ impl ChunkTransform for ChannelMap {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelMap, ChunkTransform, Denoise, DenoiseSelection, Gain, GainControl, Link,
+        ChannelMap, ChunkTransform, Clip, Denoise, DenoiseSelection, Gain, GainControl, Link,
         MetricsReader, Mute, volume_multiplier,
     };
     use crate::audio::AudioFormat;
@@ -348,6 +378,24 @@ mod tests {
     fn volume_curve_contract() {
         assert_eq!(volume_multiplier(0), 0.0);
         assert!((volume_multiplier(100) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clip_passes_in_range_untouched() {
+        let mut clip = Clip::new();
+        let out = clip
+            .transform(chunk(vec![-1.0, -0.5, 0.0, 0.5, 1.0]))
+            .expect("live");
+        assert_eq!(out.audio_data, vec![-1.0, -0.5, 0.0, 0.5, 1.0]);
+        assert_eq!(clip.clip_hits, 0);
+    }
+
+    #[test]
+    fn clip_clamps_and_counts_hits() {
+        let mut clip = Clip::default();
+        let out = clip.transform(chunk(vec![-2.0, 0.25, 1.5])).expect("live");
+        assert_eq!(out.audio_data, vec![-1.0, 0.25, 1.0]);
+        assert_eq!(clip.clip_hits, 2);
     }
 
     #[test]
