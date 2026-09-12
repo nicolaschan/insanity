@@ -1,13 +1,30 @@
-use insanity_core::audio::{
-    AudioFormat,
-    sample::{SampleSource, SyncSampleSource},
-};
-use insanity_native_tui_app::audio_test_support::{
-    VirtualNode, energy_ratio, goertzel_energy, loudness, max_normalized_xcorr, render_tick,
-    run_mesh, transfer_tick_timeout,
-};
+#[path = "../tests/common/audio_math.rs"]
+mod audio_math;
+#[path = "../tests/common/mesh.rs"]
+mod mesh;
+#[path = "../tests/common/sine.rs"]
+mod sine;
+
+use audio_math::{energy_ratio, loudness, max_normalized_xcorr};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
+use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+fn goertzel_energy(samples: &[f32], freq: f32, sr: f32) -> f64 {
+    let w = 2.0 * std::f64::consts::PI * freq as f64 / sr as f64;
+    let (cw, sw) = (w.cos(), w.sin());
+    let (mut u1, mut u2) = (0.0f64, 0.0f64);
+    for &s in samples.iter() {
+        let u0 = s as f64 + 2.0 * cw * u1 - u2;
+        u2 = u1;
+        u1 = u0;
+    }
+    let real = u1 * cw - u2;
+    let imag = u1 * sw;
+    real * real + imag * imag
+}
 
 struct ChirpSource {
     n: u64,
@@ -212,6 +229,9 @@ struct CellResult {
     goertzel_440: f64,
     goertzel_880: f64,
     gap: usize,
+    late: usize,
+    overflow: usize,
+    stale: usize,
     underrun: usize,
 }
 
@@ -266,8 +286,6 @@ async fn run_cell(signal: &str, condition: &str, run: usize, ticks: usize) -> Ce
         }
     } else if condition == "clean" {
         run_mesh(&mut nodes, &[("a".to_string(), "b".to_string())], ticks).await;
-        // Note: unlike the degradation branches below (which count
-        // successful transfers), `ok` here counts mic chunks produced.
         ok = nodes["a"].mic_history.len() / 960;
     } else {
         for t in 0..ticks {
@@ -337,6 +355,9 @@ async fn run_cell(signal: &str, condition: &str, run: usize, ticks: usize) -> Ce
         goertzel_440: goertzel_energy(&spk_tail, 440.0, 48000.0),
         goertzel_880: goertzel_energy(&spk_tail, 880.0, 48000.0),
         gap: snap.gap_detected,
+        late: snap.late_dropped,
+        overflow: snap.overflow_dropped,
+        stale: snap.stale_dropped,
         underrun: snap.underrun,
     }
 }
@@ -346,7 +367,7 @@ fn target_csv() -> PathBuf {
 }
 
 const CELL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-const CSV_HEADER: &str = "signal,condition,run,ok,total,mic_len,spk_len,xcorr_pos,xcorr_neg880,d_loud,loud_mic,loud_spk,energy,goertzel_440,goertzel_880,gap,underrun\n";
+const CSV_HEADER: &str = "signal,condition,run,ok,total,mic_len,spk_len,xcorr_pos,xcorr_neg880,d_loud,loud_mic,loud_spk,energy,goertzel_440,goertzel_880,gap,late,overflow,stale,underrun\n";
 
 async fn run_cell_timeout(signal: &str, condition: &str, run: usize, ticks: usize) -> CellResult {
     match tokio::time::timeout(CELL_TIMEOUT, run_cell(signal, condition, run, ticks)).await {
@@ -359,7 +380,7 @@ async fn run_cell_timeout(signal: &str, condition: &str, run: usize, ticks: usiz
 
 fn format_row(r: &CellResult) -> String {
     format!(
-        "{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{:.1},{},{}\n",
+        "{},{},{},{},{},{},{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.1},{:.1},{},{},{},{},{}\n",
         r.signal,
         r.condition,
         r.run,
@@ -376,6 +397,9 @@ fn format_row(r: &CellResult) -> String {
         r.goertzel_440,
         r.goertzel_880,
         r.gap,
+        r.late,
+        r.overflow,
+        r.stale,
         r.underrun
     )
 }

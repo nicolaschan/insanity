@@ -1,19 +1,33 @@
+#[path = "common/audio_math.rs"]
+mod audio_math;
+#[path = "common/mesh.rs"]
+mod mesh;
+#[path = "common/sine.rs"]
+mod sine;
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::AudioEncoder;
 use insanity_core::audio::jitter::JitterBuffer;
+use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+use insanity_core::audio::transform::Gain;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::AudioMixer;
-use insanity_native_tui_app::audio_test_support::{
-    SineSource, energy_ratio, hub_from_source, loudness, max_normalized_xcorr, render_tick,
-    run_mesh, transfer_tick_timeout,
-};
-use insanity_native_tui_app::clerver::decode_frame_to_chunk;
+use insanity_native_tui_app::audio::{PeerControls, chain_from_controls, output_resampler};
 use insanity_native_tui_app::codec_opus::OpusEncoder;
+use insanity_native_tui_app::processor::MAX_VOLUME;
+use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use opus::{Channels, Decoder};
+use sine::{SineSource, decode_frame_to_chunk, hub_from_source};
 use std::collections::HashMap;
-use std::sync::{Arc, atomic::AtomicUsize};
+use std::sync::Arc;
 use std::time::Duration;
+use unit_mixer::{
+    UnitMixer, add_unit_peer, push_chunk, push_value, rebuild_passthrough, render, unit_mixer,
+};
 
 struct ChirpSource {
     n: u64,
@@ -98,18 +112,14 @@ impl SyncSampleSource for AmSpeechSource {
     }
 }
 
-fn tail(samples: &[f32], chunks: usize) -> &[f32] {
-    &samples[samples.len() - chunks * 960..]
-}
-
-fn music_pair() -> HashMap<String, insanity_native_tui_app::audio_test_support::VirtualNode> {
+fn music_pair() -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
-    let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+    let mut a = VirtualNode::with_source(
         "a",
         AmSpeechSource::new(48000, 0.5),
         AudioFormat::new(2, 48000),
     );
-    let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+    let mut b = VirtualNode::with_source(
         "b",
         ChirpSource::new(48000, 0.0, 1),
         AudioFormat::new(2, 48000),
@@ -159,12 +169,12 @@ async fn non48k_input_resample_loopback() {
     let timeout = Duration::from_secs(60);
     let res = tokio::time::timeout(timeout, async {
         let mut nodes = HashMap::new();
-        let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+        let mut a = VirtualNode::with_source(
             "a",
             SineSource::new_amp(44100, 440.0, 0.5),
             AudioFormat::new(2, 44100),
         );
-        let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+        let mut b = VirtualNode::with_source(
             "b",
             SineSource::new_amp(48000, 880.0, 0.0),
             AudioFormat::new(2, 48000),
@@ -202,42 +212,46 @@ async fn non48k_input_resample_loopback() {
 
 #[test]
 fn resampled_output_fill_budget() {
-    let mixer = AudioMixer::new_no_device_with_format(44100, 2);
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(
-        id,
-        Arc::new(AtomicUsize::new(100)),
-        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
-        None,
+    let out_format = AudioFormat::new(2, 44100);
+    let (bus, _) = Gain::shared(100, MAX_VOLUME);
+    let mut mixer: UnitMixer = Mixer::new(out_format.clone(), 10, 480, bus);
+    let controls = PeerControls::new(100, DenoiseSelection::None);
+    let chain = chain_from_controls(&controls);
+    let id = mixer.subscribe(
+        chain,
+        rebuild_passthrough,
+        output_resampler(out_format, 480),
     );
-    for seq in 0..3u128 {
-        mixer.handle_incoming(
+    let push = |mixer: &mut UnitMixer, seq: u128| {
+        push_chunk(
+            mixer,
             id,
             AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
         );
+    };
+    for seq in 0..3u128 {
+        push(&mut mixer, seq);
     }
+    let start = std::time::Instant::now();
     for seq in 3..13u128 {
-        let mut out = vec![0f32; 960];
-        mixer.fill_buffer(&mut out);
+        let out = render(&mut mixer, 960);
         for s in out.iter() {
             assert!(s.is_finite());
             assert!(s.abs() <= 1.0 + 1e-6);
         }
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
-        );
+        push(&mut mixer, seq);
     }
+    let elapsed = start.elapsed();
     let snap = mixer.metrics_snapshot();
     assert_eq!(
         snap.underrun, 0,
         "prefilled resampled mixer must not underrun: {snap:?}"
     );
     let realtime_nanos = 960 / 2 * 1_000_000_000 / 44_100;
+    let avg_nanos = elapsed.as_nanos() as u64 / 10;
     assert!(
-        mixer.fill_avg_nanos() < realtime_nanos,
-        "fill budget blown: {}ns of {realtime_nanos}ns",
-        mixer.fill_avg_nanos()
+        avg_nanos < realtime_nanos,
+        "fill budget blown: {avg_nanos}ns of {realtime_nanos}ns"
     );
 }
 
@@ -267,22 +281,10 @@ async fn broadcast_lag_records_gap() {
             jumped_seq > 0,
             "lagging receiver must observe a seq jump, got {jumped_seq}"
         );
-        let mixer = AudioMixer::new_no_device();
-        let id = uuid::Uuid::new_v4();
-        mixer.add_peer(
-            id,
-            Arc::new(AtomicUsize::new(100)),
-            Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
-            None,
-        );
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(jumped_seq, AudioFormat::new(2, 48000), vec![0.1; 960]),
-        );
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.1; 960]),
-        );
+        let (mut mixer, _) = unit_mixer(100);
+        let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+        push_value(&mut mixer, id, jumped_seq, 0.1);
+        push_value(&mut mixer, id, 0, 0.1);
         let snap = mixer.metrics_snapshot();
         assert!(
             snap.gap_detected > 0,
@@ -307,8 +309,8 @@ async fn burst_loss_still_realtime() {
     let timeout = Duration::from_secs(60);
     let res = tokio::time::timeout(timeout, async {
         let mut nodes = HashMap::new();
-        let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::new("a", 440.0);
-        let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::new("b", 880.0);
+        let mut a = VirtualNode::new("a", 440.0);
+        let mut b = VirtualNode::new("b", 880.0);
         a.add_outbound("b");
         b.add_inbound("a");
         nodes.insert("a".to_string(), a);
@@ -360,7 +362,7 @@ fn opus_stereo_frame_roundtrip_shape() {
                 chunk.clone(),
             ))
             .expect("encode");
-        let decoded = decode_frame_to_chunk(&mut dec, &frame, 2).expect("decode");
+        let decoded = decode_frame_to_chunk(&mut dec, &frame).expect("decode");
         assert_eq!(decoded.sequence_number, seq);
         assert_eq!(decoded.audio_data.len(), 960);
         out = Some((decoded.audio_data, chunk));

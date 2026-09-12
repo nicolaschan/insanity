@@ -1,93 +1,53 @@
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk, chunk::ChunkSource};
+#[path = "common/audio_math.rs"]
+mod audio_math;
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use audio_math::count_dips;
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
-use std::sync::{Arc, atomic::AtomicUsize};
+use insanity_native_tui_app::audio::AudioInputHub;
 use std::time::Duration;
-
-fn window_rms(samples: &[f32]) -> f64 {
-    let e: f64 = samples.iter().map(|v| (*v as f64).powi(2)).sum();
-    (e / samples.len().max(1) as f64).sqrt()
-}
-
-fn count_dips(samples: &[f32], window: usize, thresh_db: f64) -> usize {
-    let mut energies = Vec::new();
-    for w in samples.chunks(window) {
-        if w.len() == window {
-            energies.push(window_rms(w));
-        }
-    }
-    let median = {
-        let mut s = energies.clone();
-        s.sort_by(|a, b| a.partial_cmp(b).expect("rms"));
-        s[s.len() / 2]
-    };
-    energies
-        .iter()
-        .filter(|e| 20.0 * (**e / median.max(1e-9)).log10() < -thresh_db)
-        .count()
-}
+use unit_mixer::{add_unit_peer, assert_all_finite, push_value, render, unit_mixer};
 
 #[test]
 fn empty_buffer_4096_matches_log_signature() {
-    let mixer = AudioMixer::new_no_device();
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(
-        id,
-        Arc::new(AtomicUsize::new(100)),
-        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
-        None,
-    );
+    let (mut mixer, _) = unit_mixer(100);
+    let _ = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     let fills = 10usize;
     let callback = 4096usize;
     for _ in 0..fills {
-        let mut out = vec![0f32; callback];
-        mixer.fill_buffer(&mut out);
+        let _ = render(&mut mixer, callback);
     }
     let snap = mixer.metrics_snapshot();
     assert_eq!(snap.gap_detected, 0, "no feed means no seq jumps: {snap:?}");
     assert_eq!(snap.late_dropped, 0, "{snap:?}");
     assert!(snap.underrun > 0, "empty buffer must underrun: {snap:?}");
-    let plc_per_fill = snap.plc_hold as f64 / snap.fills as f64;
-    assert!(
-        (plc_per_fill - callback as f64).abs() < 1.0,
-        "every sample concealed when fully starved: {snap:?}"
+    assert_eq!(
+        snap.underrun, snap.fills,
+        "one underrun event per concealment block: {snap:?}"
     );
-    let underruns_per_fill = snap.underrun as f64 / snap.fills as f64;
-    assert!(
-        (underruns_per_fill - callback as f64 / 960.0).abs() < 1.0,
-        "one underrun event per 960-sample fade run: {snap:?}"
+    assert_eq!(
+        snap.plc_hold,
+        snap.fills * 960,
+        "every synthesized sample concealed when fully starved: {snap:?}"
     );
-    assert_eq!(mixer.peer_occupancy(&id), Some(0));
 }
 
 #[test]
 fn sustained_960_with_steady_feed_stays_clean() {
-    let mixer = AudioMixer::new_no_device();
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(
-        id,
-        Arc::new(AtomicUsize::new(100)),
-        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
-        None,
-    );
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     let mut seq: u128 = 0;
     for _ in 0..10 {
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
-        );
+        push_value(&mut mixer, id, seq, 0.4);
         seq += 1;
     }
     for _ in 0..30 {
-        let mut out = vec![0f32; 960];
-        mixer.fill_buffer(&mut out);
-        for s in out.iter() {
-            assert!(s.is_finite());
-        }
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
-        );
+        let out = render(&mut mixer, 960);
+        assert_all_finite(&out);
+        push_value(&mut mixer, id, seq, 0.4);
         seq += 1;
     }
     let snap = mixer.metrics_snapshot();
@@ -98,23 +58,12 @@ fn sustained_960_with_steady_feed_stays_clean() {
 
 #[test]
 fn fully_starved_output_shows_repeated_dips() {
-    let mixer = AudioMixer::new_no_device();
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(
-        id,
-        Arc::new(AtomicUsize::new(100)),
-        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
-        None,
-    );
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.5; 960]),
-    );
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.5);
     let mut out = Vec::new();
     for _ in 0..20 {
-        let mut buf = vec![0f32; 960];
-        mixer.fill_buffer(&mut buf);
-        out.extend(buf);
+        out.extend(render(&mut mixer, 960));
     }
     let dips = count_dips(&out, 960, 10.0);
     assert!(dips > 0, "repeated PLC fades must read as periodic dips");
@@ -127,13 +76,13 @@ struct BurstySource {
 
 impl BurstySource {
     fn chunk(&mut self) -> AudioChunk {
-        let mut data = Vec::with_capacity(960);
-        for _ in 0..480 {
-            let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.4;
-            self.phase = (self.phase + 440.0 / 48000.0) % 1.0;
-            data.push(v);
-            data.push(v);
-        }
+        let data: Vec<f32> = (0..480)
+            .flat_map(|_| {
+                let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.4;
+                self.phase = (self.phase + 440.0 / 48000.0) % 1.0;
+                [v, v]
+            })
+            .collect();
         let chunk = AudioChunk::new(self.seq, AudioFormat::new(2, 48000), data);
         self.seq += 1;
         chunk

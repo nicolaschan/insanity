@@ -45,6 +45,7 @@ insanity-tui-adapter = { path = "../insanity-tui-adapter" }
 rubato-audio-source = { path = "../rubato-audio-source" }
 sha2 = "0.10.8"
 whoami = "1.5.1"
+rtrb = "0.4"
 sled = "0.34.7"
 log = "0.4"
 fern = "0.6.2"

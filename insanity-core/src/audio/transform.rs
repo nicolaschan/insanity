@@ -5,6 +5,7 @@ use std::sync::{
 
 use crate::audio::chunk::AudioChunk;
 use crate::audio::denoiser::{Denoiser, MultiChannelDenoiser};
+use crate::audio::jitter::JitterBuffer;
 use crate::audio::sample_ops::convert_to_mixer_channels;
 use crate::loudness::calculate_loudness;
 use crate::user_input_event::DenoiseSelection;
@@ -146,6 +147,36 @@ impl ChunkTransform for Gain {
     }
 }
 
+pub struct Clip {
+    pub clip_hits: usize,
+}
+
+impl Clip {
+    pub fn new() -> Self {
+        Clip { clip_hits: 0 }
+    }
+}
+
+impl Default for Clip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ChunkTransform for Clip {
+    fn transform(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let mut chunk = chunk;
+        for sample in chunk.audio_data.iter_mut() {
+            let clamped = (*sample).clamp(-1.0, 1.0);
+            if clamped != *sample {
+                self.clip_hits += 1;
+            }
+            *sample = clamped;
+        }
+        Some(chunk)
+    }
+}
+
 pub struct DenoiseControl {
     selection: Mutex<DenoiseSelection>,
 }
@@ -202,16 +233,11 @@ impl<D: Denoiser> ChunkTransform for Denoise<D> {
 
 pub struct MetricsState {
     loudness_bits: AtomicU64,
-    frames: AtomicUsize,
 }
 
 impl MetricsState {
     pub fn loudness(&self) -> f64 {
         f64::from_bits(self.loudness_bits.load(Ordering::Relaxed))
-    }
-
-    pub fn frames(&self) -> usize {
-        self.frames.load(Ordering::Relaxed)
     }
 }
 
@@ -219,7 +245,6 @@ impl Default for MetricsState {
     fn default() -> Self {
         MetricsState {
             loudness_bits: AtomicU64::new(0.0f64.to_bits()),
-            frames: AtomicUsize::new(0),
         }
     }
 }
@@ -245,8 +270,52 @@ impl ChunkTransform for MetricsReader {
             calculate_loudness(&chunk.audio_data).to_bits(),
             Ordering::Relaxed,
         );
-        self.state.frames.fetch_add(1, Ordering::Relaxed);
         Some(chunk)
+    }
+}
+
+pub struct JitterStage {
+    buffer: JitterBuffer<AudioChunk>,
+    pub gap_detected: usize,
+    pub late_dropped: usize,
+    pub overflow_dropped: usize,
+}
+
+impl JitterStage {
+    pub fn new(capacity_chunks: usize) -> Self {
+        assert!(capacity_chunks > 0);
+        JitterStage {
+            buffer: JitterBuffer::new(capacity_chunks),
+            gap_detected: 0,
+            late_dropped: 0,
+            overflow_dropped: 0,
+        }
+    }
+
+    pub fn push(&mut self, chunk: AudioChunk) {
+        let sequence = chunk.sequence_number;
+        if sequence < self.buffer.head() {
+            self.late_dropped += 1;
+        } else if self.buffer.is_empty() {
+            if sequence != self.buffer.head() {
+                self.gap_detected += 1;
+            }
+        } else if sequence > self.buffer.prev() && sequence != self.buffer.prev() + 1 {
+            self.gap_detected += 1;
+        }
+        self.overflow_dropped += self.buffer.set(sequence, chunk);
+    }
+
+    pub fn reset(&mut self) {
+        self.buffer.reset();
+    }
+
+    pub fn buffered_chunks(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn pull(&mut self) -> Option<AudioChunk> {
+        self.buffer.next_item()
     }
 }
 
@@ -285,7 +354,7 @@ impl ChunkTransform for ChannelMap {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelMap, ChunkTransform, Denoise, DenoiseSelection, Gain, GainControl, Link,
+        ChannelMap, ChunkTransform, Clip, Denoise, DenoiseSelection, Gain, GainControl, Link,
         MetricsReader, Mute, volume_multiplier,
     };
     use crate::audio::AudioFormat;
@@ -351,6 +420,24 @@ mod tests {
     }
 
     #[test]
+    fn clip_passes_in_range_untouched() {
+        let mut clip = Clip::new();
+        let out = clip
+            .transform(chunk(vec![-1.0, -0.5, 0.0, 0.5, 1.0]))
+            .expect("live");
+        assert_eq!(out.audio_data, vec![-1.0, -0.5, 0.0, 0.5, 1.0]);
+        assert_eq!(clip.clip_hits, 0);
+    }
+
+    #[test]
+    fn clip_clamps_and_counts_hits() {
+        let mut clip = Clip::default();
+        let out = clip.transform(chunk(vec![-2.0, 0.25, 1.5])).expect("live");
+        assert_eq!(out.audio_data, vec![-1.0, 0.25, 1.0]);
+        assert_eq!(clip.clip_hits, 2);
+    }
+
+    #[test]
     fn denoise_none_passes_through() {
         let (mut denoise, control) = Denoise::<DoubleDenoiser>::shared(DenoiseSelection::None);
         let out = denoise.transform(chunk(vec![0.5; 8])).expect("live");
@@ -365,7 +452,6 @@ mod tests {
         let (mut meter, state) = MetricsReader::shared();
         let out = meter.transform(chunk(vec![0.5; 8])).expect("live");
         assert_eq!(out.audio_data, vec![0.5; 8]);
-        assert_eq!(state.frames(), 1);
         let loudness = state.loudness();
         assert!(loudness > 0.0 && loudness <= 1.0);
     }
