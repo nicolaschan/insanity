@@ -1,10 +1,10 @@
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::AudioMixer;
-use insanity_native_tui_app::audio_test_support::energy_ratio;
+use insanity_native_tui_app::audio_test_support::{
+    UnitMixer, add_unit_peer, energy_ratio, push_chunk, render, unit_mixer,
+};
 use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
-use std::sync::{Arc, atomic::AtomicUsize};
 
 fn music_chunk() -> Vec<f32> {
     (0..480)
@@ -28,29 +28,23 @@ fn noise_chunk(seed: u64, amp: f32) -> Vec<f32> {
         .collect()
 }
 
-fn mixer_with_denoise(denoise: DenoiseSelection) -> (AudioMixer, uuid::Uuid) {
-    let mixer = AudioMixer::new_no_device();
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(
-        id,
-        Arc::new(AtomicUsize::new(100)),
-        Arc::new(std::sync::Mutex::new(denoise)),
-        None,
-    );
+fn mixer_with_denoise(denoise: DenoiseSelection) -> (UnitMixer, u32) {
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, denoise);
     (mixer, id)
 }
 
 #[test]
 fn music_intact_when_denoise_off() {
-    let (mixer, id) = mixer_with_denoise(DenoiseSelection::None);
+    let (mut mixer, id) = mixer_with_denoise(DenoiseSelection::None);
     let music = music_chunk();
     assert!(music.iter().all(|s| s.abs() < 1.0));
-    mixer.handle_incoming(
+    push_chunk(
+        &mut mixer,
         id,
         AudioChunk::new(0, AudioFormat::new(2, 48000), music.clone()),
     );
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    let out = render(&mut mixer, 960);
     assert_eq!(out.len(), music.len());
     for (i, (a, b)) in out.iter().zip(music.iter()).enumerate() {
         assert_eq!(a, b, "sample {i} altered with denoise off");
@@ -96,26 +90,25 @@ fn noise_substantially_quieter_when_denoise_on() {
 #[test]
 fn toggle_honored_on_nonspeech() {
     let music = noise_chunk(0x12345678, 0.4);
-    let (mixer_off, id_off) = mixer_with_denoise(DenoiseSelection::None);
-    mixer_off.handle_incoming(
+    let (mut mixer_off, id_off) = mixer_with_denoise(DenoiseSelection::None);
+    push_chunk(
+        &mut mixer_off,
         id_off,
         AudioChunk::new(0, AudioFormat::new(2, 48000), music.clone()),
     );
-    let mut out_off = vec![0f32; 960];
-    mixer_off.fill_buffer(&mut out_off);
-    let (mixer_on, id_on) = mixer_with_denoise(DenoiseSelection::default());
+    let out_off = render(&mut mixer_off, 960);
+    let (mut mixer_on, id_on) = mixer_with_denoise(DenoiseSelection::default());
     for seq in 0..6u128 {
-        mixer_on.handle_incoming(
+        push_chunk(
+            &mut mixer_on,
             id_on,
             AudioChunk::new(seq, AudioFormat::new(2, 48000), music.clone()),
         );
     }
     for _ in 0..5 {
-        let mut discard = vec![0f32; 960];
-        mixer_on.fill_buffer(&mut discard);
+        let _ = render(&mut mixer_on, 960);
     }
-    let mut out_on = vec![0f32; 960];
-    mixer_on.fill_buffer(&mut out_on);
+    let out_on = render(&mut mixer_on, 960);
     let ratio = energy_ratio(&out_on, &out_off);
     assert!(
         ratio < 0.8,

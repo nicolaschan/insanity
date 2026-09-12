@@ -1,43 +1,15 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use insanity_core::audio::codec::EncodedChunk;
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+use insanity_core::audio::transform::MetricsState;
 use insanity_tui_adapter::AppEvent;
-use opus::Decoder;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
 
-use crate::{
-    audio::{AudioInputHub, AudioMixer},
-    codec_opus::u16_to_channels,
-    processor::AUDIO_SAMPLE_RATE,
-    protocol::ProtocolMessage,
-};
+use crate::{audio::AudioInputHub, protocol::ProtocolMessage};
 
 // A clerver is a CLient + sERVER.
-
-pub fn decode_frame_to_chunk(
-    decoder: &mut Decoder,
-    frame: &EncodedChunk,
-    channels: u16,
-) -> Option<AudioChunk> {
-    let Ok(nb) = decoder.get_nb_samples(&frame.payload[..]) else {
-        return None;
-    };
-    let len = nb * (channels as usize);
-    let mut buf = vec![0f32; len];
-    if decoder
-        .decode_float(&frame.payload[..], &mut buf[..], false)
-        .is_err()
-    {
-        return None;
-    }
-    Some(AudioChunk::new(
-        frame.sequence_number,
-        AudioFormat::new(channels, AUDIO_SAMPLE_RATE),
-        buf,
-    ))
-}
 
 async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
     let mut rx = hub.subscribe();
@@ -73,71 +45,72 @@ async fn run_peer_message_sender(
     }
 }
 
-async fn run_receiver(
+async fn run_receiver<P, F>(
     mut conn: VeqSessionAlias,
-    mixer: Arc<AudioMixer>,
+    mut push: P,
+    loudness: Arc<MetricsState>,
+    peer_id: String,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
-    id: uuid::Uuid,
-) {
-    let id_str = id.to_string();
-    let Ok(mut decoder) = Decoder::new(AUDIO_SAMPLE_RATE, u16_to_channels(mixer.channels())) else {
-        log::error!("Failed to create Opus decoder for peer {id}; receiver disabled");
-        return;
-    };
-
+) where
+    P: FnMut(EncodedChunk) -> F,
+    F: Future<Output = ()> + Send,
+{
     while let Ok(packet) = conn.recv().await {
         if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
                 ProtocolMessage::Encoded(frame) => {
-                    let channels = mixer.channels();
-                    let Some(chunk) = decode_frame_to_chunk(&mut decoder, &frame, channels) else {
-                        continue;
-                    };
-                    mixer.handle_incoming(id, chunk);
+                    push(frame).await;
+                    if let Some(sender) = &app_event_sender {
+                        let level = loudness.loudness();
+                        let _ = sender.send(AppEvent::Loudness(peer_id.clone(), level));
+                    }
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
                 ProtocolMessage::PeerDiscovery(_) => {}
                 ProtocolMessage::ChatMessage(chat_message) => {
                     if let Some(app_event_sender) = &app_event_sender {
                         let _ = app_event_sender
-                            .send(AppEvent::NewMessage(id_str.clone(), chat_message));
+                            .send(AppEvent::NewMessage(peer_id.clone(), chat_message));
                     }
                 }
             }
         }
     }
-    mixer.remove_peer(&id);
 }
 
-pub async fn run_clerver(
+pub async fn run_clerver<P, F>(
     conn: VeqSessionAlias,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
     hub: Arc<AudioInputHub>,
-    mixer: Arc<AudioMixer>,
+    push: P,
+    loudness: Arc<MetricsState>,
+    peer_id: String,
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
-    id: uuid::Uuid,
-) {
+) where
+    P: FnMut(EncodedChunk) -> F,
+    F: Future<Output = ()> + Send,
+{
     tokio::select! {
         _ = run_audio_sender(
             conn.clone(),
             hub,
         ) => {
-            log::debug!("Audio sender for {id} ended early.");
+            log::debug!("Audio sender for {peer_id} ended early.");
         },
         _ = run_receiver(
             conn.clone(),
-            mixer.clone(),
+            push,
+            loudness,
+            peer_id.clone(),
             app_event_sender,
-            id,
         ) => {
-            log::debug!("Receiver for {id} ended early.");
+            log::debug!("Receiver for {peer_id} ended early.");
         },
         _ = run_peer_message_sender(
             conn,
             peer_message_receiver,
         ) => {
-            log::debug!("Peer message sender for {id} ended early.");
+            log::debug!("Peer message sender for {peer_id} ended early.");
         },
     }
-    mixer.remove_peer(&id);
 }

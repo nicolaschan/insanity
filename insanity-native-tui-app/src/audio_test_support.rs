@@ -2,19 +2,26 @@
 //!
 //! Each [`VirtualNode`] is one insanity program with a synthetic mic
 //! ([`SineSource`] via [`PacedChunkSource`]) and a virtual speaker
-//! ([`AudioMixer::new_no_device`]). [`transfer_tick`] moves one 10ms chunk
+//! (core `Mixer`). [`transfer_tick`] moves one 10ms chunk
 //! along a directed edge through the **production** pipeline
-//! (hub seq → Opus encode → bincode round-trip → Opus decode →
-//! `handle_incoming`), and [`run_mesh`] drives a full topology tick by tick
+//! (hub seq → Opus encode → bincode round-trip → Opus decode inside the
+//! mixer input), and [`run_mesh`] drives a full topology tick by tick
 //! (interleaved feed/fill, matching the realtime pattern).
 //!
 //! Waveform assertions are delay-tolerant: Opus introduces codec delay, so
 //! [`max_normalized_xcorr`] slides the reference over ±lag before scoring.
 
-use crate::audio::{AudioInputHub, AudioMixer};
-use crate::clerver::decode_frame_to_chunk;
-use crate::processor::{AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE};
+use crate::audio::{
+    AppMixer, AudioInputHub, PeerChain, PeerControls, chain_from_controls, output_resampler,
+    rebuild_opus_decoder,
+};
+use crate::processor::{AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE, MAX_VOLUME};
 use crate::protocol::ProtocolMessage;
+use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
+use insanity_core::audio::mixer::{
+    DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mixer, MixerInput, MixerMetrics,
+};
+use insanity_core::audio::transform::{Gain, GainControl};
 use insanity_core::audio::{
     AudioFormat,
     chunk::{AudioChunk, ChunkSource, SampleChunker},
@@ -25,15 +32,16 @@ use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
 use opus::{Channels, Decoder};
 use rubato_audio_source::RubatoResampler;
+use rubato_audio_source::StreamResampler;
 use std::collections::HashMap;
-use std::sync::{Arc, atomic::AtomicUsize};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
 
 /// Sample source cut into 10ms chunks, sleeping 10ms after each one. The
 /// sleep drifts the same way the harness speaker loops do, keeping the
 /// producer and consumer rates matched.
-pub struct PacedChunkSource<S: SampleSource + Send> {
+struct PacedChunkSource<S: SampleSource + Send> {
     inner: SampleChunker<S>,
 }
 
@@ -66,8 +74,48 @@ where
     AudioInputHub::from_chunk_source(chunked)
 }
 
-pub const PULL_TIMEOUT: Duration = Duration::from_millis(200);
-pub const TRANSFER_TIMEOUT: Duration = Duration::from_millis(500);
+impl AudioInputHub {
+    pub fn from_chunk_source<R>(source: R) -> Self
+    where
+        R: ChunkSource + Send + 'static,
+    {
+        Self::spawn_chunk_source(source, UNKNOWN_DEVICE_NAME.into())
+    }
+}
+
+impl PeerControls {
+    pub fn shared(volume: usize, denoise: DenoiseSelection) -> (PeerChain, PeerControls) {
+        let controls = PeerControls::new(volume, denoise);
+        let chain = chain_from_controls(&controls);
+        (chain, controls)
+    }
+}
+
+pub fn decode_frame_to_chunk(
+    decoder: &mut Decoder,
+    frame: &EncodedChunk,
+    channels: u16,
+) -> Option<AudioChunk> {
+    let Ok(nb) = decoder.get_nb_samples(&frame.payload[..]) else {
+        return None;
+    };
+    let len = nb * (channels as usize);
+    let mut buf = vec![0f32; len];
+    if decoder
+        .decode_float(&frame.payload[..], &mut buf[..], false)
+        .is_err()
+    {
+        return None;
+    }
+    Some(AudioChunk::new(
+        frame.sequence_number,
+        AudioFormat::new(channels, AUDIO_SAMPLE_RATE),
+        buf,
+    ))
+}
+
+const PULL_TIMEOUT: Duration = Duration::from_millis(200);
+const TRANSFER_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub fn mesh_timeout(ticks: usize, edges: usize) -> Duration {
     let per_tick = TRANSFER_TIMEOUT
@@ -117,12 +165,29 @@ impl SyncSampleSource for SineSource {
     }
 }
 
+pub fn new_no_device_mixer() -> AppMixer {
+    new_no_device_mixer_with_format(AUDIO_SAMPLE_RATE, AUDIO_CHANNELS, DEFAULT_JITTER_CHUNKS)
+}
+
+fn new_no_device_mixer_with_format(
+    sample_rate: u32,
+    channels: u16,
+    jitter_chunks: usize,
+) -> AppMixer {
+    let (bus, _) = Gain::shared(100, MAX_VOLUME);
+    Mixer::new(
+        AudioFormat::new(channels, sample_rate),
+        jitter_chunks,
+        DEFAULT_OUT_FRAMES,
+        bus,
+    )
+}
+
 /// One virtual insanity program: synthetic mic + hub, mixer + speaker tap.
 pub struct VirtualNode {
-    pub hub: Arc<AudioInputHub>,
-    pub mixer: AudioMixer,
-    pub peer_ids: HashMap<String, uuid::Uuid>,
-    decoders: HashMap<String, Decoder>,
+    hub: Arc<AudioInputHub>,
+    mixer: AppMixer,
+    peer_ids: HashMap<String, u32>,
     /// One hub broadcast receiver per outbound edge (mirrors production, where
     /// each peer connection holds its own `hub.subscribe()`).
     hub_taps: HashMap<String, broadcast::Receiver<EncodedChunk>>,
@@ -160,9 +225,8 @@ impl VirtualNode {
         Self {
             hub,
             hub_taps: HashMap::new(),
-            mixer: AudioMixer::new_no_device(),
+            mixer: new_no_device_mixer(),
             peer_ids: HashMap::new(),
-            decoders: HashMap::new(),
             monitor: Decoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo).expect("monitor decoder"),
             mic_history: Vec::new(),
             mic_last_seq: None,
@@ -176,18 +240,13 @@ impl VirtualNode {
 
     /// Register an inbound peer with explicit denoise flag.
     pub fn add_inbound_denoise(&mut self, peer_name: &str, denoise: DenoiseSelection) {
-        let id = uuid::Uuid::new_v4();
-        self.peer_ids.insert(peer_name.to_string(), id);
-        self.mixer.add_peer(
-            id,
-            Arc::new(AtomicUsize::new(100)),
-            Arc::new(std::sync::Mutex::new(denoise)),
-            None,
+        let (chain, _) = PeerControls::shared(100, denoise);
+        let slot = self.mixer.subscribe(
+            chain,
+            rebuild_opus_decoder,
+            output_resampler(AudioFormat::new(2, AUDIO_SAMPLE_RATE), DEFAULT_OUT_FRAMES),
         );
-        self.decoders.insert(
-            peer_name.to_string(),
-            Decoder::new(AUDIO_SAMPLE_RATE, Channels::Stereo).expect("test decoder"),
-        );
+        self.peer_ids.insert(peer_name.to_string(), slot);
     }
 
     /// Register an outbound edge (dedicated broadcast tap, like production).
@@ -200,7 +259,7 @@ impl VirtualNode {
         self.hub.set_muted(muted);
     }
 
-    pub fn metrics_snapshot(&self) -> crate::audio::MixerMetricsSnapshot {
+    pub fn metrics_snapshot(&self) -> MixerMetrics {
         self.mixer.metrics_snapshot()
     }
 
@@ -230,20 +289,13 @@ impl VirtualNode {
         else {
             return false;
         };
-        let decoder = match self.decoders.get_mut(peer_name) {
-            Some(d) => d,
-            None => return false,
+        let Some(slot) = self.peer_ids.get(peer_name).copied() else {
+            return false;
         };
-        let channels = self.mixer.channels();
-        let out = match decode_frame_to_chunk(decoder, &frame, channels) {
-            Some(o) => o,
-            None => return false,
+        let Some(input) = self.mixer.input_mut(slot) else {
+            return false;
         };
-        let id = match self.peer_ids.get(peer_name) {
-            Some(id) => *id,
-            None => return false,
-        };
-        self.mixer.handle_incoming(id, out);
+        input.push_frame(frame);
         true
     }
 }
@@ -253,7 +305,7 @@ impl VirtualNode {
 /// had nothing to send this tick (muted hub or lagged). Borrows are scoped so
 /// a shared sender can fan out to several receivers per tick (one hub chunk
 /// pulled per edge, matching one broadcast receiver per peer).
-pub async fn transfer_tick(
+async fn transfer_tick(
     nodes: &mut HashMap<String, VirtualNode>,
     tx_name: &str,
     rx_name: &str,
@@ -271,8 +323,10 @@ pub async fn transfer_tick(
 
 /// Render one 10ms stereo chunk (960 samples) from a node's speaker.
 pub fn render_tick(node: &mut VirtualNode) {
-    let mut out = vec![0f32; 960];
-    node.mixer.fill_buffer(&mut out);
+    let mut out = Vec::with_capacity(960);
+    for _ in 0..960 {
+        out.push(node.mixer.next_sync().unwrap_or(0.0));
+    }
     node.speaker_history.extend(out);
 }
 
@@ -287,7 +341,7 @@ pub async fn run_mesh(
     run_mesh_timeout(nodes, edges, ticks, timeout).await;
 }
 
-pub async fn run_mesh_timeout(
+async fn run_mesh_timeout(
     nodes: &mut HashMap<String, VirtualNode>,
     edges: &[(String, String)],
     ticks: usize,
@@ -419,6 +473,74 @@ impl AudioDecoder for PassthroughDecoder {
                 .collect(),
         ))
     }
+}
+
+pub type UnitMixer = Mixer<
+    PassthroughDecoder,
+    PeerChain,
+    StreamResampler,
+    Gain,
+    fn(&AudioFormat) -> Option<PassthroughDecoder>,
+>;
+
+pub fn rebuild_passthrough(_: &AudioFormat) -> Option<PassthroughDecoder> {
+    Some(PassthroughDecoder)
+}
+
+pub fn unit_mixer(bus_volume: usize) -> (UnitMixer, Arc<GainControl>) {
+    unit_mixer_with_jitter(bus_volume, DEFAULT_JITTER_CHUNKS)
+}
+
+pub fn unit_mixer_with_jitter(
+    bus_volume: usize,
+    jitter_chunks: usize,
+) -> (UnitMixer, Arc<GainControl>) {
+    let (bus, bus_control) = Gain::shared(bus_volume, MAX_VOLUME);
+    let mixer = Mixer::new(
+        AudioFormat::new(2, AUDIO_SAMPLE_RATE),
+        jitter_chunks,
+        DEFAULT_OUT_FRAMES,
+        bus,
+    );
+    (mixer, bus_control)
+}
+
+pub fn add_unit_peer(mixer: &mut UnitMixer, volume: usize, denoise: DenoiseSelection) -> u32 {
+    let (chain, _) = PeerControls::shared(volume, denoise);
+    mixer.subscribe(
+        chain,
+        rebuild_passthrough,
+        output_resampler(AudioFormat::new(2, AUDIO_SAMPLE_RATE), DEFAULT_OUT_FRAMES),
+    )
+}
+
+pub fn push_chunk(mixer: &mut UnitMixer, slot: u32, chunk: AudioChunk) {
+    let mut encoder = PassthroughEncoder;
+    let frame = encoder.encode(&chunk).expect("encode");
+    mixer
+        .input_mut(slot)
+        .expect("subscribed slot")
+        .push_frame(frame);
+}
+
+pub fn push_value(mixer: &mut UnitMixer, slot: u32, sequence: u128, value: f32) {
+    push_chunk(
+        mixer,
+        slot,
+        AudioChunk::new(
+            sequence,
+            AudioFormat::new(2, AUDIO_SAMPLE_RATE),
+            vec![value; 960],
+        ),
+    );
+}
+
+pub fn render(mixer: &mut UnitMixer, count: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        out.push(mixer.next_sync().unwrap_or(0.0));
+    }
+    out
 }
 
 #[cfg(test)]

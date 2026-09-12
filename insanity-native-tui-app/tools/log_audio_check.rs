@@ -1,5 +1,3 @@
-use insanity_native_tui_app::audio::buffer_starved;
-
 struct Interval {
     stamp: String,
     gaps: usize,
@@ -9,7 +7,7 @@ struct Interval {
     clips: usize,
     fills: usize,
     fill_avg_ns: u64,
-    occupancies: Vec<(String, usize)>,
+    peers: usize,
 }
 
 fn parse_value(parts: &[&str], key: &str) -> Option<usize> {
@@ -30,19 +28,6 @@ fn parse_interval(line: &str) -> Option<Interval> {
     let (prefix, message) = line.split_once("] audio ")?;
     let stamp = prefix.to_string();
     let parts: Vec<&str> = message.split_whitespace().collect();
-    let peers_raw = parts
-        .iter()
-        .find_map(|p| p.strip_prefix("peers=["))
-        .unwrap_or("")
-        .strip_suffix(']')
-        .unwrap_or("");
-    let mut occupancies = Vec::new();
-    if !peers_raw.is_empty() {
-        for entry in peers_raw.split(' ') {
-            let (id, len) = entry.split_at(entry.rfind(':')?);
-            occupancies.push((id.to_string(), len[1..].parse().ok()?));
-        }
-    }
     Some(Interval {
         stamp,
         gaps: parse_value(&parts, "gaps")?,
@@ -52,17 +37,8 @@ fn parse_interval(line: &str) -> Option<Interval> {
         clips: parse_value(&parts, "clips")?,
         fills: parse_value(&parts, "fills")?,
         fill_avg_ns: parse_value_u64(&parts, "fill_avg_ns")?,
-        occupancies,
+        peers: parse_value(&parts, "peers")?,
     })
-}
-
-fn parse_jitter_chunks(line: &str) -> Option<usize> {
-    line.split_once("jitter_chunks=")?
-        .1
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
 }
 
 fn underruns_per_fill(iv: &Interval) -> f64 {
@@ -71,31 +47,11 @@ fn underruns_per_fill(iv: &Interval) -> f64 {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let mut path: Option<String> = None;
-    let mut capacity_override: Option<usize> = None;
-    while let Some(arg) = args.next() {
-        if arg == "--capacity" {
-            capacity_override = args.next().and_then(|v| v.parse().ok());
-        } else {
-            path = Some(arg);
-        }
-    }
-    let path = path.unwrap_or_else(|| {
-        eprintln!("usage: log_audio_check <insanity.log> [--capacity N]");
+    let path = args.next().unwrap_or_else(|| {
+        eprintln!("usage: log_audio_check <insanity.log>");
         std::process::exit(2);
     });
     let text = std::fs::read_to_string(&path).expect("read log");
-    let mut capacity = capacity_override;
-    if capacity.is_none() {
-        for line in text.lines() {
-            if line.contains("Audio formats:")
-                && let Some(n) = parse_jitter_chunks(line)
-            {
-                capacity = Some(n);
-                break;
-            }
-        }
-    }
     let intervals: Vec<Interval> = text
         .lines()
         .filter(|l| l.contains("] audio gaps="))
@@ -111,9 +67,7 @@ fn main() {
         if i == 0 {
             flags.push("BASELINE");
         }
-        if let Some(cap) = capacity
-            && buffer_starved(iv.underruns, &iv.occupancies, cap)
-        {
+        if iv.underruns > 0 && iv.gaps == 0 && iv.late == 0 {
             flags.push("STARVED");
             starved_intervals += 1;
         }
@@ -124,7 +78,7 @@ fn main() {
             flags.push("CLIPS");
         }
         eprintln!(
-            "{} underruns_per_fill={:.2} gaps={} late={} plc={} clips={} fills={} fill_avg_ns={} occ={:?} {}",
+            "{} underruns_per_fill={:.2} gaps={} late={} plc={} clips={} fills={} fill_avg_ns={} peers={} {}",
             iv.stamp,
             underruns_per_fill(iv),
             iv.gaps,
@@ -133,10 +87,7 @@ fn main() {
             iv.clips,
             iv.fills,
             iv.fill_avg_ns,
-            iv.occupancies
-                .iter()
-                .map(|(_, n)| *n)
-                .collect::<Vec<usize>>(),
+            iv.peers,
             flags.join(",")
         );
     }
@@ -149,11 +100,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_interval, parse_jitter_chunks, underruns_per_fill};
+    use super::{parse_interval, underruns_per_fill};
 
     #[test]
     fn parses_audio_line() {
-        let line = "[2026-09-04 10:18:50][INFO][insanity_native_tui_app::connection_manager] audio gaps=0 late=0 underruns=291264 plc=291264 clips=495 fills=234 fill_avg_ns=256299 peers=[36f72d6a:3]";
+        let line = "[2026-09-04 10:18:50][INFO][insanity_native_tui_app::connection_manager] audio gaps=0 late=0 underruns=291264 plc=291264 clips=495 fills=234 fill_avg_ns=256299 peers=1";
         let iv = parse_interval(line).expect("parse");
         assert_eq!(iv.gaps, 0);
         assert_eq!(iv.underruns, 291264);
@@ -161,24 +112,20 @@ mod tests {
         assert_eq!(iv.clips, 495);
         assert_eq!(iv.fills, 234);
         assert_eq!(iv.fill_avg_ns, 256299);
-        assert_eq!(iv.occupancies, vec![("36f72d6a".to_string(), 3)]);
+        assert_eq!(iv.peers, 1);
     }
 
     #[test]
     fn summary_reports_underruns_per_fill() {
-        let iv = parse_interval("[2026-09-04 10:18:50][INFO][m] audio gaps=1 late=0 underruns=6 plc=5760 clips=0 fills=3 fill_avg_ns=9 peers=[]").expect("parse");
+        let iv = parse_interval("[2026-09-04 10:18:50][INFO][m] audio gaps=1 late=0 underruns=6 plc=5760 clips=0 fills=3 fill_avg_ns=9 peers=0").expect("parse");
         assert_eq!(format!("{:.2}", underruns_per_fill(&iv)), "2.00");
     }
 
     #[test]
-    fn parses_empty_peers_and_formats_line() {
-        let line = "[2026-09-04 10:18:30][INFO][x] audio gaps=0 late=0 underruns=0 plc=0 clips=0 fills=0 fill_avg_ns=0 peers=[]";
+    fn parses_empty_peers_and_rejects_garbage() {
+        let line = "[2026-09-04 10:18:30][INFO][x] audio gaps=0 late=0 underruns=0 plc=0 clips=0 fills=0 fill_avg_ns=0 peers=0";
         let iv = parse_interval(line).expect("parse");
-        assert!(iv.occupancies.is_empty());
+        assert_eq!(iv.peers, 0);
         assert!(parse_interval("nope").is_none());
-        let fmt =
-            "Audio formats: input channels=2 output channels=2 output rate=48000 jitter_chunks=10";
-        assert_eq!(parse_jitter_chunks(fmt), Some(10));
-        assert_eq!(parse_jitter_chunks("Audio formats: input channels=2"), None);
     }
 }

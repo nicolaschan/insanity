@@ -1,7 +1,8 @@
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::AudioMixer;
-use std::sync::{Arc, atomic::AtomicUsize};
+use insanity_native_tui_app::audio_test_support::{
+    UnitMixer, add_unit_peer, push_chunk, render, unit_mixer_with_jitter,
+};
 
 // Feed model: each fill pushes floor(callback/960) whole chunks, so
 // non-multiple callback sizes (e.g. 2048 -> 2 chunks = 1920 samples)
@@ -19,38 +20,38 @@ struct CellResult {
     gaps: usize,
     late: usize,
     clips: usize,
-    occ_end: usize,
     fill_avg_ns: u64,
 }
 
+fn mixer_with_capacity(chunks: usize) -> UnitMixer {
+    unit_mixer_with_jitter(100, chunks).0
+}
+
 fn run_cell(callback: usize, capacity: usize, condition: &'static str) -> CellResult {
-    let mixer = AudioMixer::new_no_device_with_format_and_capacity(48000, 2, capacity);
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(
-        id,
-        Arc::new(AtomicUsize::new(100)),
-        Arc::new(std::sync::Mutex::new(DenoiseSelection::None)),
-        None,
-    );
+    let mut mixer = mixer_with_capacity(capacity);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     let feed_per_fill = callback / 960;
     let mut next_seq: u128 = 0;
-    let push = |mixer: &AudioMixer, next_seq: &mut u128, count: usize| {
+    let push = |mixer: &mut UnitMixer, next_seq: &mut u128, count: usize| {
         for _ in 0..count {
-            mixer.handle_incoming(
+            push_chunk(
+                mixer,
                 id,
                 AudioChunk::new(*next_seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
             );
             *next_seq += 1;
         }
     };
-    push(&mixer, &mut next_seq, capacity);
+    push(&mut mixer, &mut next_seq, capacity);
     let fills = 30;
+    let mut total_nanos: u64 = 0;
     for t in 0..fills {
         let stalled = condition == "stall3" && (12..15).contains(&t);
-        let mut out = vec![0f32; callback];
-        mixer.fill_buffer(&mut out);
+        let start = std::time::Instant::now();
+        let _ = render(&mut mixer, callback);
+        total_nanos += start.elapsed().as_nanos() as u64;
         if !stalled {
-            push(&mixer, &mut next_seq, feed_per_fill);
+            push(&mut mixer, &mut next_seq, feed_per_fill);
         }
     }
     let snap = mixer.metrics_snapshot();
@@ -63,8 +64,7 @@ fn run_cell(callback: usize, capacity: usize, condition: &'static str) -> CellRe
         gaps: snap.gap_detected,
         late: snap.late_dropped,
         clips: snap.clip_hits,
-        occ_end: mixer.peer_occupancy(&id).unwrap_or(usize::MAX),
-        fill_avg_ns: mixer.fill_avg_nanos(),
+        fill_avg_ns: total_nanos / fills as u64,
     }
 }
 
@@ -73,7 +73,7 @@ fn main() {
         .join("../target/buffer_sweep/runs.csv");
     std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     let mut csv = String::from(
-        "callback,capacity,condition,underruns,fills,underrun_events_per_sample,gaps,late,clips,occ_end,fill_avg_ns\n",
+        "callback,capacity,condition,underruns,fills,underrun_events_per_sample,gaps,late,clips,fill_avg_ns\n",
     );
     let mut worst: Option<CellResult> = None;
     for &callback in &[960usize, 2048, 4100] {
@@ -82,7 +82,7 @@ fn main() {
                 let r = run_cell(callback, capacity, condition);
                 let rate = r.underruns as f64 / (r.fills * r.callback).max(1) as f64;
                 csv.push_str(&format!(
-                    "{},{},{},{},{},{:.4},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{:.4},{},{},{},{}\n",
                     r.callback,
                     r.capacity,
                     r.condition,
@@ -92,7 +92,6 @@ fn main() {
                     r.gaps,
                     r.late,
                     r.clips,
-                    r.occ_end,
                     r.fill_avg_ns
                 ));
                 let worse = match &worst {

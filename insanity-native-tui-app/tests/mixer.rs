@@ -4,9 +4,11 @@ use insanity_core::audio::{
     chunk::{AudioChunk, ChunkSource},
 };
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{AudioInputHub, AudioMixer};
-use insanity_native_tui_app::audio_test_support::hub_from_source;
-use std::sync::{Arc, atomic::AtomicUsize};
+use insanity_native_tui_app::audio::AudioInputHub;
+use insanity_native_tui_app::audio_test_support::{
+    add_unit_peer, hub_from_source, push_chunk, push_value, render, unit_mixer,
+};
+use std::sync::Arc;
 
 struct SineSource {
     phase: f32,
@@ -89,21 +91,12 @@ async fn hub_mute_skips_send() {
 
 #[test]
 fn mixer_sum_and_clip() {
-    let mixer = AudioMixer::new_no_device();
-    let v1 = Arc::new(AtomicUsize::new(100));
-    let d1 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let v2 = Arc::new(AtomicUsize::new(100));
-    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id1 = uuid::Uuid::new_v4();
-    let id2 = uuid::Uuid::new_v4();
-    mixer.add_peer(id1, v1, d1, None);
-    mixer.add_peer(id2, v2, d2, None);
-    let chunk1 = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.6f32; 960]);
-    let chunk2 = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.6f32; 960]);
-    mixer.handle_incoming(id1, chunk1);
-    mixer.handle_incoming(id2, chunk2);
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    let (mut mixer, _) = unit_mixer(100);
+    let id1 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    let id2 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id1, 0, 0.6);
+    push_value(&mut mixer, id2, 0, 0.6);
+    let out = render(&mut mixer, 960);
     // sum 1.2 clipped to 1.0
     for s in out.iter() {
         assert!((*s - 1.0).abs() < 1e-5, "clipped {s}");
@@ -112,15 +105,10 @@ fn mixer_sum_and_clip() {
 
 #[test]
 fn mixer_per_peer_volume() {
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(50));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v.clone(), d, None);
-    let chunk = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0f32; 960]);
-    mixer.handle_incoming(id, chunk);
-    let mut out = vec![0f32; 10];
-    mixer.fill_buffer(&mut out);
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 50, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 1.0);
+    let out = render(&mut mixer, 10);
     // volume 50 -> ~0.289
     let expected = 0.289; // approximate
     for s in out.iter() {
@@ -132,43 +120,29 @@ fn mixer_per_peer_volume() {
 fn mixer_denoise_before_mix() {
     // two peers same input, one with denoise true should differ
     // use noisy sine, verify outputs differ (perceptually denoise changes)
-    let mixer = AudioMixer::new_no_device();
-    let v1 = Arc::new(AtomicUsize::new(100));
-    let d1 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let v2 = Arc::new(AtomicUsize::new(100));
-    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::default()));
-    let id1 = uuid::Uuid::new_v4();
-    let id2 = uuid::Uuid::new_v4();
-    mixer.add_peer(id1, v1, d1, None);
-    mixer.add_peer(id2, v2, d2, None);
+    let (mut mixer, _) = unit_mixer(100);
+    let id1 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    let id2 = add_unit_peer(&mut mixer, 100, DenoiseSelection::default());
     // create chunk with some noise-like pattern
     let noisy: Vec<f32> = (0..960)
         .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
         .collect();
-    let c1 = AudioChunk::new(0, AudioFormat::new(2, 48000), noisy.clone());
-    let c2 = AudioChunk::new(0, AudioFormat::new(2, 48000), noisy.clone());
-    mixer.handle_incoming(id1, c1);
-    mixer.handle_incoming(id2, c2);
+    let format = AudioFormat::new(2, 48000);
+    for (id, data) in [(id1, noisy.clone()), (id2, noisy)] {
+        push_chunk(&mut mixer, id, AudioChunk::new(0, format.clone(), data));
+    }
     // just verify both peers store without panic and fill produces something mixable
-    let mut out = vec![0f32; 10];
-    mixer.fill_buffer(&mut out);
+    let out = render(&mut mixer, 10);
     assert!(out.iter().any(|v| v.abs() > 0.0));
 }
 
 #[test]
 fn mixer_master_volume() {
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0; 960]),
-    );
-    mixer.set_master_volume(50);
-    let mut out = vec![0f32; 10];
-    mixer.fill_buffer(&mut out);
+    let (mut mixer, bus) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 1.0);
+    bus.set(50);
+    let out = render(&mut mixer, 10);
     let expected = 0.289;
     for s in out.iter() {
         assert!((s - expected).abs() < 0.06, "master50 {s}");
@@ -177,44 +151,29 @@ fn mixer_master_volume() {
 
 #[test]
 fn mixer_zero_peers_silence() {
-    let mixer = AudioMixer::new_no_device();
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    let (mut mixer, _) = unit_mixer(100);
+    let out = render(&mut mixer, 960);
     for s in out.iter() {
         assert_eq!(*s, 0.0, "0 peers should be silence");
     }
     // also after adding then removing, should return to silence
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.5; 960]),
-    );
-    mixer.remove_peer(&id);
-    let mut out2 = vec![0f32; 10];
-    mixer.fill_buffer(&mut out2);
-    // after remove and buffer drained, last_samples held but active count 0 after remove -> silence
-    // first fill after remove may still hold last sample, but second fill with no peers should be 0
-    // we test fresh mixer for silence
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.5);
+    mixer.unsubscribe(id);
+    let out2 = render(&mut mixer, 10);
+    for s in out2.iter() {
+        assert_eq!(*s, 0.0, "no peers after remove should be silence");
+    }
 }
 
 #[test]
 fn mixer_many_peers_clipping() {
-    let mixer = AudioMixer::new_no_device();
+    let (mut mixer, _) = unit_mixer(100);
     for _ in 0..10 {
-        let v = Arc::new(AtomicUsize::new(100));
-        let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-        let id = uuid::Uuid::new_v4();
-        mixer.add_peer(id, v, d, None);
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.2; 960]),
-        );
+        let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+        push_value(&mut mixer, id, 0, 0.2);
     }
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    let out = render(&mut mixer, 960);
     for s in out.iter() {
         assert!(s.abs() <= 1.0 + 1e-6, "clip {s}");
         assert!(s.is_finite(), "no NaN Inf");
@@ -226,33 +185,19 @@ fn mixer_many_peers_clipping() {
 #[test]
 fn mixer_volume_extremes() {
     // volume 0 -> silence
-    let mixer = AudioMixer::new_no_device();
-    let v0 = Arc::new(AtomicUsize::new(0));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id0 = uuid::Uuid::new_v4();
-    mixer.add_peer(id0, v0, d, None);
-    mixer.handle_incoming(
-        id0,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0; 960]),
-    );
-    let mut out = vec![0f32; 10];
-    mixer.fill_buffer(&mut out);
+    let (mut mixer, _) = unit_mixer(100);
+    let id0 = add_unit_peer(&mut mixer, 0, DenoiseSelection::None);
+    push_value(&mut mixer, id0, 0, 1.0);
+    let out = render(&mut mixer, 10);
     for s in out.iter() {
         assert!(s.abs() < 1e-6, "vol0 {s}");
     }
 
     // volume 999 -> huge multiplier but clipped to 1.0, finite
-    let mixer2 = AudioMixer::new_no_device();
-    let v999 = Arc::new(AtomicUsize::new(999));
-    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id999 = uuid::Uuid::new_v4();
-    mixer2.add_peer(id999, v999, d2, None);
-    mixer2.handle_incoming(
-        id999,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![1.0; 960]),
-    );
-    let mut out2 = vec![0f32; 10];
-    mixer2.fill_buffer(&mut out2);
+    let (mut mixer2, _) = unit_mixer(100);
+    let id999 = add_unit_peer(&mut mixer2, 999, DenoiseSelection::None);
+    push_value(&mut mixer2, id999, 0, 1.0);
+    let out2 = render(&mut mixer2, 10);
     for s in out2.iter() {
         assert!(s.is_finite(), "vol999 not finite {s}");
         assert!((*s - 1.0).abs() < 1e-5, "vol999 clipped {s}");

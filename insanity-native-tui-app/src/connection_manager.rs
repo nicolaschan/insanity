@@ -6,6 +6,7 @@ use std::{
 };
 
 use base64::{Engine, prelude::BASE64_URL_SAFE};
+use insanity_core::audio::AudioFormat;
 use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
 use insanity_tui_adapter::AppEvent;
 
@@ -17,9 +18,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    audio::{
-        AUDIO_CALLBACK_FRAMES, AudioInputHub, AudioMixer, JITTER_TARGET_CHUNKS, format_metrics_line,
-    },
+    audio::{AUDIO_CALLBACK_FRAMES, AudioInputHub, MixerClient, format_metrics_line, start_output},
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
 use veq::snow_types::SnowPublicKey;
@@ -43,6 +42,13 @@ pub struct ConnectionManager {
     socket: VeqSocket,
     cancellation_token: CancellationToken,
     user_action_tx: mpsc::UnboundedSender<UserInputEvent>,
+}
+
+#[derive(Clone)]
+struct SharedAudio {
+    hub: Arc<AudioInputHub>,
+    client: MixerClient,
+    out_format: AudioFormat,
 }
 
 impl ConnectionManager {
@@ -271,29 +277,42 @@ fn manage_peers(
             .send(AppEvent::SetInputDeviceName(hub.name().into()))
             .expect("could not set input device name");
     }
-    let mixer = Arc::new(AudioMixer::new(app_event_tx.clone()));
-    let metrics_mixer = mixer.clone();
-    let mixer_channels = mixer.channels();
-    let mixer_rate = mixer.sample_rate();
+    let output = start_output();
+    let timing = output.timing.clone();
+    let audio = SharedAudio {
+        hub: hub.clone(),
+        client: output.client,
+        out_format: output.format,
+    };
+    let metrics_audio = audio.clone();
+    let metrics_timing = timing.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
-            "Audio formats: output channels={mixer_channels} output rate={mixer_rate} jitter_chunks={JITTER_TARGET_CHUNKS} buffer_frames={AUDIO_CALLBACK_FRAMES}"
+            "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES}",
+            metrics_audio.out_format.channel_count,
+            metrics_audio.out_format.sample_rate,
         );
-        let mut prev = metrics_mixer.metrics_snapshot();
+        let mut prev = metrics_audio
+            .client
+            .snapshot()
+            .await
+            .map(|(snapshot, _)| snapshot)
+            .unwrap_or_default();
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    let current = metrics_mixer.metrics_snapshot();
-                    let line = format_metrics_line(
-                        &prev,
-                        &current,
-                        metrics_mixer.fill_avg_nanos(),
-                        &metrics_mixer.peer_occupancies(),
-                    );
-                    log::info!("{line}");
-                    prev = current;
+                    if let Some((current, peers)) = metrics_audio.client.snapshot().await {
+                        let line = format_metrics_line(
+                            &prev,
+                            &current,
+                            metrics_timing.avg_nanos(),
+                            peers,
+                        );
+                        log::info!("{line}");
+                        prev = current;
+                    }
                 }
                 _ = metrics_token.cancelled() => {
                     log::debug!("Audio metrics shutdown.");
@@ -317,15 +336,14 @@ fn manage_peers(
                         socket.clone(),
                         app_event_tx.clone(),
                         &mut managed_peers,
-                        hub.clone(),
-                        mixer.clone()) {
+                        audio.clone()) {
                         log::debug!("Updated peer info for {id} to: {:?}", managed_peer.info());
                         log::debug!("(Re)Connecting to peer {id}.");
-                        reconnect(managed_peer);
+                        reconnect(managed_peer).await;
                     }
                 },
                 Some(user_action) = user_action_rx.recv() => {
-                    if let Err(e) = handle_user_action(user_action, hub.clone(), app_event_tx.clone(), &mut managed_peers) {
+                    if let Err(e) = handle_user_action(user_action, hub.clone(), app_event_tx.clone(), &mut managed_peers).await {
                         log::debug!("Failed to handle user action: {:?}", e);
                     }
                 }
@@ -339,13 +357,13 @@ fn manage_peers(
     conn_info_tx
 }
 
-fn reconnect(managed_peer: ManagedPeer) {
+async fn reconnect(managed_peer: ManagedPeer) {
     match managed_peer.connection_status() {
         ConnectionStatus::Disabled => {
             managed_peer.enable();
         }
         ConnectionStatus::Connecting | ConnectionStatus::Connected => {
-            match managed_peer.disable() {
+            match managed_peer.disable().await {
                 Ok(()) => {
                     managed_peer.enable();
                 }
@@ -364,8 +382,7 @@ fn update_peer_info(
     socket: veq::veq::VeqSocket,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
-    hub: Arc<AudioInputHub>,
-    mixer: Arc<AudioMixer>,
+    audio: SharedAudio,
 ) -> Option<ManagedPeer> {
     match managed_peers.get_mut(&id) {
         Some(current_managed_peer) => {
@@ -387,8 +404,9 @@ fn update_peer_info(
                 .display_name(new_info.display_name)
                 .denoise(DenoiseSelection::default())
                 .volume(100)
-                .hub(hub)
-                .mixer(mixer)
+                .out_format(audio.out_format)
+                .hub(audio.hub)
+                .client(audio.client)
                 .build();
             managed_peers.insert(id, managed_peer.clone());
             Some(managed_peer)
@@ -396,7 +414,7 @@ fn update_peer_info(
     }
 }
 
-fn handle_user_action(
+async fn handle_user_action(
     user_action: UserInputEvent,
     hub: Arc<AudioInputHub>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
@@ -412,7 +430,7 @@ fn handle_user_action(
         UserInputEvent::DisablePeer(id) => {
             let id = uuid::Uuid::from_str(&id)?;
             if let Some(peer) = managed_peers.get(&id) {
-                peer.disable()?;
+                peer.disable().await?;
             }
         }
         UserInputEvent::EnablePeer(id) => {

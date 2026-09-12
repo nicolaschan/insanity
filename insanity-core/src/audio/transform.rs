@@ -232,16 +232,11 @@ impl<D: Denoiser> ChunkTransform for Denoise<D> {
 
 pub struct MetricsState {
     loudness_bits: AtomicU64,
-    frames: AtomicUsize,
 }
 
 impl MetricsState {
     pub fn loudness(&self) -> f64 {
         f64::from_bits(self.loudness_bits.load(Ordering::Relaxed))
-    }
-
-    pub fn frames(&self) -> usize {
-        self.frames.load(Ordering::Relaxed)
     }
 }
 
@@ -249,7 +244,6 @@ impl Default for MetricsState {
     fn default() -> Self {
         MetricsState {
             loudness_bits: AtomicU64::new(0.0f64.to_bits()),
-            frames: AtomicUsize::new(0),
         }
     }
 }
@@ -275,7 +269,6 @@ impl ChunkTransform for MetricsReader {
             calculate_loudness(&chunk.audio_data).to_bits(),
             Ordering::Relaxed,
         );
-        self.state.frames.fetch_add(1, Ordering::Relaxed);
         Some(chunk)
     }
 }
@@ -413,7 +406,6 @@ mod tests {
         let (mut meter, state) = MetricsReader::shared();
         let out = meter.transform(chunk(vec![0.5; 8])).expect("live");
         assert_eq!(out.audio_data, vec![0.5; 8]);
-        assert_eq!(state.frames(), 1);
         let loudness = state.loudness();
         assert!(loudness > 0.0 && loudness <= 1.0);
     }

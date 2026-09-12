@@ -6,8 +6,8 @@
 //! waveform cross-correlation (Opus shifts phase/delay, so naive sample SNR
 //! would be brittle).
 
+use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::JITTER_TARGET_CHUNKS;
 use insanity_native_tui_app::audio_test_support::{
     VirtualNode, energy_ratio, goertzel_energy, loudness, max_normalized_xcorr, mesh_timeout,
     render_tick, run_mesh, transfer_tick_timeout,
@@ -137,7 +137,7 @@ async fn three_node_mesh_topology() {
 
 #[tokio::test]
 async fn mute_gap_honesty() {
-    let post_mute_ticks = 10 + JITTER_TARGET_CHUNKS;
+    let post_mute_ticks = 10 + DEFAULT_JITTER_CHUNKS;
     let total_ticks = 20 + post_mute_ticks;
     let timeout = mesh_timeout(total_ticks, 1).saturating_add(Duration::from_secs(10));
     let res = tokio::time::timeout(timeout, async {

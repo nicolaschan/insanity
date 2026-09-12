@@ -6,24 +6,26 @@
 //! - seq_gap_is_time (mute/lagged seq-advance, no silence encode)
 //! - plc_fades_not_holds (fade-to-zero instead of hold-last)
 //! - mono_stereo_matrix (channel conversion)
-//! - reconnect_resets (jitter reset on reconnect)
-//! - mixer_cleanup (remove_peer on all exits)
+//! - reconnect_resets (fresh subscription on reconnect)
+//! - mixer_cleanup (unsubscribe on all exits)
 //! - denoise_remainder_no_loss (chunks_exact tail)
 
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
+use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
 use insanity_core::audio::sample_ops::convert_to_mixer_channels;
 use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{AudioMixer, JITTER_TARGET_CHUNKS};
+use insanity_native_tui_app::audio_test_support::{
+    add_unit_peer, push_chunk, push_value, render, unit_mixer,
+};
 use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
 use insanity_native_tui_app::processor::MAX_VOLUME;
-use std::sync::{Arc, atomic::AtomicUsize};
 
 #[test]
 fn jitter_target_pins_current_behavior() {
-    assert_eq!(JITTER_TARGET_CHUNKS, 10);
+    assert_eq!(DEFAULT_JITTER_CHUNKS, 10);
     assert_eq!(MAX_VOLUME, 500);
 }
 
@@ -41,10 +43,10 @@ fn volume_max_contract_single_source_of_truth() {
         volume_multiplier(200)
     );
     // Pre-fix, set_master_volume(999) pinned at 200; must now pin at 500.
-    let mixer = AudioMixer::new_no_device();
-    mixer.set_master_volume(999);
+    let (_, bus) = unit_mixer(100);
+    bus.set(999);
     assert_eq!(
-        mixer.master_volume(),
+        bus.get(),
         MAX_VOLUME,
         "master volume must clamp at MAX_VOLUME"
     );
@@ -70,32 +72,21 @@ fn buffer_accounting_exact_stale_drop() {
 fn seq_gap_is_time() {
     // Seq 0,1 then 12 is a 100ms gap. Receiver must record it and must
     // NOT play chunk 12 immediately after chunk 1 (no time-compression).
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     // Single missing chunk (gap fits the 3-chunk window: span 0..2 < 3).
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.1; 960]),
-    );
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(2, AudioFormat::new(2, 48000), vec![0.9; 960]),
-    );
+    push_value(&mut mixer, id, 0, 0.1);
+    push_value(&mut mixer, id, 2, 0.9);
     let snap = mixer.metrics_snapshot();
     assert_eq!(
         snap.gap_detected, 1,
         "jump 0->2 must count one gap, got {snap:?}"
     );
-    // First fill drains seq 0. Second fill conceals gap slot 1 (fade from
-    // 0.1, NOT the 0.9 chunk). Third fill plays seq 2 in its slot.
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    // First render drains seq 0. Second render conceals gap slot 1 (fade from
+    // 0.1, NOT the 0.9 chunk). Third render plays seq 2 in its slot.
+    let out = render(&mut mixer, 960);
     assert!((out[0] - 0.1).abs() < 1e-5, "first chunk {}", out[0]);
-    let mut out2 = vec![0f32; 960];
-    mixer.fill_buffer(&mut out2);
+    let out2 = render(&mut mixer, 960);
     assert!(
         (out2[0] - 0.1).abs() < 1e-5,
         "gap concealment must fade from 0.1, got {} (chunk 2 played too early?)",
@@ -106,8 +97,7 @@ fn seq_gap_is_time() {
         "fade must reach ~0 by end of concealment chunk, got {}",
         out2[959]
     );
-    let mut out3 = vec![0f32; 960];
-    mixer.fill_buffer(&mut out3);
+    let out3 = render(&mut mixer, 960);
     assert!(
         (out3[0] - 0.9).abs() < 1e-5,
         "seq 2 must play in its slot after 1 concealment, got {}",
@@ -118,29 +108,20 @@ fn seq_gap_is_time() {
 #[test]
 fn plc_fades_not_holds() {
     // Single lost chunk must decay to ~0 within one chunk, not hold DC.
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.8; 960]),
-    );
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.8);
     // Drain the real chunk.
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    let out = render(&mut mixer, 960);
     assert!((out[0] - 0.8).abs() < 1e-5);
     // Underrun: must fade to silence, not hold 0.8 forever.
-    let mut out2 = vec![0f32; 960];
-    mixer.fill_buffer(&mut out2);
+    let out2 = render(&mut mixer, 960);
     assert!(
         out2[959].abs() < 0.05,
         "PLC must fade to ~0 by end of concealment chunk, got {} (hold-last buzz)",
         out2[959]
     );
-    let mut out3 = vec![0f32; 960];
-    mixer.fill_buffer(&mut out3);
+    let out3 = render(&mut mixer, 960);
     for s in out3.iter() {
         assert!(s.abs() < 0.05, "sustained loss must stay silent, got {s}");
         assert!(s.is_finite());
@@ -151,19 +132,11 @@ fn plc_fades_not_holds() {
 
 #[test]
 fn single_gap_counts_one_slot_and_full_fade_samples() {
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.8; 960]),
-    );
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
-    let mut out2 = vec![0f32; 960];
-    mixer.fill_buffer(&mut out2);
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.8);
+    let _ = render(&mut mixer, 960);
+    let _ = render(&mut mixer, 960);
     let snap = mixer.metrics_snapshot();
     assert_eq!(snap.underrun, 1, "one missed slot, got {snap:?}");
     assert_eq!(snap.plc_hold, 960, "one full fade run, got {snap:?}");
@@ -172,14 +145,10 @@ fn single_gap_counts_one_slot_and_full_fade_samples() {
 #[test]
 fn plc_sample_to_slot_ratio_holds_across_callback_sizes() {
     for callback in [960usize, 2048, 4100] {
-        let mixer = AudioMixer::new_no_device();
-        let v = Arc::new(AtomicUsize::new(100));
-        let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-        let id = uuid::Uuid::new_v4();
-        mixer.add_peer(id, v, d, None);
+        let (mut mixer, _) = unit_mixer(100);
+        let _ = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
         for _ in 0..4 {
-            let mut out = vec![0f32; callback];
-            mixer.fill_buffer(&mut out);
+            let _ = render(&mut mixer, callback);
         }
         let snap = mixer.metrics_snapshot();
         assert!(
@@ -198,22 +167,18 @@ fn plc_sample_to_slot_ratio_holds_across_callback_sizes() {
 #[test]
 fn mono_stereo_matrix() {
     // Mono peer (480 samples) into stereo mixer must not misalign.
-    let mixer = AudioMixer::new_no_device();
-    assert_eq!(mixer.channels(), 2);
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     // Mono chunk: 480 samples of 0.5. Ingress duplicates to 960 stereo
-    // samples, so one fill is fully real (no PLC). Before the fix, the 480
+    // samples, so one render is fully real (no PLC). Before the fix, the 480
     // mono samples plus 480 hold-last PLC accidentally looked the same on
-    // the first fill, so this asserts on underrun counters to distinguish.
-    mixer.handle_incoming(
+    // the first render, so this asserts on underrun counters to distinguish.
+    push_chunk(
+        &mut mixer,
         id,
         AudioChunk::new(0, AudioFormat::new(1, 48000), vec![0.5; 480]),
     );
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    let out = render(&mut mixer, 960);
     for (i, s) in out.iter().enumerate() {
         assert!(
             (*s - 0.5).abs() < 1e-5,
@@ -231,34 +196,19 @@ fn mono_stereo_matrix() {
 fn reconnect_resets_jitter() {
     // After head advances past 0, a fresh seq-0 stream (reconnect) must
     // not be entirely dropped as stale.
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v.clone(), d.clone(), None);
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     for seq in 0..10u128 {
-        mixer.handle_incoming(
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.3; 960]),
-        );
+        push_value(&mut mixer, id, seq, 0.3);
     }
     // Drain to advance head.
-    let mut drain = vec![0f32; 960 * 10];
-    mixer.fill_buffer(&mut drain);
-    // Simulate reconnect: same peer id re-registers (before the fix,
+    let _ = render(&mut mixer, 960 * 10);
+    // Simulate reconnect: fresh subscription (before the fix,
     // early-return kept stale head), then fresh seq 0 arrives.
-    mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.7; 960]),
-    );
-    let occ = mixer.peer_occupancy(&id).unwrap_or(0);
-    assert!(
-        occ > 0,
-        "fresh seq 0 after reconnect must be buffered, occupancy {occ}"
-    );
-    let mut out = vec![0f32; 960];
-    mixer.fill_buffer(&mut out);
+    mixer.unsubscribe(id);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.7);
+    let out = render(&mut mixer, 960);
     assert!(
         (out[0] - 0.7).abs() < 1e-5,
         "reconnected stream must play, got {}",
@@ -270,26 +220,16 @@ fn reconnect_resets_jitter() {
 fn mixer_cleanup_readd() {
     // remove_peer must be idempotent and allow clean re-add (documents the
     // select!-cancel leak path: stale PeerState must never survive).
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v.clone(), d.clone(), None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.4; 960]),
-    );
-    mixer.remove_peer(&id);
-    mixer.remove_peer(&id); // idempotent
-    assert_eq!(mixer.peer_occupancy(&id), None);
-    mixer.add_peer(id, v, d, None);
-    assert_eq!(mixer.peer_occupancy(&id), Some(0));
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.4; 960]),
-    );
-    assert_eq!(mixer.peer_occupancy(&id), Some(1));
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.4);
+    mixer.unsubscribe(id);
+    mixer.unsubscribe(id); // idempotent
+    assert_eq!(mixer.peer_count(), 0);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.4);
+    let out = render(&mut mixer, 960);
+    assert!(out.iter().all(|s| (*s - 0.4).abs() < 1e-5));
 }
 
 #[test]
@@ -312,15 +252,9 @@ fn denoise_remainder_no_loss() {
 #[test]
 fn metrics_counters_wired() {
     // Smoke test that metrics instrumentation is live without changing audio.
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(5, AudioFormat::new(2, 48000), vec![0.1; 960]),
-    );
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 5, 0.1);
     let snap = mixer.metrics_snapshot();
     // First-ever chunk with nonzero seq counts as leading gap.
     assert_eq!(
@@ -328,37 +262,21 @@ fn metrics_counters_wired() {
         "leading gap must be counted, got {snap:?}"
     );
     // Normal in-order chunk: no extra gap.
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(6, AudioFormat::new(2, 48000), vec![0.1; 960]),
-    );
+    push_value(&mut mixer, id, 6, 0.1);
     assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
     // Clipping counter: 0.6+0.6 tested elsewhere; here just check fills tick.
-    let mut out = vec![0f32; 10];
-    mixer.fill_buffer(&mut out);
+    let _ = render(&mut mixer, 10);
     assert!(mixer.metrics_snapshot().fills >= 1);
 }
 
 #[test]
 fn reorder_hole_fill_does_not_count_gap() {
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.1; 960]),
-    );
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(2, AudioFormat::new(2, 48000), vec![0.1; 960]),
-    );
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    push_value(&mut mixer, id, 0, 0.1);
+    push_value(&mut mixer, id, 2, 0.1);
     assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
-    mixer.handle_incoming(
-        id,
-        AudioChunk::new(1, AudioFormat::new(2, 48000), vec![0.1; 960]),
-    );
+    push_value(&mut mixer, id, 1, 0.1);
     let snap = mixer.metrics_snapshot();
     assert_eq!(
         snap.gap_detected, 1,

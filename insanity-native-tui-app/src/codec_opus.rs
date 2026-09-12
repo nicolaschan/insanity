@@ -13,7 +13,6 @@ pub(crate) fn u16_to_channels(n: u16) -> Channels {
 
 pub struct OpusEncoder {
     inner: Encoder,
-    format: AudioFormat,
 }
 
 impl OpusEncoder {
@@ -22,14 +21,7 @@ impl OpusEncoder {
         else {
             return None;
         };
-        Some(OpusEncoder {
-            inner,
-            format: AudioFormat::new(channels, sample_rate),
-        })
-    }
-
-    pub fn format(&self) -> &AudioFormat {
-        &self.format
+        Some(OpusEncoder { inner })
     }
 }
 

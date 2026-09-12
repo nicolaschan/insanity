@@ -16,7 +16,6 @@ pub struct RubatoResampler<R: SampleSource> {
     source_format: AudioFormat,
     target_rate: u32,
     chunk_size: usize,
-    bypass_hits: std::sync::atomic::AtomicUsize,
 }
 
 impl<R: SampleSource + Send> RubatoResampler<R> {
@@ -47,21 +46,13 @@ impl<R: SampleSource + Send> RubatoResampler<R> {
             source_format,
             target_rate,
             chunk_size,
-            bypass_hits: std::sync::atomic::AtomicUsize::new(0),
         }
-    }
-
-    /// Number of samples served via the zero-cost passthrough path
-    pub fn bypass_hits(&self) -> usize {
-        self.bypass_hits.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 impl<R: SampleSource + Send> SampleSource for RubatoResampler<R> {
     async fn next(&mut self) -> Option<f32> {
         if self.source_format.sample_rate == self.target_rate {
-            self.bypass_hits
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return self.delegate.next().await;
         }
         if self.resampled_buffer.is_empty() {
@@ -102,8 +93,6 @@ impl<R: SampleSource + Send> SampleSource for RubatoResampler<R> {
 impl<R: SyncSampleSource + Send> SyncSampleSource for RubatoResampler<R> {
     fn next_sync(&mut self) -> Option<f32> {
         if self.source_format.sample_rate == self.target_rate {
-            self.bypass_hits
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return self.delegate.next_sync();
         }
         if self.resampled_buffer.is_empty() {
@@ -204,6 +193,10 @@ impl Resampler for StreamResampler {
 
     fn pop_sample(&mut self) -> Option<f32> {
         self.pending_out.pop_front()
+    }
+
+    fn buffered(&self) -> usize {
+        self.pending_out.len()
     }
 }
 

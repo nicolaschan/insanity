@@ -48,17 +48,6 @@ impl<T> JitterBuffer<T> {
         }
     }
 
-    /// Reset for a fresh stream (e.g. reconnect with restarted seq numbers).
-    pub fn clear(&mut self) {
-        for slot in self.buffer.iter_mut() {
-            *slot = None;
-        }
-        self.current_size = 0;
-        self.head = 0;
-        self.prev = 0;
-        self.seen_any = false;
-    }
-
     pub fn set(&mut self, index: u128, data: T) {
         if index < self.head {
             return; // you got data you already skipped in the past
@@ -141,5 +130,80 @@ impl<T> JitterBuffer<T> {
                 None
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::JitterBuffer;
+
+    #[test]
+    fn occupancy_bounded_by_capacity() {
+        let mut buffer = JitterBuffer::new(3);
+        buffer.set(0, 0u32);
+        buffer.set(1, 1u32);
+        buffer.set(2, 2u32);
+        assert_eq!(buffer.len(), 3);
+        assert!(!buffer.is_empty());
+    }
+
+    #[test]
+    fn gap_walk_advances_one_slot_per_call() {
+        let mut buffer = JitterBuffer::new(10);
+        buffer.set(0, 0u32);
+        buffer.set(2, 2u32);
+        assert_eq!(buffer.next_item(), Some(0));
+        assert_eq!(buffer.next_item(), None);
+        assert_eq!(buffer.next_item(), Some(2));
+    }
+
+    #[test]
+    fn starvation_past_prev_waits_without_advancing() {
+        let mut buffer = JitterBuffer::new(10);
+        buffer.set(5, 5u32);
+        assert_eq!(buffer.next_item(), Some(5));
+        assert_eq!(buffer.head(), 6);
+        assert_eq!(buffer.next_item(), None);
+        assert_eq!(buffer.next_item(), None);
+        assert_eq!(buffer.head(), 6);
+    }
+
+    #[test]
+    fn late_data_dropped_after_playout() {
+        let mut buffer = JitterBuffer::new(10);
+        buffer.set(0, 0u32);
+        assert_eq!(buffer.next_item(), Some(0));
+        buffer.set(0, 9u32);
+        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.next_item(), None);
+    }
+
+    #[test]
+    fn duplicate_replaces_without_growth() {
+        let mut buffer = JitterBuffer::new(10);
+        buffer.set(3, 3u32);
+        buffer.set(3, 4u32);
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer.next_item(), Some(4));
+    }
+
+    #[test]
+    fn far_future_evicts_and_slides_head() {
+        let mut buffer = JitterBuffer::new(3);
+        buffer.set(0, 0u32);
+        buffer.set(1, 1u32);
+        buffer.set(10, 10u32);
+        assert_eq!(buffer.head(), 8);
+        assert_eq!(buffer.next_item(), None);
+        assert_eq!(buffer.next_item(), None);
+        assert_eq!(buffer.next_item(), Some(10));
+    }
+
+    #[test]
+    fn virgin_nonzero_seq_anchors_head() {
+        let mut buffer = JitterBuffer::new(10);
+        buffer.set(7, 7u32);
+        assert_eq!(buffer.head(), 7);
+        assert_eq!(buffer.next_item(), Some(7));
     }
 }

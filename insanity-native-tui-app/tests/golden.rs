@@ -1,9 +1,8 @@
 use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::AudioMixer;
+use insanity_native_tui_app::audio_test_support::{add_unit_peer, push_chunk, render, unit_mixer};
 use std::path::Path;
-use std::sync::{Arc, atomic::AtomicUsize};
 
 fn read_f32_le(path: &Path) -> Vec<f32> {
     let bytes = std::fs::read(path).unwrap();
@@ -45,31 +44,25 @@ fn golden_two_peer_mix_perceptual() {
     }
     let gold = read_f32_le(path);
     // regen via mixer
-    let mixer = AudioMixer::new_no_device();
-    let v1 = Arc::new(AtomicUsize::new(100));
-    let d1 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let v2 = Arc::new(AtomicUsize::new(100));
-    let d2 = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id1 = uuid::Uuid::new_v4();
-    let id2 = uuid::Uuid::new_v4();
-    mixer.add_peer(id1, v1, d1, None);
-    mixer.add_peer(id2, v2, d2, None);
+    let (mut mixer, _) = unit_mixer(100);
+    let id1 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+    let id2 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     // Interleaved feed/fill: valid for any jitter window >= 1.
     let mut regen = Vec::with_capacity(960 * 10);
     for seq in 0..10 {
         let chunk: Vec<f32> = sine(440.0, 48000, 960);
-        mixer.handle_incoming(
+        push_chunk(
+            &mut mixer,
             id1,
             AudioChunk::new(seq, AudioFormat::new(2, 48000), chunk.clone()),
         );
         let chunk2: Vec<f32> = sine(880.0, 48000, 960);
-        mixer.handle_incoming(
+        push_chunk(
+            &mut mixer,
             id2,
             AudioChunk::new(seq, AudioFormat::new(2, 48000), chunk2),
         );
-        let mut out = vec![0f32; 960];
-        mixer.fill_buffer(&mut out);
-        regen.extend_from_slice(&out);
+        regen.extend_from_slice(&render(&mut mixer, 960));
     }
     assert_eq!(gold.len(), regen.len());
     let l1 = calculate_loudness(&gold);
@@ -86,21 +79,18 @@ fn golden_two_peer_mix_perceptual() {
 #[test]
 fn timing_fill_buffer_release_gate() {
     // only meaningful in release, but we check dev still <5ms
-    let mixer = AudioMixer::new_no_device();
-    let v = Arc::new(AtomicUsize::new(100));
-    let d = Arc::new(std::sync::Mutex::new(DenoiseSelection::None));
-    let id = uuid::Uuid::new_v4();
-    mixer.add_peer(id, v, d, None);
+    let (mut mixer, _) = unit_mixer(100);
+    let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     for seq in 0..10 {
-        mixer.handle_incoming(
+        push_chunk(
+            &mut mixer,
             id,
             AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.5; 960]),
         );
     }
     let start = std::time::Instant::now();
     for _ in 0..1000 {
-        let mut out = vec![0f32; 960];
-        mixer.fill_buffer(&mut out);
+        let _ = render(&mut mixer, 960);
         // refill buffer so next loop has data: need to handle incoming again periodically
     }
     let elapsed = start.elapsed();
