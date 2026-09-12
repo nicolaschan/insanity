@@ -5,6 +5,7 @@ use std::sync::{
 
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
+use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, MixerInput, MixerMetrics, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{
@@ -18,7 +19,8 @@ use tokio::sync::{mpsc, oneshot};
 use super::codec::OpusDecoder;
 use super::denoise::NnnoiselessDenoiser;
 use super::output::{OutputStats, RING_CAPACITY_BLOCKS};
-use super::params::{CHUNK_PERIOD, MAX_VOLUME, SAMPLE_RATE};
+
+pub const MAX_VOLUME: usize = 500;
 
 pub type PeerChain = Link<Denoise<NnnoiselessDenoiser>, Link<Gain, MetricsReader>>;
 pub(crate) type OpusRebuild = fn(&AudioFormat) -> Option<OpusDecoder>;
@@ -54,11 +56,11 @@ pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
     OpusDecoder::new(format.sample_rate, format.channel_count)
 }
 
-pub fn output_resampler(out: AudioFormat, block_frames: usize) -> StreamResampler {
+pub fn output_resampler(out: AudioFormat, audio_config: AudioPipelineConfig) -> StreamResampler {
     StreamResampler::new(
-        AudioFormat::new(out.channel_count, SAMPLE_RATE),
+        AudioFormat::new(out.channel_count, audio_config.sample_rate()),
         out.sample_rate,
-        block_frames,
+        audio_config.frames(),
     )
 }
 
@@ -186,10 +188,12 @@ pub(crate) async fn run_mixer_owner(
     stats: Arc<OutputStats>,
     mut rx: mpsc::Receiver<MixerOp>,
     block_samples: usize,
+    tick_period: tokio::time::Duration,
 ) {
+    assert!(block_samples > 0, "block_samples must be > 0");
     let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
-    let mut ticker = tokio::time::interval(CHUNK_PERIOD);
-    let mut block = Vec::with_capacity(block_samples.max(1));
+    let mut ticker = tokio::time::interval(tick_period);
+    let mut block = Vec::with_capacity(block_samples);
     loop {
         tokio::select! {
             biased;

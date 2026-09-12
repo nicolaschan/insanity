@@ -4,6 +4,7 @@ use cpal::{
     traits::{DeviceTrait, StreamTrait},
 };
 use insanity_core::audio::AudioFormat;
+use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
 
 use super::config::get_input_config;
@@ -21,9 +22,10 @@ impl SampleSource for CpalStreamReceiver {
 
 pub fn make_single_input(
     device: Device,
+    audio_config: AudioPipelineConfig,
 ) -> Result<(CpalStreamReceiver, AudioFormat), anyhow::Error> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let Ok((fmt, cfg)) = get_input_config(&device) else {
+    let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
         return Err(anyhow!(
             "Failed to get input config falling back to silence"
         ));

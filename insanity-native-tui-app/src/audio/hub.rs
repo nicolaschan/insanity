@@ -6,6 +6,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::capture::{Capture, CaptureOutput, ChunkEncoder};
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::codec::{AudioEncoder, EncodedChunk};
+use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
@@ -13,26 +14,29 @@ use tokio::sync::broadcast;
 
 use super::codec::OpusEncoder;
 use super::cpal_stream_receiver::make_single_input;
-use super::params::{CHANNELS, CHUNK_PERIOD, CHUNK_SIZE, SAMPLE_RATE};
 use rubato_audio_source::RubatoResampler;
 
 // Single input hub
 
-/// Yields a silent stereo chunk every CHUNK_PERIOD when no input device exists.
-#[derive(Default)]
+/// Yields a silent stereo chunk every chunk period when no input device exists.
+#[derive(Clone)]
 struct SilentChunkSource {
     next_sequence: u128,
+    audio_config: AudioPipelineConfig,
 }
 
 impl ChunkSource for SilentChunkSource {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        tokio::time::sleep(CHUNK_PERIOD).await;
+        tokio::time::sleep(self.audio_config.chunk_period()).await;
         let sequence_number = self.next_sequence;
         self.next_sequence += 1;
         Some(AudioChunk::new(
             sequence_number,
-            AudioFormat::new(CHANNELS, SAMPLE_RATE),
-            vec![0.0; CHUNK_SIZE * CHANNELS as usize],
+            AudioFormat::new(
+                self.audio_config.channels(),
+                self.audio_config.sample_rate(),
+            ),
+            vec![0.0; self.audio_config.block_samples()],
         ))
     }
 }
@@ -48,10 +52,6 @@ impl Pacer {
             period,
             next_deadline: None,
         }
-    }
-
-    fn chunk_period() -> tokio::time::Duration {
-        CHUNK_PERIOD
     }
 
     async fn pace(&mut self) {
@@ -77,69 +77,82 @@ pub struct AudioInputHub {
     device_name: String,
 }
 
-impl Default for AudioInputHub {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl AudioInputHub {
-    pub fn new() -> Self {
-        let host = cpal::default_host();
-        let device = host.default_input_device().unwrap();
-        Self::from_device(device)
+    pub fn new(audio_config: AudioPipelineConfig) -> Self {
+        match cpal::default_host().default_input_device() {
+            Some(device) => Self::from_device(device, audio_config),
+            None => {
+                log::warn!("No input device, falling back to silence");
+                Self::spawn_silent(UNKNOWN_DEVICE_NAME.into(), audio_config)
+            }
+        }
     }
 
-    pub fn from_device(device: Device) -> Self {
+    pub fn from_device(device: Device, audio_config: AudioPipelineConfig) -> Self {
         let device_name = device
             .description()
             .map(|d| d.name().to_string())
             .unwrap_or(UNKNOWN_DEVICE_NAME.into());
-        match make_single_input(device) {
+        match make_single_input(device, audio_config) {
             Ok((receiver, format)) => {
-                let resampled =
-                    RubatoResampler::new(receiver, format.clone(), SAMPLE_RATE, CHUNK_SIZE);
+                let resampled = RubatoResampler::new(
+                    receiver,
+                    format.clone(),
+                    audio_config.sample_rate(),
+                    audio_config.frames(),
+                );
                 let (mute, mute_control) = Mute::shared(false);
-                let transform = mute.chain(ChannelMap::capped(CHANNELS));
+                let transform = mute.chain(ChannelMap::capped(audio_config.channels()));
                 let capture = Capture::new(
                     resampled,
-                    AudioFormat::new(format.channel_count, SAMPLE_RATE),
-                    CHUNK_SIZE,
+                    AudioFormat::new(format.channel_count, audio_config.sample_rate()),
+                    audio_config.frames(),
                     transform,
                     |format: &AudioFormat| {
                         OpusEncoder::new(format.sample_rate, format.channel_count)
                     },
                 );
-                Self::spawn_capture(capture, device_name, mute_control)
+                Self::spawn_capture(capture, device_name, mute_control, audio_config)
             }
             Err(e) => {
                 log::warn!("{e}");
-                Self::spawn_silent(device_name)
+                Self::spawn_silent(device_name, audio_config)
             }
         }
     }
 
-    pub fn from_chunk_source<R>(source: R) -> Self
+    pub fn from_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
     where
         R: ChunkSource + Send + 'static,
     {
-        Self::spawn_chunk_source(source, UNKNOWN_DEVICE_NAME.into())
+        Self::spawn_chunk_source(source, UNKNOWN_DEVICE_NAME.into(), audio_config)
     }
 
-    fn spawn_silent(device_name: String) -> Self {
-        Self::spawn_chunk_source(SilentChunkSource::default(), device_name)
+    fn spawn_silent(device_name: String, audio_config: AudioPipelineConfig) -> Self {
+        Self::spawn_chunk_source(
+            SilentChunkSource {
+                next_sequence: 0,
+                audio_config,
+            },
+            device_name,
+            audio_config,
+        )
     }
 
-    pub(crate) fn spawn_chunk_source<R>(mut source: R, device_name: String) -> Self
+    pub(crate) fn spawn_chunk_source<R>(
+        mut source: R,
+        device_name: String,
+        audio_config: AudioPipelineConfig,
+    ) -> Self
     where
         R: ChunkSource + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
-        let mut transform = mute.chain(ChannelMap::capped(CHANNELS));
-        let mut encoder = ChunkEncoder::new(Self::rebuild_opus, CHUNK_SIZE);
+        let mut transform = mute.chain(ChannelMap::capped(audio_config.channels()));
+        let mut encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
         let (hub, tx) = Self::with_channel(device_name, mute_control);
         tokio::spawn(async move {
-            let mut pacer = Pacer::new(Pacer::chunk_period());
+            let mut pacer = Pacer::new(audio_config.chunk_period());
             while let Some(chunk) = source.next_chunk().await {
                 pacer.pace().await;
                 let Some(chunk) = transform.transform(chunk) else {
@@ -162,6 +175,7 @@ impl AudioInputHub {
         mut capture: Capture<R, T, E, F>,
         device_name: String,
         mute_control: Arc<MuteControl>,
+        audio_config: AudioPipelineConfig,
     ) -> Self
     where
         R: SampleSource + Send + 'static,
@@ -171,7 +185,7 @@ impl AudioInputHub {
     {
         let (hub, tx) = Self::with_channel(device_name, mute_control);
         tokio::spawn(async move {
-            let mut pacer = Pacer::new(Pacer::chunk_period());
+            let mut pacer = Pacer::new(audio_config.chunk_period());
             loop {
                 let output = capture.next_output().await;
                 if matches!(output, CaptureOutput::EndOfStream) {

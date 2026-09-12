@@ -1,6 +1,7 @@
 pub mod capture;
 pub mod chunk;
 pub mod codec;
+pub mod config;
 pub mod denoiser;
 pub mod device;
 pub mod jitter;

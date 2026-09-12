@@ -6,14 +6,14 @@ use std::sync::{
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::mixer::{DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mixer};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::transform::Gain;
 use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use super::config::get_output_config;
-use super::mixer::{MIXER_OPS_BOUND, MixerClient, run_mixer_owner};
-use super::params::{CHANNELS, MAX_VOLUME, SAMPLE_RATE};
+use super::mixer::{MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, run_mixer_owner};
 
 // Output mixer
 
@@ -106,31 +106,30 @@ pub(crate) struct AudioOutput {
     pub(crate) _guard: OutputGuard,
 }
 
-pub(crate) fn start_output() -> AudioOutput {
+pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let host = cpal::default_host();
-    let output = host
-        .default_output_device()
-        .and_then(|device| match get_output_config(&device) {
+    let output = host.default_output_device().and_then(|device| {
+        match get_output_config(&device, audio_config) {
             Ok((sample_format, config)) => Some((device, sample_format, config)),
             Err(e) => {
                 log::warn!("Failed to get output config, falling back to dummy: {e}");
                 None
             }
-        });
+        }
+    });
     let format = output
         .as_ref()
         .map(|(_, _, config)| AudioFormat::new(config.channels, config.sample_rate))
-        .unwrap_or(AudioFormat::new(CHANNELS, SAMPLE_RATE));
+        .unwrap_or(AudioFormat::new(
+            audio_config.channels(),
+            audio_config.sample_rate(),
+        ));
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mixer = Mixer::new(
-        format.clone(),
-        DEFAULT_JITTER_CHUNKS,
-        DEFAULT_OUT_FRAMES,
-        bus,
-    );
+    let mixer = Mixer::new(format.clone(), audio_config, bus);
     let timing = Arc::new(FillStats::new());
     let stats = Arc::new(OutputStats::new());
-    let block_samples = format.channel_count.max(1) as usize * DEFAULT_OUT_FRAMES;
+    assert!(format.channel_count > 0, "output channel_count must be > 0");
+    let block_samples = format.channel_count as usize * audio_config.frames();
     let (producer, consumer) = RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
     let callback_timing = timing.clone();
     let callback_stats = stats.clone();
@@ -173,7 +172,15 @@ pub(crate) fn start_output() -> AudioOutput {
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
     let task_stats = stats.clone();
     tokio::spawn(async move {
-        run_mixer_owner(mixer, producer, task_stats, op_rx, block_samples).await
+        run_mixer_owner(
+            mixer,
+            producer,
+            task_stats,
+            op_rx,
+            block_samples,
+            audio_config.chunk_period(),
+        )
+        .await
     });
     AudioOutput {
         handle: OutputHandle {

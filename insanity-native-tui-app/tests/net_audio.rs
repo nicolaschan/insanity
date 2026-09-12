@@ -6,14 +6,14 @@ mod sine;
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
-use insanity_core::audio::mixer::{DEFAULT_OUT_FRAMES, SlotId};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::mixer::SlotId;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::MetricsState;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
     AppMixer, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder,
 };
-use insanity_native_tui_app::audio::params::SAMPLE_RATE;
 use insanity_native_tui_app::clerver::run_clerver;
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use sine::{SineSource, hub_from_source, new_no_device_mixer};
@@ -52,13 +52,17 @@ async fn sample_speaker(mixer: &Arc<Mutex<AppMixer>>, chunks: usize) -> (Vec<f32
 }
 
 fn subscribe_peer(mixer: &Arc<Mutex<AppMixer>>) -> (SlotId, Arc<MetricsState>) {
+    let audio_config = AudioPipelineConfig::default();
     let controls = PeerControls::new(100, DenoiseSelection::None);
     let chain = chain_from_controls(&controls);
     let mut guard = mixer.lock().expect("mixer lock");
     let slot = guard.subscribe(
         chain,
         rebuild_opus_decoder,
-        output_resampler(AudioFormat::new(2, SAMPLE_RATE), DEFAULT_OUT_FRAMES),
+        output_resampler(
+            AudioFormat::new(2, audio_config.sample_rate()),
+            audio_config,
+        ),
     );
     (slot, controls.loudness.clone())
 }

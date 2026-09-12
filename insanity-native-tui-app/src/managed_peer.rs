@@ -5,7 +5,8 @@ use std::sync::{
 
 use bon::bon;
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::mixer::{DEFAULT_OUT_FRAMES, SlotId};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
@@ -61,6 +62,7 @@ pub struct ManagedPeer {
     controls: PeerControls,
     task: Arc<Mutex<PeerTask>>,
     out_format: AudioFormat,
+    audio_config: AudioPipelineConfig,
     hub: Arc<AudioInputHub>,
     client: MixerClient,
 }
@@ -82,6 +84,7 @@ impl ManagedPeer {
         denoise: DenoiseSelection,
         volume: usize,
         out_format: AudioFormat,
+        audio_config: AudioPipelineConfig,
         hub: Arc<AudioInputHub>,
         client: MixerClient,
     ) -> ManagedPeer {
@@ -101,6 +104,7 @@ impl ManagedPeer {
                 handle: None,
             })),
             out_format,
+            audio_config,
             hub,
             client,
             connection_status: Arc::new(AtomicU8::new(ConnectionStatus::Disabled as u8)),
@@ -209,7 +213,7 @@ impl ManagedPeer {
     async fn subscribe_mixer(&self) {
         self.unsubscribe_mixer().await;
         let chain = chain_from_controls(&self.controls);
-        let resampler = output_resampler(self.out_format.clone(), DEFAULT_OUT_FRAMES);
+        let resampler = output_resampler(self.out_format.clone(), self.audio_config);
         let slot = self
             .client
             .subscribe(chain, rebuild_opus_decoder, resampler)

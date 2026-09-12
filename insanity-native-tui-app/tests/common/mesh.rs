@@ -2,11 +2,10 @@
 use crate::sine::{decode_frame_to_chunk, hub_from_source, new_no_device_mixer, opus_channels};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
-use insanity_core::audio::mixer::DEFAULT_OUT_FRAMES;
+use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::params::{CHANNELS, SAMPLE_RATE};
 use insanity_native_tui_app::audio::{
     hub::AudioInputHub,
     mixer::{AppMixer, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder},
@@ -52,10 +51,11 @@ impl VirtualNode {
     }
 
     pub fn with_amp(_name: &str, freq: f32, amp: f32) -> Self {
-        let format = AudioFormat::new(2, SAMPLE_RATE);
+        let audio_config = AudioPipelineConfig::default();
+        let format = AudioFormat::new(2, audio_config.sample_rate());
         Self::with_source(
             _name,
-            crate::sine::SineSource::new_amp(SAMPLE_RATE, freq, amp),
+            crate::sine::SineSource::new_amp(audio_config.sample_rate(), freq, amp),
             format,
         )
     }
@@ -64,16 +64,20 @@ impl VirtualNode {
     where
         S: SampleSource + Send + Sync + 'static,
     {
+        let audio_config = AudioPipelineConfig::default();
         let hub = Arc::new(hub_from_source(source, format.clone()));
         Self {
             hub_taps: HashMap::new(),
             mixer: new_no_device_mixer(),
             peer_ids: HashMap::new(),
             peer_controls: HashMap::new(),
-            out_samples: DEFAULT_OUT_FRAMES * CHANNELS as usize,
-            monitor: Decoder::new(SAMPLE_RATE, opus_channels(format.channel_count))
-                .expect("monitor decoder"),
-            monitor_format: AudioFormat::new(format.channel_count, SAMPLE_RATE),
+            out_samples: audio_config.block_samples(),
+            monitor: Decoder::new(
+                audio_config.sample_rate(),
+                opus_channels(format.channel_count),
+            )
+            .expect("monitor decoder"),
+            monitor_format: AudioFormat::new(format.channel_count, audio_config.sample_rate()),
             mic_history: Vec::new(),
             mic_last_seq: None,
             speaker_history: Vec::new(),
@@ -90,12 +94,16 @@ impl VirtualNode {
         peer_name: &str,
         denoise: DenoiseSelection,
     ) -> PeerControls {
+        let audio_config = AudioPipelineConfig::default();
         let controls = PeerControls::new(100, denoise);
         let chain = chain_from_controls(&controls);
         let slot = self.mixer.subscribe(
             chain,
             rebuild_opus_decoder,
-            output_resampler(AudioFormat::new(2, SAMPLE_RATE), DEFAULT_OUT_FRAMES),
+            output_resampler(
+                AudioFormat::new(2, audio_config.sample_rate()),
+                audio_config,
+            ),
         );
         self.peer_ids.insert(peer_name.to_string(), slot);
         self.peer_controls

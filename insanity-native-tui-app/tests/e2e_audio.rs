@@ -6,7 +6,7 @@ mod mesh;
 mod sine;
 
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
-use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
+use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::user_input_event::DenoiseSelection;
 use mesh::{VirtualNode, mesh_timeout, render_tick, run_mesh, transfer_tick_timeout};
 use std::collections::HashMap;
@@ -137,7 +137,7 @@ async fn three_node_mesh_topology() {
 
 #[tokio::test]
 async fn mute_gap_honesty() {
-    let post_mute_ticks = 10 + DEFAULT_JITTER_CHUNKS;
+    let post_mute_ticks = 10 + AudioPipelineConfig::default().jitter_chunks();
     let total_ticks = 20 + post_mute_ticks;
     let timeout = mesh_timeout(total_ticks, 1).saturating_add(Duration::from_secs(10));
     let res = tokio::time::timeout(timeout, async {

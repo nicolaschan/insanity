@@ -2,11 +2,12 @@
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
 use insanity_core::audio::codec::EncodedChunk;
-use insanity_core::audio::mixer::{DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mixer};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::Gain;
-use insanity_native_tui_app::audio::params::{CHANNELS, CHUNK_SIZE, MAX_VOLUME, SAMPLE_RATE};
-use insanity_native_tui_app::audio::{hub::AudioInputHub, mixer::AppMixer};
+use insanity_native_tui_app::audio::hub::AudioInputHub;
+use insanity_native_tui_app::audio::mixer::{AppMixer, MAX_VOLUME};
 use opus::{Channels, Decoder};
 use rubato_audio_source::RubatoResampler;
 
@@ -59,21 +60,27 @@ pub fn hub_from_source<S>(source: S, format: AudioFormat) -> AudioInputHub
 where
     S: SampleSource + Send + Sync + 'static,
 {
-    let resampled = RubatoResampler::new(source, format.clone(), SAMPLE_RATE, CHUNK_SIZE);
+    let audio_config = AudioPipelineConfig::default();
+    let resampled = RubatoResampler::new(
+        source,
+        format.clone(),
+        audio_config.sample_rate(),
+        audio_config.frames(),
+    );
     let chunked = SampleChunker::new(
         resampled,
-        CHUNK_SIZE,
-        AudioFormat::new(format.channel_count, SAMPLE_RATE),
+        audio_config.frames(),
+        AudioFormat::new(format.channel_count, audio_config.sample_rate()),
     );
-    AudioInputHub::from_chunk_source(chunked)
+    AudioInputHub::from_chunk_source(chunked, audio_config)
 }
 
 pub fn new_no_device_mixer() -> AppMixer {
+    let audio_config = AudioPipelineConfig::default();
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
     Mixer::new(
-        AudioFormat::new(CHANNELS, SAMPLE_RATE),
-        DEFAULT_JITTER_CHUNKS,
-        DEFAULT_OUT_FRAMES,
+        AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
+        audio_config,
         bus,
     )
 }
