@@ -8,7 +8,8 @@ use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::mixer::{DEFAULT_OUT_FRAMES, SlotId};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
-    AudioInputHub, PeerControls, chain_from_controls, output_resampler,
+    hub::AudioInputHub,
+    mixer::{PeerControls, chain_from_controls, output_resampler},
 };
 use sine::{SineSource, hub_from_source};
 use std::sync::Arc;

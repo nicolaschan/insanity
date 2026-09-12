@@ -5,10 +5,8 @@ use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::mixer::{DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mixer};
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::Gain;
-use insanity_native_tui_app::audio::{AppMixer, AudioInputHub};
-use insanity_native_tui_app::processor::{
-    AUDIO_CHANNELS, AUDIO_CHUNK_SIZE, AUDIO_SAMPLE_RATE, MAX_VOLUME,
-};
+use insanity_native_tui_app::audio::params::{CHANNELS, CHUNK_SIZE, MAX_VOLUME, SAMPLE_RATE};
+use insanity_native_tui_app::audio::{hub::AudioInputHub, mixer::AppMixer};
 use opus::{Channels, Decoder};
 use rubato_audio_source::RubatoResampler;
 
@@ -61,12 +59,11 @@ pub fn hub_from_source<S>(source: S, format: AudioFormat) -> AudioInputHub
 where
     S: SampleSource + Send + Sync + 'static,
 {
-    let resampled =
-        RubatoResampler::new(source, format.clone(), AUDIO_SAMPLE_RATE, AUDIO_CHUNK_SIZE);
+    let resampled = RubatoResampler::new(source, format.clone(), SAMPLE_RATE, CHUNK_SIZE);
     let chunked = SampleChunker::new(
         resampled,
-        AUDIO_CHUNK_SIZE,
-        AudioFormat::new(format.channel_count, AUDIO_SAMPLE_RATE),
+        CHUNK_SIZE,
+        AudioFormat::new(format.channel_count, SAMPLE_RATE),
     );
     AudioInputHub::from_chunk_source(chunked)
 }
@@ -74,7 +71,7 @@ where
 pub fn new_no_device_mixer() -> AppMixer {
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
     Mixer::new(
-        AudioFormat::new(AUDIO_CHANNELS, AUDIO_SAMPLE_RATE),
+        AudioFormat::new(CHANNELS, SAMPLE_RATE),
         DEFAULT_JITTER_CHUNKS,
         DEFAULT_OUT_FRAMES,
         bus,

@@ -21,8 +21,8 @@ use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
 use insanity_core::audio::sample_ops::convert_to_mixer_channels;
 use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
-use insanity_native_tui_app::processor::MAX_VOLUME;
+use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
+use insanity_native_tui_app::audio::params::MAX_VOLUME;
 use unit_mixer::{add_unit_peer, push_chunk, push_value, render, unit_mixer};
 
 #[test]

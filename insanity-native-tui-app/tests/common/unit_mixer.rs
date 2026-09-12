@@ -6,10 +6,10 @@ use insanity_core::audio::mixer::{DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mix
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{Gain, GainControl};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{
+use insanity_native_tui_app::audio::mixer::{
     PeerChain, PeerControls, chain_from_controls, output_resampler,
 };
-use insanity_native_tui_app::processor::{AUDIO_SAMPLE_RATE, MAX_VOLUME};
+use insanity_native_tui_app::audio::params::{MAX_VOLUME, SAMPLE_RATE};
 use rubato_audio_source::StreamResampler;
 use std::sync::Arc;
 
@@ -76,7 +76,7 @@ pub fn unit_mixer_with_jitter(
 ) -> (UnitMixer, Arc<GainControl>) {
     let (bus, bus_control) = Gain::shared(bus_volume, MAX_VOLUME);
     let mixer = Mixer::new(
-        AudioFormat::new(2, AUDIO_SAMPLE_RATE),
+        AudioFormat::new(2, SAMPLE_RATE),
         jitter_chunks,
         DEFAULT_OUT_FRAMES,
         bus,
@@ -90,7 +90,7 @@ pub fn add_unit_peer(mixer: &mut UnitMixer, volume: usize, denoise: DenoiseSelec
     mixer.subscribe(
         chain,
         rebuild_passthrough,
-        output_resampler(AudioFormat::new(2, AUDIO_SAMPLE_RATE), DEFAULT_OUT_FRAMES),
+        output_resampler(AudioFormat::new(2, SAMPLE_RATE), DEFAULT_OUT_FRAMES),
     )
 }
 
@@ -106,7 +106,7 @@ pub fn push_value(mixer: &mut UnitMixer, slot: SlotId, sequence: u128, value: f3
         slot,
         AudioChunk::new(
             sequence,
-            AudioFormat::new(2, AUDIO_SAMPLE_RATE),
+            AudioFormat::new(2, SAMPLE_RATE),
             vec![value; DEFAULT_OUT_FRAMES * 2],
         ),
     );
