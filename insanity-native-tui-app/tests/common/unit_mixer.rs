@@ -2,14 +2,14 @@
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk};
-use insanity_core::audio::mixer::{DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mixer, SlotId};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::mixer::{Mixer, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{Gain, GainControl};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
-    PeerChain, PeerControls, chain_from_controls, output_resampler,
+    MAX_VOLUME, PeerChain, PeerControls, chain_from_controls, output_resampler,
 };
-use insanity_native_tui_app::audio::params::{MAX_VOLUME, SAMPLE_RATE};
 use rubato_audio_source::StreamResampler;
 use std::sync::Arc;
 
@@ -67,30 +67,36 @@ pub fn rebuild_passthrough(_: &AudioFormat) -> Option<PassthroughDecoder> {
 }
 
 pub fn unit_mixer(bus_volume: usize) -> (UnitMixer, Arc<GainControl>) {
-    unit_mixer_with_jitter(bus_volume, DEFAULT_JITTER_CHUNKS)
+    unit_mixer_with_jitter(bus_volume, AudioPipelineConfig::default().jitter_chunks())
 }
 
 pub fn unit_mixer_with_jitter(
     bus_volume: usize,
     jitter_chunks: usize,
 ) -> (UnitMixer, Arc<GainControl>) {
+    let audio_config = AudioPipelineConfig::default()
+        .with_jitter_chunks(jitter_chunks)
+        .expect("test jitter valid");
     let (bus, bus_control) = Gain::shared(bus_volume, MAX_VOLUME);
     let mixer = Mixer::new(
-        AudioFormat::new(2, SAMPLE_RATE),
-        jitter_chunks,
-        DEFAULT_OUT_FRAMES,
+        AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
+        audio_config,
         bus,
     );
     (mixer, bus_control)
 }
 
 pub fn add_unit_peer(mixer: &mut UnitMixer, volume: usize, denoise: DenoiseSelection) -> SlotId {
+    let audio_config = AudioPipelineConfig::default();
     let controls = PeerControls::new(volume, denoise);
     let chain = chain_from_controls(&controls);
     mixer.subscribe(
         chain,
         rebuild_passthrough,
-        output_resampler(AudioFormat::new(2, SAMPLE_RATE), DEFAULT_OUT_FRAMES),
+        output_resampler(
+            AudioFormat::new(2, audio_config.sample_rate()),
+            audio_config,
+        ),
     )
 }
 
@@ -101,13 +107,14 @@ pub fn push_chunk(mixer: &mut UnitMixer, slot: SlotId, chunk: AudioChunk) {
 }
 
 pub fn push_value(mixer: &mut UnitMixer, slot: SlotId, sequence: u128, value: f32) {
+    let audio_config = AudioPipelineConfig::default();
     push_chunk(
         mixer,
         slot,
         AudioChunk::new(
             sequence,
-            AudioFormat::new(2, SAMPLE_RATE),
-            vec![value; DEFAULT_OUT_FRAMES * 2],
+            AudioFormat::new(2, audio_config.sample_rate()),
+            vec![value; audio_config.block_samples()],
         ),
     );
 }

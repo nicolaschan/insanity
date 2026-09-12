@@ -5,7 +5,8 @@ mod unit_mixer;
 
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
-use insanity_core::audio::mixer::{DEFAULT_OUT_FRAMES, SlotId};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
     hub::AudioInputHub,
@@ -179,7 +180,7 @@ fn retained_peer_controls_drive_volume_and_loudness() {
     let slot: SlotId = mixer.subscribe(
         chain,
         rebuild_passthrough,
-        output_resampler(AudioFormat::new(2, 48000), DEFAULT_OUT_FRAMES),
+        output_resampler(AudioFormat::new(2, 48000), AudioPipelineConfig::default()),
     );
     push_value(&mut mixer, slot, 0, 0.5);
     let out = render(&mut mixer, 960);
@@ -242,10 +243,13 @@ async fn hub_rebuilds_encoder_on_format_change() {
         let stereo = AudioFormat::new(2, 48000);
         let mut remaining = vec![stereo.clone(); 3];
         remaining.extend(vec![mono.clone(); 3]);
-        let hub = AudioInputHub::from_chunk_source(FormatSwitch {
-            remaining,
-            next_sequence: 0,
-        });
+        let hub = AudioInputHub::from_chunk_source(
+            FormatSwitch {
+                remaining,
+                next_sequence: 0,
+            },
+            AudioPipelineConfig::default(),
+        );
         let mut rx = hub.subscribe();
         let mut channels = Vec::new();
         let mut sequences = Vec::new();

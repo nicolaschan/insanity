@@ -1,7 +1,6 @@
 use cpal::traits::DeviceTrait;
 use cpal::{BufferSize, Device, SampleFormat, StreamConfig};
-
-use super::params::{CHANNELS, SAMPLE_RATE};
+use insanity_core::audio::config::AudioPipelineConfig;
 
 pub const AUDIO_CALLBACK_FRAMES: u32 = 480;
 
@@ -32,13 +31,14 @@ pub(crate) fn sample_format_rank(format: SampleFormat) -> Option<u8> {
     }
 }
 
-fn best_stereo_config(
+fn best_config(
     ranges: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
+    channels: u16,
 ) -> Option<cpal::SupportedStreamConfigRange> {
     let mut ranges: Vec<cpal::SupportedStreamConfigRange> = ranges.collect();
     let best = ranges
         .iter()
-        .filter(|r| r.channels() == CHANNELS)
+        .filter(|r| r.channels() == channels)
         .filter_map(|r| sample_format_rank(r.sample_format()).map(|rank| (rank, r)))
         .reduce(|best, candidate| {
             if candidate.0 > best.0 {
@@ -51,27 +51,37 @@ fn best_stereo_config(
     best.or_else(|| ranges.pop())
 }
 
-pub(crate) fn find_stereo_input(
+pub(crate) fn find_input(
     range: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
+    channels: u16,
 ) -> Option<cpal::SupportedStreamConfigRange> {
-    best_stereo_config(range)
+    best_config(range, channels)
 }
 
-pub(crate) fn find_stereo_output(
+pub(crate) fn find_output(
     range: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
+    channels: u16,
 ) -> Option<cpal::SupportedStreamConfigRange> {
-    best_stereo_config(range)
+    best_config(range, channels)
 }
 
-pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat, StreamConfig)> {
+pub(crate) fn get_input_config(
+    device: &Device,
+    audio_config: AudioPipelineConfig,
+) -> anyhow::Result<(SampleFormat, StreamConfig)> {
     let range = device
         .supported_input_configs()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let cfg_range =
-        find_stereo_input(range).ok_or_else(|| anyhow::anyhow!("No supported input config"))?;
+    let cfg_range = find_input(range, audio_config.channels()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No supported input config for {}ch @ {}Hz",
+            audio_config.channels(),
+            audio_config.sample_rate()
+        )
+    })?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = SAMPLE_RATE.min(max);
+    let sample_rate = audio_config.sample_rate().min(max);
     let buffer_size = callback_buffer_size(cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
@@ -81,15 +91,23 @@ pub(crate) fn get_input_config(device: &Device) -> anyhow::Result<(SampleFormat,
     Ok((cfg_range.sample_format(), cfg))
 }
 
-pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat, StreamConfig)> {
+pub(crate) fn get_output_config(
+    device: &Device,
+    audio_config: AudioPipelineConfig,
+) -> anyhow::Result<(SampleFormat, StreamConfig)> {
     let range = device
         .supported_output_configs()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let cfg_range =
-        find_stereo_output(range).ok_or_else(|| anyhow::anyhow!("No supported output config"))?;
+    let cfg_range = find_output(range, audio_config.channels()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No supported output config for {}ch @ {}Hz",
+            audio_config.channels(),
+            audio_config.sample_rate()
+        )
+    })?;
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
-    let sample_rate = SAMPLE_RATE.min(max);
+    let sample_rate = audio_config.sample_rate().min(max);
     let buffer_size = callback_buffer_size(cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
@@ -101,7 +119,7 @@ pub(crate) fn get_output_config(device: &Device) -> anyhow::Result<(SampleFormat
 
 #[cfg(test)]
 mod format_selection_tests {
-    use super::{find_stereo_input, find_stereo_output, sample_format_rank};
+    use super::{find_input, find_output, sample_format_rank};
     use cpal::SampleFormat;
 
     fn range(channels: u16, format: cpal::SampleFormat) -> cpal::SupportedStreamConfigRange {
@@ -156,7 +174,7 @@ mod format_selection_tests {
             range(2, SampleFormat::I16),
             range(2, SampleFormat::F32),
         ];
-        let picked = find_stereo_input(configs.into_iter()).expect("config");
+        let picked = find_input(configs.into_iter(), 2).expect("config");
         assert_eq!(picked.sample_format(), SampleFormat::F32);
         assert_eq!(picked.channels(), 2);
         let configs = vec![
@@ -164,14 +182,14 @@ mod format_selection_tests {
             range(2, SampleFormat::I16),
             range(2, SampleFormat::F32),
         ];
-        let picked = find_stereo_output(configs.into_iter()).expect("config");
+        let picked = find_output(configs.into_iter(), 2).expect("config");
         assert_eq!(picked.sample_format(), SampleFormat::F32);
     }
 
     #[test]
     fn mono_configs_never_win_over_stereo() {
         let configs = vec![range(1, SampleFormat::F32), range(2, SampleFormat::U8)];
-        let picked = find_stereo_input(configs.into_iter()).expect("config");
+        let picked = find_input(configs.into_iter(), 2).expect("config");
         assert_eq!(picked.channels(), 2);
         assert_eq!(picked.sample_format(), SampleFormat::U8);
     }
@@ -179,15 +197,15 @@ mod format_selection_tests {
     #[test]
     fn dsd_stereo_is_skipped_for_fallback() {
         let configs = vec![range(2, SampleFormat::DsdU8), range(1, SampleFormat::F32)];
-        let picked = find_stereo_input(configs.into_iter()).expect("config");
+        let picked = find_input(configs.into_iter(), 2).expect("config");
         assert_ne!(picked.sample_format(), SampleFormat::DsdU8);
     }
 
     #[test]
     fn empty_list_selects_nothing() {
-        let picked = find_stereo_input(Vec::new().into_iter());
+        let picked = find_input(Vec::new().into_iter(), 2);
         assert!(picked.is_none());
-        let picked = find_stereo_output(Vec::new().into_iter());
+        let picked = find_output(Vec::new().into_iter(), 2);
         assert!(picked.is_none());
     }
 
@@ -207,7 +225,7 @@ mod format_selection_tests {
             cpal::SupportedBufferSize::Unknown,
             SampleFormat::F32,
         );
-        let picked = find_stereo_output(vec![first, second].into_iter()).expect("config");
+        let picked = find_output(vec![first, second].into_iter(), 2).expect("config");
         assert_eq!(picked.max_sample_rate(), 48000);
     }
 }

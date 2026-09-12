@@ -3,7 +3,8 @@ mod unit_mixer;
 
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
-use insanity_core::audio::mixer::{DEFAULT_JITTER_CHUNKS, SlotId};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::mixer::SlotId;
 use insanity_native_tui_app::audio::mixer::format_audio_interval;
 use opus::{Application, Channels, Decoder, Encoder};
 use unit_mixer::{
@@ -424,8 +425,14 @@ fn bulk_overfeed_drops_early_audio_with_overflow_count() {
 fn production_capacity_covers_observed_callback() {
     let (mut mixer, _) = unit_mixer(100);
     let id = add_peer(&mut mixer);
-    feed(&mut mixer, id, 0, DEFAULT_JITTER_CHUNKS, 0.4);
-    let mut next_seq = DEFAULT_JITTER_CHUNKS as u128;
+    feed(
+        &mut mixer,
+        id,
+        0,
+        AudioPipelineConfig::default().jitter_chunks(),
+        0.4,
+    );
+    let mut next_seq = AudioPipelineConfig::default().jitter_chunks() as u128;
     let pattern = [4usize, 4, 4, 5];
     for f in 0..25 {
         let out = fill(&mut mixer, 4100);

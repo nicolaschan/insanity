@@ -15,19 +15,19 @@ mod unit_mixer;
 
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
+use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
-use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
 use insanity_core::audio::sample_ops::convert_to_mixer_channels;
 use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
-use insanity_native_tui_app::audio::params::MAX_VOLUME;
+use insanity_native_tui_app::audio::mixer::MAX_VOLUME;
 use unit_mixer::{add_unit_peer, push_chunk, push_value, render, unit_mixer};
 
 #[test]
 fn jitter_target_pins_current_behavior() {
-    assert_eq!(DEFAULT_JITTER_CHUNKS, 10);
+    assert_eq!(AudioPipelineConfig::default().jitter_chunks(), 10);
     assert_eq!(MAX_VOLUME, 500);
 }
 

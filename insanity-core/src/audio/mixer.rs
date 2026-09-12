@@ -6,9 +6,7 @@ use crate::audio::codec::{AudioDecoder, EncodedChunk, FormatCache};
 use crate::audio::sample::{Resampler, SampleSource, SyncSampleSource};
 use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, JitterStage};
 
-pub const DEFAULT_JITTER_CHUNKS: usize = 10;
-pub const PLC_FADE_SAMPLES: usize = 960;
-pub const DEFAULT_OUT_FRAMES: usize = 480;
+use crate::audio::config::AudioPipelineConfig;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MixerMetrics {
@@ -72,6 +70,7 @@ pub(crate) struct Conceal {
     last: Vec<f32>,
     fade_start: Vec<f32>,
     fade_pos: usize,
+    fade_samples: usize,
     channel: usize,
     channels: usize,
     pub underrun: usize,
@@ -79,16 +78,14 @@ pub(crate) struct Conceal {
 }
 
 impl Conceal {
-    pub fn new() -> Self {
-        Self::with_channels(1)
-    }
-
-    pub fn with_channels(channels: usize) -> Self {
-        let channels = channels.max(1);
+    pub fn with_channels(channels: usize, block_frames: usize) -> Self {
+        assert!(channels > 0, "channels must be > 0");
+        assert!(block_frames > 0, "block_frames must be > 0");
         Conceal {
             last: vec![0.0; channels],
             fade_start: vec![0.0; channels],
             fade_pos: 0,
+            fade_samples: channels * block_frames,
             channel: 0,
             channels,
             underrun: 0,
@@ -123,14 +120,14 @@ impl Conceal {
 
     fn fade_sample(&mut self, slot: usize) -> f32 {
         self.plc_hold += 1;
-        let position = self.fade_pos as f32 / PLC_FADE_SAMPLES as f32;
-        let output = if self.fade_pos < PLC_FADE_SAMPLES {
+        let position = self.fade_pos as f32 / self.fade_samples as f32;
+        let output = if self.fade_pos < self.fade_samples {
             self.fade_start[slot] * (1.0 - position)
         } else {
             0.0
         };
         self.fade_pos += 1;
-        if self.fade_pos >= PLC_FADE_SAMPLES {
+        if self.fade_pos >= self.fade_samples {
             self.fade_pos = 0;
             self.silence();
         }
@@ -149,12 +146,6 @@ impl Conceal {
             return self.fade_sample(slot);
         }
         self.hold_first(slot)
-    }
-}
-
-impl Default for Conceal {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -251,22 +242,20 @@ where
     M: ChunkTransform,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
-    pub fn new(
-        mut out_format: AudioFormat,
-        jitter_chunks: usize,
-        out_frames: usize,
-        bus: M,
-    ) -> Self {
-        out_format.channel_count = out_format.channel_count.max(1);
+    pub fn new(out_format: AudioFormat, audio_config: AudioPipelineConfig, bus: M) -> Self {
+        assert!(
+            out_format.channel_count > 0,
+            "out_format.channel_count must be > 0"
+        );
         Mixer {
             slots: HashMap::new(),
             bus,
             clip: Clip::new(),
             pending: VecDeque::new(),
             out_format,
-            out_frames: out_frames.max(1),
+            out_frames: audio_config.frames(),
             out_sequence: 0,
-            jitter_chunks: jitter_chunks.max(1),
+            jitter_chunks: audio_config.jitter_chunks(),
             fills: 0,
             stale_dropped: 0,
             next_id: 0,
@@ -282,7 +271,10 @@ where
             transform,
             jitter: JitterStage::new(self.jitter_chunks),
             resampler,
-            conceal: Conceal::with_channels(self.out_format.channel_count as usize),
+            conceal: Conceal::with_channels(
+                self.out_format.channel_count as usize,
+                self.out_frames,
+            ),
             target_rate: self.out_format.sample_rate,
             block_frames: self.out_frames,
         };
@@ -433,10 +425,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ChunkDecoder, Conceal, Mixer, MixerInput, SlotId};
-    use super::{DEFAULT_OUT_FRAMES, PLC_FADE_SAMPLES};
     use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
     use crate::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
+    use crate::audio::config::AudioPipelineConfig;
     use crate::audio::sample::{Resampler, SyncSampleSource};
     use crate::audio::transform::{ChunkTransform, Gain, JitterStage};
     use std::collections::VecDeque;
@@ -529,8 +521,24 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "out_format.channel_count must be > 0")]
+    fn zero_channel_output_format_rejected() {
+        let _ = Mixer::<
+            TagDecoder,
+            (),
+            ScriptedResampler,
+            (),
+            fn(&AudioFormat) -> Option<TagDecoder>,
+        >::new(
+            AudioFormat::new(0, 48000),
+            AudioPipelineConfig::default(),
+            (),
+        );
+    }
+
+    #[test]
     fn pushes_flow_to_output_in_order() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(0));
         let out = pull(&mut mixer, 960);
@@ -544,7 +552,7 @@ mod tests {
 
     #[test]
     fn mixer_input_trait_routes_push() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         assert!(MixerInput::push_frame(&mut mixer, id, frame(2)));
         assert!(!MixerInput::push_frame(&mut mixer, SlotId(99), frame(2)));
@@ -554,7 +562,7 @@ mod tests {
 
     #[test]
     fn buffered_future_chunk_releases_on_next_push() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(0));
         push(&mut mixer, id, frame(2));
@@ -570,7 +578,7 @@ mod tests {
 
     #[test]
     fn refill_releases_only_what_the_block_needs() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(0));
         push(&mut mixer, id, frame(1));
@@ -581,7 +589,7 @@ mod tests {
 
     #[test]
     fn duplicate_seq_counts_late_drop() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(0));
         let _ = pull(&mut mixer, 960);
@@ -591,7 +599,7 @@ mod tests {
 
     #[test]
     fn virgin_nonzero_seq_counts_gap_but_plays() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(5));
         assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
@@ -601,7 +609,7 @@ mod tests {
 
     #[test]
     fn starvation_holds_last_sample_then_fades() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(1));
         let _ = pull(&mut mixer, 960);
@@ -617,20 +625,21 @@ mod tests {
 
     #[test]
     fn conceal_run_covers_full_fade_without_pulling() {
-        let mut conceal = Conceal::new();
+        let fade = AudioPipelineConfig::default().frames();
+        let mut conceal = Conceal::with_channels(1, fade);
         assert_eq!(conceal.next(Some(0.5)), 0.5);
         assert_eq!(conceal.next(None), 0.5);
-        for _ in 1..PLC_FADE_SAMPLES {
+        for _ in 1..fade {
             conceal.next(None);
         }
         assert_eq!(conceal.underrun, 1);
-        assert_eq!(conceal.plc_hold, PLC_FADE_SAMPLES);
+        assert_eq!(conceal.plc_hold, fade);
         assert_eq!(conceal.next(Some(0.25)), 0.25);
     }
 
     #[test]
     fn conceal_resumes_immediately_on_fresh_audio() {
-        let mut conceal = Conceal::new();
+        let mut conceal = Conceal::with_channels(1, AudioPipelineConfig::default().frames());
         assert_eq!(conceal.next(Some(0.5)), 0.5);
         assert_eq!(conceal.next(None), 0.5);
         assert_eq!(conceal.next(Some(0.25)), 0.25);
@@ -639,7 +648,7 @@ mod tests {
 
     #[test]
     fn two_peers_sum_and_clip() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let first = mixer.subscribe((), rebuild, script());
         let second = mixer.subscribe((), rebuild, script());
         push(&mut mixer, first, frame(4));
@@ -660,7 +669,7 @@ mod tests {
     #[test]
     fn per_peer_transform_selects_processing() {
         let (gain, _) = Gain::shared(0, 500);
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe(gain, rebuild, script());
         push(&mut mixer, id, frame(5));
         let out = pull(&mut mixer, 960);
@@ -670,7 +679,7 @@ mod tests {
     #[test]
     fn bus_transform_applies_to_mix() {
         let (gain, _) = Gain::shared(0, 500);
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, gain);
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(5));
         let out = pull(&mut mixer, 960);
@@ -679,7 +688,7 @@ mod tests {
 
     #[test]
     fn unsubscribe_stops_peer() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         assert_eq!(mixer.peer_count(), 1);
         mixer.unsubscribe(id);
@@ -744,8 +753,8 @@ mod tests {
     }
 
     #[test]
-    fn input_slot_runs_pipeline_on_push() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+    fn input_slot_runs_config_on_push() {
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         let slot = mixer.input_mut(id).expect("slot");
         slot.push_frame(frame(3));
@@ -760,7 +769,7 @@ mod tests {
     #[test]
     fn bus_gain_overshoot_caught_by_terminal_clip() {
         let (gain, _) = Gain::shared(200, 500);
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, gain);
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(9));
         let out = pull(&mut mixer, 960);
@@ -770,7 +779,7 @@ mod tests {
 
     #[test]
     fn reset_input_replays_fresh_stream_on_same_slot() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         for seq in 0..10u128 {
             push(&mut mixer, id, frame(seq));
@@ -785,7 +794,7 @@ mod tests {
 
     #[test]
     fn push_to_unknown_slot_counts_stale() {
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         assert!(!mixer.push_to_slot(SlotId(7), frame(0)));
         assert_eq!(mixer.metrics_snapshot().stale_dropped, 1);
         let id = mixer.subscribe((), rebuild, script());
@@ -797,7 +806,7 @@ mod tests {
     fn muted_bus_serves_cached_silence() {
         use crate::audio::transform::Mute;
         let (mute, control) = Mute::shared(true);
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, mute);
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), mute);
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(3));
         let out = pull(&mut mixer, 960);
@@ -808,7 +817,7 @@ mod tests {
 
     #[test]
     fn conceal_keeps_channels_independent() {
-        let mut conceal = Conceal::with_channels(2);
+        let mut conceal = Conceal::with_channels(2, AudioPipelineConfig::default().frames());
         assert_eq!(conceal.next(Some(0.5)), 0.5);
         assert_eq!(conceal.next(Some(-0.5)), -0.5);
         assert_eq!(conceal.next(None), 0.5);
@@ -848,7 +857,7 @@ mod tests {
                 self.reconfigures += 1;
             }
         }
-        let mut mixer = Mixer::new(out_format(), 10, DEFAULT_OUT_FRAMES, ());
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe(
             (),
             rebuild,

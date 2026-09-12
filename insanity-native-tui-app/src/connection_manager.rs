@@ -25,6 +25,7 @@ use crate::{
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
+use insanity_core::audio::config::AudioPipelineConfig;
 use veq::snow_types::SnowPublicKey;
 
 const AUDIO_METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
@@ -55,6 +56,7 @@ pub struct ConnectionManager {
 struct SharedAudio {
     hub: Arc<AudioInputHub>,
     handle: OutputHandle,
+    audio_config: AudioPipelineConfig,
 }
 
 impl ConnectionManager {
@@ -279,16 +281,18 @@ fn manage_peers(
     // Channel for the manage_peers task to receive updated peers info.
     let (conn_info_tx, mut conn_info_rx) = mpsc::unbounded_channel::<AugmentedInfo>();
     // single input hub and single output mixer
-    let hub = Arc::new(AudioInputHub::new());
+    let audio_config = AudioPipelineConfig::default();
+    let hub = Arc::new(AudioInputHub::new(audio_config));
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
             .send(AppEvent::SetInputDeviceName(hub.name().into()))
             .expect("could not set input device name");
     }
-    let output = start_output();
+    let output = start_output(audio_config);
     let audio = SharedAudio {
         hub: hub.clone(),
         handle: output.handle.clone(),
+        audio_config,
     };
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
@@ -423,6 +427,7 @@ fn update_peer_info(
                 .denoise(DenoiseSelection::default())
                 .volume(100)
                 .out_format(audio.handle.format.clone())
+                .audio_config(audio.audio_config)
                 .hub(audio.hub)
                 .client(audio.handle.client.clone())
                 .build();

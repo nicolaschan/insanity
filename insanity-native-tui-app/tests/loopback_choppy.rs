@@ -11,14 +11,16 @@ use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::AudioEncoder;
+use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::Gain;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::codec::OpusEncoder;
-use insanity_native_tui_app::audio::mixer::{PeerControls, chain_from_controls, output_resampler};
-use insanity_native_tui_app::audio::params::MAX_VOLUME;
+use insanity_native_tui_app::audio::mixer::{
+    MAX_VOLUME, PeerControls, chain_from_controls, output_resampler,
+};
 use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use opus::{Channels, Decoder};
 use sine::{SineSource, decode_frame_to_chunk, hub_from_source};
@@ -212,15 +214,16 @@ async fn non48k_input_resample_loopback() {
 
 #[test]
 fn resampled_output_fill_budget() {
+    let audio_config = AudioPipelineConfig::default();
     let out_format = AudioFormat::new(2, 44100);
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mut mixer: UnitMixer = Mixer::new(out_format.clone(), 10, 480, bus);
+    let mut mixer: UnitMixer = Mixer::new(out_format.clone(), audio_config, bus);
     let controls = PeerControls::new(100, DenoiseSelection::None);
     let chain = chain_from_controls(&controls);
     let id = mixer.subscribe(
         chain,
         rebuild_passthrough,
-        output_resampler(out_format, 480),
+        output_resampler(out_format, audio_config),
     );
     let push = |mixer: &mut UnitMixer, seq: u128| {
         push_chunk(
