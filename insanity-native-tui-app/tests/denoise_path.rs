@@ -9,7 +9,7 @@ use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
+use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
 use unit_mixer::{UnitMixer, add_unit_peer, push_chunk, render, unit_mixer};
 
 fn music_chunk() -> Vec<f32> {

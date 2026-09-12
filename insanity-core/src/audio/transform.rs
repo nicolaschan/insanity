@@ -189,17 +189,17 @@ impl DenoiseControl {
     }
 
     pub fn set(&self, selection: DenoiseSelection) {
-        match self.selection.lock() {
-            Ok(mut guard) => *guard = selection,
-            Err(poisoned) => *poisoned.into_inner() = selection,
-        }
+        *self
+            .selection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = selection;
     }
 
     pub fn get(&self) -> DenoiseSelection {
-        match self.selection.lock() {
-            Ok(guard) => *guard,
-            Err(poisoned) => *poisoned.into_inner(),
-        }
+        *self
+            .selection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -294,13 +294,18 @@ impl JitterStage {
 
     pub fn push(&mut self, chunk: AudioChunk) {
         let sequence = chunk.sequence_number;
-        if sequence < self.buffer.head() {
+        let (head, prev, empty) = (
+            self.buffer.head(),
+            self.buffer.prev(),
+            self.buffer.is_empty(),
+        );
+        if sequence < head {
             self.late_dropped += 1;
-        } else if self.buffer.is_empty() {
-            if sequence != self.buffer.head() {
+        } else if empty {
+            if sequence != head {
                 self.gap_detected += 1;
             }
-        } else if sequence > self.buffer.prev() && sequence != self.buffer.prev() + 1 {
+        } else if sequence > prev && sequence != prev + 1 {
             self.gap_detected += 1;
         }
         self.overflow_dropped += self.buffer.set(sequence, chunk);

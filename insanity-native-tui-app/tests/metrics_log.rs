@@ -3,7 +3,7 @@ mod unit_mixer;
 
 use insanity_core::audio::mixer::MixerMetrics;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::format_audio_interval;
+use insanity_native_tui_app::audio::mixer::format_audio_interval;
 use unit_mixer::{add_unit_peer, push_value, render, unit_mixer};
 
 fn snapshot(

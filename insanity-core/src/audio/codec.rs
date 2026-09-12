@@ -24,3 +24,39 @@ pub trait AudioEncoder: Send {
 pub trait AudioDecoder: Send {
     fn decode(&mut self, frame: &EncodedChunk) -> Option<AudioChunk>;
 }
+
+pub(crate) struct FormatCache<C, F: FnMut(&AudioFormat) -> Option<C>> {
+    codec: Option<C>,
+    format: Option<AudioFormat>,
+    rebuild: F,
+}
+
+impl<C, F: FnMut(&AudioFormat) -> Option<C>> FormatCache<C, F> {
+    pub(crate) fn new(rebuild: F) -> Self {
+        FormatCache {
+            codec: None,
+            format: None,
+            rebuild,
+        }
+    }
+
+    pub(crate) fn format(&self) -> Option<&AudioFormat> {
+        self.format.as_ref()
+    }
+
+    pub(crate) fn ensure_current(&mut self, format: &AudioFormat) -> Option<&mut C> {
+        if self.format.as_ref() != Some(format) {
+            let codec = (self.rebuild)(format)?;
+            self.codec = Some(codec);
+            self.format = Some(format.clone());
+        }
+        self.codec.as_mut()
+    }
+
+    pub(crate) fn reset(&mut self) {
+        let Some(format) = self.format.clone() else {
+            return;
+        };
+        self.codec = (self.rebuild)(&format);
+    }
+}

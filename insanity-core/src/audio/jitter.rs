@@ -61,15 +61,8 @@ impl<T> JitterBuffer<T> {
         dropped
     }
 
-    pub fn set(&mut self, index: u128, data: T) -> usize {
-        if index < self.head {
-            return 0; // you got data you already skipped in the past
-        }
-        if self.seen_any {
-            if index > self.prev {
-                self.prev = index;
-            }
-        } else {
+    fn track_write(&mut self, index: u128) {
+        if !self.seen_any {
             self.prev = index;
             self.seen_any = true;
             // First-ever chunk defines the read cursor so a stream starting
@@ -77,39 +70,70 @@ impl<T> JitterBuffer<T> {
             if self.current_size == 0 {
                 self.head = index;
             }
+        } else if index > self.prev {
+            self.prev = index;
         }
+    }
 
-        // you receive data too far in the future (like a full cycle around the buffer)
-        let mut dropped = 0;
+    fn slide_for_capacity(&mut self, index: u128) -> usize {
         if (index - self.head) >= (self.max_size as u128) {
             let new_head = index - (self.max_size as u128) + 1;
-            dropped += self.evict_stale(new_head);
+            let dropped = self.evict_stale(new_head);
             self.head = new_head;
+            dropped
+        } else {
+            0
         }
+    }
 
+    fn insert_slot(&mut self, index: u128, data: T) -> usize {
         let real_index = (index % (self.max_size as u128)) as usize;
         match self.buffer[real_index].take() {
             None => {
                 self.buffer[real_index] = Some((index, data));
                 self.current_size += 1;
+                0
             }
-            Some((old_seq, _old_data)) if old_seq == index => {
+            Some((old_seq, _)) if old_seq == index => {
                 // Duplicate redelivery: replace, size unchanged.
                 self.buffer[real_index] = Some((index, data));
+                0
             }
             Some(_) => {
-                dropped += 1;
                 self.buffer[real_index] = Some((index, data));
+                1
             }
         }
+    }
+
+    pub fn set(&mut self, index: u128, data: T) -> usize {
+        if index < self.head {
+            return 0; // you got data you already skipped in the past
+        }
+        self.track_write(index);
+        // you receive data too far in the future (like a full cycle around the buffer)
+        let mut dropped = self.slide_for_capacity(index);
+        dropped += self.insert_slot(index, data);
         dropped
     }
+    fn is_starved(&self) -> bool {
+        self.head > self.prev
+    }
+
+    fn advance_gap(&mut self) -> Option<T> {
+        if self.is_starved() {
+            return None;
+        }
+        self.head += 1;
+        None
+    }
+
     pub fn next_item(&mut self) -> Option<T> {
         // Preserve timing: exactly one seq slot per call. A missing head slot
         // yields concealment (None) and advances head by one, even when future
         // data is already buffered. Starvation past `prev` yields None without
         // advancing (wait for new data).
-        if self.head > self.prev && self.current_size == 0 {
+        if self.is_starved() && self.current_size == 0 {
             return None;
         }
         let head_index = (self.head % self.max_size as u128) as usize;
@@ -121,29 +145,18 @@ impl<T> JitterBuffer<T> {
             }
             Some((seq, _)) if seq < self.head => {
                 self.current_size = self.current_size.saturating_sub(1);
-                if self.head > self.prev {
-                    return None;
-                }
-                self.head += 1;
-                None
+                self.advance_gap()
             }
             Some((seq, data)) => {
                 if seq > self.prev {
                     self.current_size = self.current_size.saturating_sub(1);
-                    let _ = data;
                 } else {
                     self.buffer[head_index] = Some((seq, data));
                 }
                 self.head += 1;
                 None
             }
-            None => {
-                if self.head > self.prev {
-                    return None;
-                }
-                self.head += 1;
-                None
-            }
+            None => self.advance_gap(),
         }
     }
 }

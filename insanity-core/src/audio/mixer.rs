@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
-use crate::audio::codec::{AudioDecoder, EncodedChunk};
+use crate::audio::codec::{AudioDecoder, EncodedChunk, FormatCache};
 use crate::audio::sample::{Resampler, SampleSource, SyncSampleSource};
 use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, JitterStage};
 
@@ -44,36 +44,27 @@ where
 }
 
 pub(crate) struct ChunkDecoder<D: AudioDecoder, F: FnMut(&AudioFormat) -> Option<D>> {
-    decoder: Option<D>,
-    decoder_format: Option<AudioFormat>,
-    rebuild: F,
+    decoder_cache: FormatCache<D, F>,
 }
 
 impl<D: AudioDecoder, F: FnMut(&AudioFormat) -> Option<D>> ChunkDecoder<D, F> {
     pub fn new(rebuild: F) -> Self {
         ChunkDecoder {
-            decoder: None,
-            decoder_format: None,
-            rebuild,
+            decoder_cache: FormatCache::new(rebuild),
         }
+    }
+
+    pub fn format(&self) -> Option<&AudioFormat> {
+        self.decoder_cache.format()
     }
 
     pub fn decode_frame(&mut self, frame: &EncodedChunk) -> Option<AudioChunk> {
-        if self.decoder_format.as_ref() != Some(&frame.format) {
-            let decoder = (self.rebuild)(&frame.format)?;
-            self.decoder = Some(decoder);
-            self.decoder_format = Some(frame.format.clone());
-        }
-        self.decoder
-            .as_mut()
-            .and_then(|decoder| decoder.decode(frame))
+        let decoder = self.decoder_cache.ensure_current(&frame.format)?;
+        decoder.decode(frame)
     }
 
     pub fn reset(&mut self) {
-        let Some(format) = self.decoder_format.clone() else {
-            return;
-        };
-        self.decoder = (self.rebuild)(&format);
+        self.decoder_cache.reset();
     }
 }
 
@@ -106,19 +97,48 @@ impl Conceal {
     }
 
     pub fn reset_audio(&mut self) {
-        for sample in self.last.iter_mut().chain(self.fade_start.iter_mut()) {
-            *sample = 0.0;
-        }
+        self.silence();
         self.fade_pos = 0;
         self.channel = 0;
     }
 
-    pub fn next(&mut self, sample: Option<f32>) -> f32 {
-        let slot = self.channel;
-        self.channel += 1;
-        if self.channel >= self.channels {
-            self.channel = 0;
+    fn silence(&mut self) {
+        self.last.fill(0.0);
+        self.fade_start.fill(0.0);
+    }
+
+    fn advance_channel(&mut self) -> usize {
+        let curr_channel = self.channel;
+        self.channel = (self.channel + 1) % self.channels;
+        curr_channel
+    }
+
+    fn hold_first(&mut self, slot: usize) -> f32 {
+        self.underrun += 1;
+        self.plc_hold += 1;
+        self.fade_start[slot] = self.last[slot];
+        self.fade_pos = 1;
+        self.fade_start[slot]
+    }
+
+    fn fade_sample(&mut self, slot: usize) -> f32 {
+        self.plc_hold += 1;
+        let position = self.fade_pos as f32 / PLC_FADE_SAMPLES as f32;
+        let output = if self.fade_pos < PLC_FADE_SAMPLES {
+            self.fade_start[slot] * (1.0 - position)
+        } else {
+            0.0
+        };
+        self.fade_pos += 1;
+        if self.fade_pos >= PLC_FADE_SAMPLES {
+            self.fade_pos = 0;
+            self.silence();
         }
+        output
+    }
+
+    pub fn next(&mut self, sample: Option<f32>) -> f32 {
+        let slot = self.advance_channel();
         if let Some(value) = sample {
             self.fade_pos = 0;
             self.last[slot] = value;
@@ -126,27 +146,9 @@ impl Conceal {
             return value;
         }
         if self.fade_pos != 0 {
-            self.plc_hold += 1;
-            let position = self.fade_pos as f32 / PLC_FADE_SAMPLES as f32;
-            let output = if self.fade_pos < PLC_FADE_SAMPLES {
-                self.fade_start[slot] * (1.0 - position)
-            } else {
-                0.0
-            };
-            self.fade_pos += 1;
-            if self.fade_pos >= PLC_FADE_SAMPLES {
-                self.fade_pos = 0;
-                for held in self.last.iter_mut().chain(self.fade_start.iter_mut()) {
-                    *held = 0.0;
-                }
-            }
-            return output;
+            return self.fade_sample(slot);
         }
-        self.underrun += 1;
-        self.plc_hold += 1;
-        self.fade_start[slot] = self.last[slot];
-        self.fade_pos = 1;
-        self.fade_start[slot]
+        self.hold_first(slot)
     }
 }
 
@@ -181,7 +183,7 @@ where
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
     fn push_frame(&mut self, frame: EncodedChunk) {
-        if self.decoder.decoder_format.as_ref() != Some(&frame.format) {
+        if self.decoder.format() != Some(&frame.format) {
             self.jitter.reset();
             self.resampler.reset();
             self.resampler.reconfigure(
@@ -335,28 +337,33 @@ where
         metrics
     }
 
+    fn pump_slot(slot: &mut InputSlot<D, T, R, FD>, needed: usize, mixed: &mut [f32]) {
+        while slot.resampler.buffered() < needed {
+            let Some(ordered) = slot.jitter.pull() else {
+                break;
+            };
+            ordered
+                .audio_data
+                .into_iter()
+                .for_each(|sample| slot.resampler.push_sample(sample));
+        }
+        mixed
+            .iter_mut()
+            .for_each(|sample| *sample += slot.conceal.next(slot.resampler.pop_sample()));
+    }
+
     fn refill(&mut self) {
         let channels = self.out_format.channel_count as usize;
         let needed = self.out_frames * channels;
         let mut mixed = vec![0.0; needed];
         for slot in self.slots.values_mut() {
-            while slot.resampler.buffered() < needed {
-                let Some(ordered) = slot.jitter.pull() else {
-                    break;
-                };
-                for sample in ordered.audio_data {
-                    slot.resampler.push_sample(sample);
-                }
-            }
-            mixed
-                .iter_mut()
-                .for_each(|sample| *sample += slot.conceal.next(slot.resampler.pop_sample()));
+            Self::pump_slot(slot, needed, &mut mixed);
         }
         let chunk = AudioChunk::new(self.out_sequence, self.out_format.clone(), mixed);
-        let emitted = match self.bus.transform(chunk) {
-            Some(converted) => self.clip.transform(converted),
-            None => None,
-        };
+        let emitted = self
+            .bus
+            .transform(chunk)
+            .and_then(|converted| self.clip.transform(converted));
         self.fills += 1;
         self.out_sequence += 1;
         match emitted {

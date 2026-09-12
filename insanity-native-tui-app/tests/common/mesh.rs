@@ -6,11 +6,11 @@ use insanity_core::audio::mixer::DEFAULT_OUT_FRAMES;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
+use insanity_native_tui_app::audio::params::{CHANNELS, SAMPLE_RATE};
 use insanity_native_tui_app::audio::{
-    AppMixer, AudioInputHub, PeerControls, chain_from_controls, output_resampler,
-    rebuild_opus_decoder,
+    hub::AudioInputHub,
+    mixer::{AppMixer, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder},
 };
-use insanity_native_tui_app::processor::{AUDIO_CHANNELS, AUDIO_SAMPLE_RATE};
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use opus::Decoder;
 use std::collections::HashMap;
@@ -52,10 +52,10 @@ impl VirtualNode {
     }
 
     pub fn with_amp(_name: &str, freq: f32, amp: f32) -> Self {
-        let format = AudioFormat::new(2, AUDIO_SAMPLE_RATE);
+        let format = AudioFormat::new(2, SAMPLE_RATE);
         Self::with_source(
             _name,
-            crate::sine::SineSource::new_amp(AUDIO_SAMPLE_RATE, freq, amp),
+            crate::sine::SineSource::new_amp(SAMPLE_RATE, freq, amp),
             format,
         )
     }
@@ -70,10 +70,10 @@ impl VirtualNode {
             mixer: new_no_device_mixer(),
             peer_ids: HashMap::new(),
             peer_controls: HashMap::new(),
-            out_samples: DEFAULT_OUT_FRAMES * AUDIO_CHANNELS as usize,
-            monitor: Decoder::new(AUDIO_SAMPLE_RATE, opus_channels(format.channel_count))
+            out_samples: DEFAULT_OUT_FRAMES * CHANNELS as usize,
+            monitor: Decoder::new(SAMPLE_RATE, opus_channels(format.channel_count))
                 .expect("monitor decoder"),
-            monitor_format: AudioFormat::new(format.channel_count, AUDIO_SAMPLE_RATE),
+            monitor_format: AudioFormat::new(format.channel_count, SAMPLE_RATE),
             mic_history: Vec::new(),
             mic_last_seq: None,
             speaker_history: Vec::new(),
@@ -95,7 +95,7 @@ impl VirtualNode {
         let slot = self.mixer.subscribe(
             chain,
             rebuild_opus_decoder,
-            output_resampler(AudioFormat::new(2, AUDIO_SAMPLE_RATE), DEFAULT_OUT_FRAMES),
+            output_resampler(AudioFormat::new(2, SAMPLE_RATE), DEFAULT_OUT_FRAMES),
         );
         self.peer_ids.insert(peer_name.to_string(), slot);
         self.peer_controls

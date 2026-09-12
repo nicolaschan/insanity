@@ -10,11 +10,11 @@ use insanity_core::audio::mixer::{DEFAULT_OUT_FRAMES, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::MetricsState;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{
+use insanity_native_tui_app::audio::mixer::{
     AppMixer, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder,
 };
+use insanity_native_tui_app::audio::params::SAMPLE_RATE;
 use insanity_native_tui_app::clerver::run_clerver;
-use insanity_native_tui_app::processor::AUDIO_SAMPLE_RATE;
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use sine::{SineSource, hub_from_source, new_no_device_mixer};
 use std::future::Ready;
@@ -58,7 +58,7 @@ fn subscribe_peer(mixer: &Arc<Mutex<AppMixer>>) -> (SlotId, Arc<MetricsState>) {
     let slot = guard.subscribe(
         chain,
         rebuild_opus_decoder,
-        output_resampler(AudioFormat::new(2, AUDIO_SAMPLE_RATE), DEFAULT_OUT_FRAMES),
+        output_resampler(AudioFormat::new(2, SAMPLE_RATE), DEFAULT_OUT_FRAMES),
     );
     (slot, controls.loudness.clone())
 }

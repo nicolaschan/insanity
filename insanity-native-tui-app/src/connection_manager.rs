@@ -18,12 +18,16 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     audio::{
-        AUDIO_CALLBACK_FRAMES, AudioInputHub, AudioOutput, OutputHandle, format_audio_interval,
-        start_output,
+        config::AUDIO_CALLBACK_FRAMES,
+        hub::AudioInputHub,
+        mixer::format_audio_interval,
+        output::{AudioOutput, OutputHandle, start_output},
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
 use veq::snow_types::SnowPublicKey;
+
+const AUDIO_METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 use baybridge::{
     client::Actions,
@@ -304,7 +308,7 @@ fn manage_peers(
         let mut prev_dropped = metrics_audio.handle.client.dropped();
         let mut prev_underruns = metrics_audio.handle.stats.underruns();
         let mut prev_overruns = metrics_audio.handle.stats.overruns();
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
+        let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
                 _ = ticker.tick() => {

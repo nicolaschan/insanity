@@ -14,8 +14,11 @@ use veq::veq::VeqSocket;
 
 use crate::{
     audio::{
-        AudioInputHub, MixerClient, PeerControls, chain_from_controls, lock, output_resampler,
-        rebuild_opus_decoder,
+        hub::AudioInputHub,
+        lock,
+        mixer::{
+            MixerClient, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder,
+        },
     },
     clerver::run_clerver,
     connection_manager::AugmentedInfo,
@@ -29,6 +32,11 @@ pub enum ConnectionStatus {
     Connecting = 1,
     Connected = 2,
 }
+
+const SUBSCRIBE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+const RECONNECT_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+const STATUS_TICK: std::time::Duration = std::time::Duration::from_millis(500);
+const CONNECTOR_IDLE_SLEEP: std::time::Duration = std::time::Duration::from_secs(10000);
 
 impl ConnectionStatus {
     fn from_u8(value: u8) -> Self {
@@ -262,7 +270,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                     // register peer with single output mixer before streaming
                     peer.subscribe_mixer().await;
                     let Some((client, slot)) = peer.audio_endpoint() else {
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        tokio::time::sleep(SUBSCRIBE_RETRY_DELAY).await;
                         continue;
                     };
                     let loudness = peer.controls.loudness.clone();
@@ -290,7 +298,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                 log::debug!("Connecting status updater ended early.");
              },
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(RECONNECT_DELAY).await;
     }
 }
 
@@ -305,12 +313,12 @@ async fn update_app_connecting_status(
 ) {
     if ip_addresses.is_empty() {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
+            tokio::time::sleep(CONNECTOR_IDLE_SLEEP).await;
         }
     } else {
         match app_event_tx {
             Some(app_event_tx) => {
-                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                let mut interval = tokio::time::interval(STATUS_TICK);
                 loop {
                     for ip_address in ip_addresses.iter() {
                         interval.tick().await;
@@ -327,7 +335,7 @@ async fn update_app_connecting_status(
                 }
             }
             _ => loop {
-                tokio::time::sleep(std::time::Duration::from_secs(10000)).await;
+                tokio::time::sleep(CONNECTOR_IDLE_SLEEP).await;
             },
         }
     }

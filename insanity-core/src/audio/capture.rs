@@ -1,6 +1,6 @@
 use crate::audio::AudioFormat;
 use crate::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
-use crate::audio::codec::{AudioEncoder, EncodedChunk};
+use crate::audio::codec::{AudioEncoder, EncodedChunk, FormatCache};
 use crate::audio::sample::SampleSource;
 use crate::audio::transform::ChunkTransform;
 
@@ -11,18 +11,14 @@ pub enum CaptureOutput {
 }
 
 pub struct ChunkEncoder<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E>> {
-    encoder: Option<E>,
-    encoder_format: Option<AudioFormat>,
-    rebuild: F,
+    encoder_cache: FormatCache<E, F>,
     frames: usize,
 }
 
 impl<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E>> ChunkEncoder<E, F> {
     pub fn new(rebuild: F, frames: usize) -> Self {
         ChunkEncoder {
-            encoder: None,
-            encoder_format: None,
-            rebuild,
+            encoder_cache: FormatCache::new(rebuild),
             frames,
         }
     }
@@ -31,12 +27,8 @@ impl<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E>> ChunkEncoder<E, F> {
         if chunk.format.channel_count == 0 {
             return None;
         }
-        if self.encoder_format.as_ref() != Some(&chunk.format) {
-            let encoder = (self.rebuild)(&chunk.format)?;
-            self.encoder = Some(encoder);
-            self.encoder_format = Some(chunk.format.clone());
-        }
-        let frame = self.encoder.as_mut().and_then(|e| e.encode(&chunk))?;
+        let encoder = self.encoder_cache.ensure_current(&chunk.format)?;
+        let frame = encoder.encode(&chunk)?;
         debug_assert_eq!(
             chunk.audio_data.len(),
             self.frames * chunk.format.channel_count as usize

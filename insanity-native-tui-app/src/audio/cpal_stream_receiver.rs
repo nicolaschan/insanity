@@ -6,7 +6,7 @@ use cpal::{
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::sample::SampleSource;
 
-use crate::audio::get_input_config;
+use super::config::get_input_config;
 
 pub struct CpalStreamReceiver {
     _stream: send_safe::SendWrapperThread<Option<Stream>>,
