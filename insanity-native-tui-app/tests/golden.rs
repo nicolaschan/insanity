@@ -1,8 +1,15 @@
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+#[path = "common/audio_math.rs"]
+mod audio_math;
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use audio_math::{sine, snr};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio_test_support::{add_unit_peer, push_chunk, render, unit_mixer};
 use std::path::Path;
+use unit_mixer::{add_unit_peer, push_chunk, render, unit_mixer};
 
 fn read_f32_le(path: &Path) -> Vec<f32> {
     let bytes = std::fs::read(path).unwrap();
@@ -11,24 +18,6 @@ fn read_f32_le(path: &Path) -> Vec<f32> {
         .iter()
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
-}
-
-fn sine(freq: f32, sr: u32, len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|i| ((i as f32 * freq / sr as f32) * 2.0 * std::f32::consts::PI).sin() * 0.5)
-        .collect()
-}
-
-fn snr(a: &[f32], b: &[f32]) -> f64 {
-    assert_eq!(a.len(), b.len());
-    let sig: f64 = a.iter().map(|v| (*v as f64) * (*v as f64)).sum::<f64>() / a.len() as f64;
-    let err: f64 = a
-        .iter()
-        .zip(b.iter())
-        .map(|(x, y)| ((*x - *y) as f64).powi(2))
-        .sum::<f64>()
-        / a.len() as f64;
-    10.0 * (sig / err.max(1e-12)).log10()
 }
 
 #[test]
@@ -70,10 +59,7 @@ fn golden_two_peer_mix_perceptual() {
     assert!((l1 - l2).abs() < 0.02, "loud mix {l1} vs {l2}");
     let s = snr(&gold, &regen);
     assert!(s > 40.0, "mix snr {s}");
-    // no clip beyond 1.0
-    for v in regen.iter() {
-        assert!(v.abs() <= 1.0 + 1e-6);
-    }
+    assert!(regen.iter().all(|v| v.abs() <= 1.0 + 1e-6));
 }
 
 #[test]

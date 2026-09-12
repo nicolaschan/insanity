@@ -1,6 +1,10 @@
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio_test_support::{add_unit_peer, push_chunk, render, unit_mixer};
+use unit_mixer::{UnitMixer, add_unit_peer, assert_all_finite, push_chunk, render, unit_mixer};
 
 struct CellResult {
     callback_frames: usize,
@@ -15,9 +19,7 @@ fn run_cell(callback_frames: usize, bursty: bool) -> CellResult {
     let callback_samples = callback_frames * 2;
     let mut next_seq: u128 = 0;
     let mut pending_samples: Vec<f32> = Vec::new();
-    let mut push_samples = |mixer: &mut insanity_native_tui_app::audio_test_support::UnitMixer,
-                            pending: &mut Vec<f32>,
-                            count: usize| {
+    let mut push_samples = |mixer: &mut UnitMixer, pending: &mut Vec<f32>, count: usize| {
         pending.extend(std::iter::repeat_n(0.4, count));
         while pending.len() >= 960 {
             let data: Vec<f32> = pending.drain(..960).collect();
@@ -37,9 +39,7 @@ fn run_cell(callback_frames: usize, bursty: bool) -> CellResult {
     let burst_every = (48000 / 10 * 2) / callback_samples;
     for t in 0..fills {
         let out = render(&mut mixer, callback_samples);
-        for s in out.iter() {
-            assert!(s.is_finite());
-        }
+        assert_all_finite(&out);
         if bursty {
             if t % burst_every.max(1) == 0 {
                 push_samples(

@@ -27,6 +27,16 @@ impl<T> JitterBuffer<T> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn reset(&mut self) {
+        for slot in self.buffer.iter_mut() {
+            *slot = None;
+        }
+        self.head = 0;
+        self.prev = 0;
+        self.current_size = 0;
+        self.seen_any = false;
+    }
     /// Next sequence number expected for playback (read cursor).
     pub fn head(&self) -> u128 {
         self.head
@@ -37,20 +47,23 @@ impl<T> JitterBuffer<T> {
     }
 
     /// Drop all buffered entries with seq < `new_head`. Caller sets head after.
-    fn evict_stale(&mut self, new_head: u128) {
+    fn evict_stale(&mut self, new_head: u128) -> usize {
+        let mut dropped = 0;
         for slot in self.buffer.iter_mut() {
             if let Some((seq, _)) = slot
                 && *seq < new_head
             {
                 *slot = None;
                 self.current_size = self.current_size.saturating_sub(1);
+                dropped += 1;
             }
         }
+        dropped
     }
 
-    pub fn set(&mut self, index: u128, data: T) {
+    pub fn set(&mut self, index: u128, data: T) -> usize {
         if index < self.head {
-            return; // you got data you already skipped in the past
+            return 0; // you got data you already skipped in the past
         }
         if self.seen_any {
             if index > self.prev {
@@ -66,6 +79,14 @@ impl<T> JitterBuffer<T> {
             }
         }
 
+        // you receive data too far in the future (like a full cycle around the buffer)
+        let mut dropped = 0;
+        if (index - self.head) >= (self.max_size as u128) {
+            let new_head = index - (self.max_size as u128) + 1;
+            dropped += self.evict_stale(new_head);
+            self.head = new_head;
+        }
+
         let real_index = (index % (self.max_size as u128)) as usize;
         match self.buffer[real_index].take() {
             None => {
@@ -76,18 +97,12 @@ impl<T> JitterBuffer<T> {
                 // Duplicate redelivery: replace, size unchanged.
                 self.buffer[real_index] = Some((index, data));
             }
-            Some((old_seq, _)) => {
-                let _ = old_seq;
+            Some(_) => {
+                dropped += 1;
                 self.buffer[real_index] = Some((index, data));
             }
         }
-
-        // you receive data too far in the future (like a full cycle around the buffer)
-        if (index - self.head) >= (self.max_size as u128) {
-            let new_head = index - (self.max_size as u128) + 1;
-            self.evict_stale(new_head);
-            self.head = new_head;
-        }
+        dropped
     }
     pub fn next_item(&mut self) -> Option<T> {
         // Preserve timing: exactly one seq slot per call. A missing head slot
@@ -205,5 +220,30 @@ mod tests {
         buffer.set(7, 7u32);
         assert_eq!(buffer.head(), 7);
         assert_eq!(buffer.next_item(), Some(7));
+    }
+
+    #[test]
+    fn overflow_reports_dropped_unplayed() {
+        let mut buffer = JitterBuffer::new(3);
+        buffer.set(0, 0u32);
+        buffer.set(1, 1u32);
+        buffer.set(2, 2u32);
+        assert_eq!(buffer.set(5, 5u32), 3);
+        assert_eq!(buffer.head(), 3);
+        assert_eq!(buffer.next_item(), None);
+        assert_eq!(buffer.next_item(), None);
+        assert_eq!(buffer.next_item(), Some(5));
+    }
+
+    #[test]
+    fn reset_clears_and_reanchors() {
+        let mut buffer = JitterBuffer::new(10);
+        buffer.set(0, 0u32);
+        assert_eq!(buffer.next_item(), Some(0));
+        buffer.reset();
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.head(), 0);
+        buffer.set(0, 9u32);
+        assert_eq!(buffer.next_item(), Some(9));
     }
 }

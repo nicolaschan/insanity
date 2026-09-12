@@ -4,21 +4,21 @@ pub fn split_channels(samples: &[f32], channel_count: usize) -> Vec<Vec<f32>> {
     if channel_count == 0 {
         return Vec::new();
     }
-    let mut channels: Vec<Vec<f32>> = vec![Vec::new(); channel_count];
+    let frames = samples.len().div_ceil(channel_count);
+    let mut channels: Vec<Vec<f32>> = (0..channel_count)
+        .map(|_| Vec::with_capacity(frames))
+        .collect();
     for (i, &sample) in samples.iter().enumerate() {
-        let channel_index = i % channel_count;
-        channels[channel_index].push(sample);
+        channels[i % channel_count].push(sample);
     }
     channels
 }
 
 pub fn interleave_channels(channels: &[Vec<f32>]) -> Vec<f32> {
-    let mut samples = Vec::new();
     let frame_size = channels.first().map(Vec::len).unwrap_or(0);
+    let mut samples = Vec::with_capacity(frame_size * channels.len());
     for i in 0..frame_size {
-        for c in channels.iter() {
-            samples.push(c[i]);
-        }
+        samples.extend(channels.iter().filter_map(|c| c.get(i).copied()));
     }
     samples
 }
@@ -29,21 +29,17 @@ pub fn convert_to_mixer_channels(mut chunk: AudioChunk, mixer_channels: u16) -> 
         return chunk;
     }
     let frames = chunk.audio_data.len() / src_channels as usize;
-    let mut out = Vec::with_capacity(frames * mixer_channels as usize);
+    let dst = mixer_channels as usize;
+    let mut out = Vec::with_capacity(frames * dst);
+    let data: &[f32] = &chunk.audio_data;
     if src_channels == 1 && mixer_channels == 2 {
-        for &m in chunk.audio_data.iter() {
-            out.push(m);
-            out.push(m);
-        }
+        out.extend(data.iter().flat_map(|&m| [m, m]));
     } else if src_channels == 2 && mixer_channels == 1 {
-        let (pairs, _) = chunk.audio_data.as_chunks::<2>();
+        let (pairs, _) = data.as_chunks::<2>();
         out.extend(pairs.iter().map(|pair| (pair[0] + pair[1]) * 0.5));
     } else {
-        for f in 0..frames {
-            for t in 0..mixer_channels as usize {
-                out.push(chunk.audio_data[f * src_channels as usize + (t % src_channels as usize)]);
-            }
-        }
+        let src = src_channels as usize;
+        out.extend((0..frames).flat_map(|f| (0..dst).map(move |t| data[f * src + t % src])));
     }
     chunk.audio_data = out;
     chunk.format.channel_count = mixer_channels;

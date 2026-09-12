@@ -1,43 +1,20 @@
-use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
-use insanity_core::audio::{
-    AudioFormat,
-    chunk::{AudioChunk, ChunkSource},
-};
-use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::AudioInputHub;
-use insanity_native_tui_app::audio_test_support::{
-    add_unit_peer, hub_from_source, push_chunk, push_value, render, unit_mixer,
-};
-use std::sync::Arc;
+#[path = "common/sine.rs"]
+mod sine;
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
 
-struct SineSource {
-    phase: f32,
-    sr: u32,
-    freq: f32,
-}
-impl SineSource {
-    fn new(sr: u32, freq: f32) -> Self {
-        Self {
-            phase: 0.0,
-            sr,
-            freq,
-        }
-    }
-}
-impl SampleSource for SineSource {
-    async fn next(&mut self) -> Option<f32> {
-        let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.5;
-        self.phase = (self.phase + self.freq / self.sr as f32) % 1.0;
-        Some(v)
-    }
-}
-impl SyncSampleSource for SineSource {
-    fn next_sync(&mut self) -> Option<f32> {
-        let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.5;
-        self.phase = (self.phase + self.freq / self.sr as f32) % 1.0;
-        Some(v)
-    }
-}
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
+use insanity_core::audio::mixer::{DEFAULT_OUT_FRAMES, SlotId};
+use insanity_core::user_input_event::DenoiseSelection;
+use insanity_native_tui_app::audio::{
+    AudioInputHub, PeerControls, chain_from_controls, output_resampler,
+};
+use sine::{SineSource, hub_from_source};
+use std::sync::Arc;
+use unit_mixer::{
+    UnitMixer, add_unit_peer, push_chunk, push_value, rebuild_passthrough, render, unit_mixer,
+};
 
 #[tokio::test]
 async fn hub_fanout_same_chunk() {
@@ -78,7 +55,6 @@ async fn hub_mute_skips_send() {
         let hub = hub_from_source(src, AudioFormat::new(2, 48000));
         hub.set_muted(true);
         let mut rx = hub.subscribe();
-        // should timeout if muted
         let res = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
         assert!(res.is_err(), "muted hub should not send");
         hub.set_muted(false);
@@ -97,7 +73,6 @@ fn mixer_sum_and_clip() {
     push_value(&mut mixer, id1, 0, 0.6);
     push_value(&mut mixer, id2, 0, 0.6);
     let out = render(&mut mixer, 960);
-    // sum 1.2 clipped to 1.0
     for s in out.iter() {
         assert!((*s - 1.0).abs() < 1e-5, "clipped {s}");
     }
@@ -109,8 +84,7 @@ fn mixer_per_peer_volume() {
     let id = add_unit_peer(&mut mixer, 50, DenoiseSelection::None);
     push_value(&mut mixer, id, 0, 1.0);
     let out = render(&mut mixer, 10);
-    // volume 50 -> ~0.289
-    let expected = 0.289; // approximate
+    let expected = 0.289;
     for s in out.iter() {
         assert!((s - expected).abs() < 0.05, "vol50 {s}");
     }
@@ -118,12 +92,9 @@ fn mixer_per_peer_volume() {
 
 #[test]
 fn mixer_denoise_before_mix() {
-    // two peers same input, one with denoise true should differ
-    // use noisy sine, verify outputs differ (perceptually denoise changes)
     let (mut mixer, _) = unit_mixer(100);
     let id1 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     let id2 = add_unit_peer(&mut mixer, 100, DenoiseSelection::default());
-    // create chunk with some noise-like pattern
     let noisy: Vec<f32> = (0..960)
         .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
         .collect();
@@ -131,7 +102,6 @@ fn mixer_denoise_before_mix() {
     for (id, data) in [(id1, noisy.clone()), (id2, noisy)] {
         push_chunk(&mut mixer, id, AudioChunk::new(0, format.clone(), data));
     }
-    // just verify both peers store without panic and fill produces something mixable
     let out = render(&mut mixer, 10);
     assert!(out.iter().any(|v| v.abs() > 0.0));
 }
@@ -156,7 +126,6 @@ fn mixer_zero_peers_silence() {
     for s in out.iter() {
         assert_eq!(*s, 0.0, "0 peers should be silence");
     }
-    // also after adding then removing, should return to silence
     let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     push_value(&mut mixer, id, 0, 0.5);
     mixer.unsubscribe(id);
@@ -178,13 +147,11 @@ fn mixer_many_peers_clipping() {
         assert!(s.abs() <= 1.0 + 1e-6, "clip {s}");
         assert!(s.is_finite(), "no NaN Inf");
     }
-    // sum 10*0.2=2.0 clipped to 1.0
     assert!(out.iter().any(|v| (*v - 1.0).abs() < 1e-5));
 }
 
 #[test]
 fn mixer_volume_extremes() {
-    // volume 0 -> silence
     let (mut mixer, _) = unit_mixer(100);
     let id0 = add_unit_peer(&mut mixer, 0, DenoiseSelection::None);
     push_value(&mut mixer, id0, 0, 1.0);
@@ -193,7 +160,6 @@ fn mixer_volume_extremes() {
         assert!(s.abs() < 1e-6, "vol0 {s}");
     }
 
-    // volume 999 -> huge multiplier but clipped to 1.0, finite
     let (mut mixer2, _) = unit_mixer(100);
     let id999 = add_unit_peer(&mut mixer2, 999, DenoiseSelection::None);
     push_value(&mut mixer2, id999, 0, 1.0);
@@ -205,11 +171,30 @@ fn mixer_volume_extremes() {
 }
 
 #[test]
+fn retained_peer_controls_drive_volume_and_loudness() {
+    let (mut mixer, _): (UnitMixer, _) = unit_mixer(100);
+    let controls = PeerControls::new(100, DenoiseSelection::None);
+    let chain = chain_from_controls(&controls);
+    let slot: SlotId = mixer.subscribe(
+        chain,
+        rebuild_passthrough,
+        output_resampler(AudioFormat::new(2, 48000), DEFAULT_OUT_FRAMES),
+    );
+    push_value(&mut mixer, slot, 0, 0.5);
+    let out = render(&mut mixer, 960);
+    assert!(out.iter().all(|s| (*s - 0.5).abs() < 1e-5));
+    assert!(controls.loudness.loudness() > 0.0);
+    controls.gain.set(0);
+    push_value(&mut mixer, slot, 1, 0.5);
+    let out = render(&mut mixer, 960);
+    assert!(out.iter().all(|s| s.abs() < 1e-5));
+}
+
+#[test]
 fn opus_roundtrip_perceptual() {
     use opus::{Application, Channels, Decoder, Encoder};
     let mut enc = Encoder::new(48000, Channels::Stereo, Application::Audio).unwrap();
     let mut dec = Decoder::new(48000, Channels::Stereo).unwrap();
-    // generate stereo sine 440Hz interleaved
     let chunk: Vec<f32> = (0..480)
         .flat_map(|i| {
             let s = (i as f32 * 440.0 / 48000.0 * 2.0 * std::f32::consts::PI).sin() * 0.4;
@@ -220,7 +205,6 @@ fn opus_roundtrip_perceptual() {
     let opus = enc.encode_vec_float(&chunk, 65535).unwrap();
     let mut out = vec![0f32; 960];
     dec.decode_float(&opus, &mut out, false).unwrap();
-    // perceptual: loudness close, not silent, opus has pre-skip so sample-wise SNR is low
     let loud1 = insanity_core::loudness::calculate_loudness(&chunk);
     let loud2 = insanity_core::loudness::calculate_loudness(&out);
     assert!((loud1 - loud2).abs() < 0.2, "loud {loud1} vs {loud2}");
@@ -228,7 +212,6 @@ fn opus_roundtrip_perceptual() {
         insanity_core::loudness::calculate_loudness(&out) > 0.1,
         "decoded not silent"
     );
-    // ensure not huge drift in energy
     let energy1: f64 = chunk.iter().map(|v| (*v as f64).powi(2)).sum();
     let energy2: f64 = out.iter().map(|v| (*v as f64).powi(2)).sum();
     let ratio = energy2 / energy1.max(1e-9);

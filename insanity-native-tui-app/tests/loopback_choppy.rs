@@ -1,21 +1,33 @@
+#[path = "common/audio_math.rs"]
+mod audio_math;
+#[path = "common/mesh.rs"]
+mod mesh;
+#[path = "common/sine.rs"]
+mod sine;
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::AudioEncoder;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::Gain;
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{PeerChain, PeerControls, output_resampler};
-use insanity_native_tui_app::audio_test_support::{
-    PassthroughDecoder, PassthroughEncoder, SineSource, decode_frame_to_chunk, energy_ratio,
-    hub_from_source, loudness, max_normalized_xcorr, rebuild_passthrough, render_tick, run_mesh,
-    transfer_tick_timeout,
-};
+use insanity_native_tui_app::audio::{PeerControls, chain_from_controls, output_resampler};
 use insanity_native_tui_app::codec_opus::OpusEncoder;
+use insanity_native_tui_app::processor::MAX_VOLUME;
+use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use opus::{Channels, Decoder};
+use sine::{SineSource, decode_frame_to_chunk, hub_from_source};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use unit_mixer::{
+    UnitMixer, add_unit_peer, push_chunk, push_value, rebuild_passthrough, render, unit_mixer,
+};
 
 struct ChirpSource {
     n: u64,
@@ -100,18 +112,14 @@ impl SyncSampleSource for AmSpeechSource {
     }
 }
 
-fn tail(samples: &[f32], chunks: usize) -> &[f32] {
-    &samples[samples.len() - chunks * 960..]
-}
-
-fn music_pair() -> HashMap<String, insanity_native_tui_app::audio_test_support::VirtualNode> {
+fn music_pair() -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
-    let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+    let mut a = VirtualNode::with_source(
         "a",
         AmSpeechSource::new(48000, 0.5),
         AudioFormat::new(2, 48000),
     );
-    let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+    let mut b = VirtualNode::with_source(
         "b",
         ChirpSource::new(48000, 0.0, 1),
         AudioFormat::new(2, 48000),
@@ -161,12 +169,12 @@ async fn non48k_input_resample_loopback() {
     let timeout = Duration::from_secs(60);
     let res = tokio::time::timeout(timeout, async {
         let mut nodes = HashMap::new();
-        let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+        let mut a = VirtualNode::with_source(
             "a",
             SineSource::new_amp(44100, 440.0, 0.5),
             AudioFormat::new(2, 44100),
         );
-        let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::with_source(
+        let mut b = VirtualNode::with_source(
             "b",
             SineSource::new_amp(48000, 880.0, 0.0),
             AudioFormat::new(2, 48000),
@@ -204,45 +212,22 @@ async fn non48k_input_resample_loopback() {
 
 #[test]
 fn resampled_output_fill_budget() {
-    use insanity_core::audio::mixer::MixerInput;
-    use insanity_native_tui_app::processor::MAX_VOLUME;
-    use rubato_audio_source::StreamResampler;
-    type ResampledMixer = Mixer<
-        PassthroughDecoder,
-        PeerChain,
-        StreamResampler,
-        Gain,
-        fn(&AudioFormat) -> Option<PassthroughDecoder>,
-    >;
     let out_format = AudioFormat::new(2, 44100);
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mut mixer: ResampledMixer = Mixer::new(out_format.clone(), 10, 480, bus);
-    let (chain, _) = PeerControls::shared(100, DenoiseSelection::None);
+    let mut mixer: UnitMixer = Mixer::new(out_format.clone(), 10, 480, bus);
+    let controls = PeerControls::new(100, DenoiseSelection::None);
+    let chain = chain_from_controls(&controls);
     let id = mixer.subscribe(
         chain,
         rebuild_passthrough,
         output_resampler(out_format, 480),
     );
-    let mut encoder = PassthroughEncoder;
-    let mut push = |mixer: &mut ResampledMixer, seq: u128| {
-        let frame = encoder
-            .encode(&AudioChunk::new(
-                seq,
-                AudioFormat::new(2, 48000),
-                vec![0.4; 960],
-            ))
-            .expect("encode");
-        mixer
-            .input_mut(id)
-            .expect("subscribed slot")
-            .push_frame(frame);
-    };
-    let render = |mixer: &mut ResampledMixer, count: usize| {
-        let mut out = Vec::with_capacity(count);
-        for _ in 0..count {
-            out.push(mixer.next_sync().unwrap_or(0.0));
-        }
-        out
+    let push = |mixer: &mut UnitMixer, seq: u128| {
+        push_chunk(
+            mixer,
+            id,
+            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
+        );
     };
     for seq in 0..3u128 {
         push(&mut mixer, seq);
@@ -296,14 +281,10 @@ async fn broadcast_lag_records_gap() {
             jumped_seq > 0,
             "lagging receiver must observe a seq jump, got {jumped_seq}"
         );
-        let (mut mixer, _) = insanity_native_tui_app::audio_test_support::unit_mixer(100);
-        let id = insanity_native_tui_app::audio_test_support::add_unit_peer(
-            &mut mixer,
-            100,
-            DenoiseSelection::None,
-        );
-        insanity_native_tui_app::audio_test_support::push_value(&mut mixer, id, jumped_seq, 0.1);
-        insanity_native_tui_app::audio_test_support::push_value(&mut mixer, id, 0, 0.1);
+        let (mut mixer, _) = unit_mixer(100);
+        let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
+        push_value(&mut mixer, id, jumped_seq, 0.1);
+        push_value(&mut mixer, id, 0, 0.1);
         let snap = mixer.metrics_snapshot();
         assert!(
             snap.gap_detected > 0,
@@ -328,8 +309,8 @@ async fn burst_loss_still_realtime() {
     let timeout = Duration::from_secs(60);
     let res = tokio::time::timeout(timeout, async {
         let mut nodes = HashMap::new();
-        let mut a = insanity_native_tui_app::audio_test_support::VirtualNode::new("a", 440.0);
-        let mut b = insanity_native_tui_app::audio_test_support::VirtualNode::new("b", 880.0);
+        let mut a = VirtualNode::new("a", 440.0);
+        let mut b = VirtualNode::new("b", 880.0);
         a.add_outbound("b");
         b.add_inbound("a");
         nodes.insert("a".to_string(), a);
@@ -381,7 +362,7 @@ fn opus_stereo_frame_roundtrip_shape() {
                 chunk.clone(),
             ))
             .expect("encode");
-        let decoded = decode_frame_to_chunk(&mut dec, &frame, 2).expect("decode");
+        let decoded = decode_frame_to_chunk(&mut dec, &frame).expect("decode");
         assert_eq!(decoded.sequence_number, seq);
         assert_eq!(decoded.audio_data.len(), 960);
         out = Some((decoded.audio_data, chunk));

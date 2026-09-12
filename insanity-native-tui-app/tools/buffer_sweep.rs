@@ -1,8 +1,10 @@
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+#[path = "../tests/common/unit_mixer.rs"]
+mod unit_mixer;
+
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio_test_support::{
-    UnitMixer, add_unit_peer, push_chunk, render, unit_mixer_with_jitter,
-};
+use unit_mixer::{UnitMixer, add_unit_peer, push_chunk, render, unit_mixer_with_jitter};
 
 // Feed model: each fill pushes floor(callback/960) whole chunks, so
 // non-multiple callback sizes (e.g. 2048 -> 2 chunks = 1920 samples)
@@ -19,6 +21,8 @@ struct CellResult {
     fills: usize,
     gaps: usize,
     late: usize,
+    overflow: usize,
+    stale: usize,
     clips: usize,
     fill_avg_ns: u64,
 }
@@ -63,6 +67,8 @@ fn run_cell(callback: usize, capacity: usize, condition: &'static str) -> CellRe
         fills: snap.fills,
         gaps: snap.gap_detected,
         late: snap.late_dropped,
+        overflow: snap.overflow_dropped,
+        stale: snap.stale_dropped,
         clips: snap.clip_hits,
         fill_avg_ns: total_nanos / fills as u64,
     }
@@ -73,7 +79,7 @@ fn main() {
         .join("../target/buffer_sweep/runs.csv");
     std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     let mut csv = String::from(
-        "callback,capacity,condition,underruns,fills,underrun_events_per_sample,gaps,late,clips,fill_avg_ns\n",
+        "callback,capacity,condition,underruns,fills,underrun_events_per_sample,gaps,late,overflow,stale,clips,fill_avg_ns\n",
     );
     let mut worst: Option<CellResult> = None;
     for &callback in &[960usize, 2048, 4100] {
@@ -82,7 +88,7 @@ fn main() {
                 let r = run_cell(callback, capacity, condition);
                 let rate = r.underruns as f64 / (r.fills * r.callback).max(1) as f64;
                 csv.push_str(&format!(
-                    "{},{},{},{},{},{:.4},{},{},{},{}\n",
+                    "{},{},{},{},{},{:.4},{},{},{},{},{},{}\n",
                     r.callback,
                     r.capacity,
                     r.condition,
@@ -91,6 +97,8 @@ fn main() {
                     rate,
                     r.gaps,
                     r.late,
+                    r.overflow,
+                    r.stale,
                     r.clips,
                     r.fill_avg_ns
                 ));

@@ -1,10 +1,16 @@
+#[path = "common/audio_math.rs"]
+mod audio_math;
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use audio_math::energy_ratio;
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio_test_support::{
-    UnitMixer, add_unit_peer, energy_ratio, push_chunk, render, unit_mixer,
-};
 use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
+use unit_mixer::{UnitMixer, add_unit_peer, push_chunk, render, unit_mixer};
 
 fn music_chunk() -> Vec<f32> {
     (0..480)
@@ -28,7 +34,7 @@ fn noise_chunk(seed: u64, amp: f32) -> Vec<f32> {
         .collect()
 }
 
-fn mixer_with_denoise(denoise: DenoiseSelection) -> (UnitMixer, u32) {
+fn mixer_with_denoise(denoise: DenoiseSelection) -> (UnitMixer, SlotId) {
     let (mut mixer, _) = unit_mixer(100);
     let id = add_unit_peer(&mut mixer, 100, denoise);
     (mixer, id)

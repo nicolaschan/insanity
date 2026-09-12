@@ -1,19 +1,30 @@
-//! End-to-end audio mesh tests: virtual insanity programs wired together.
-//!
-//! Each node is a full pipeline (synthetic mic → hub → Opus → bincode → Opus
-//! → mixer → speaker); see `common` for the harness. Assertions are
-//! perceptual-with-tolerance: loudness, energy ratio, and delay-tolerant
-//! waveform cross-correlation (Opus shifts phase/delay, so naive sample SNR
-//! would be brittle).
+#[path = "common/audio_math.rs"]
+mod audio_math;
+#[path = "common/mesh.rs"]
+mod mesh;
+#[path = "common/sine.rs"]
+mod sine;
 
+use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
 use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio_test_support::{
-    VirtualNode, energy_ratio, goertzel_energy, loudness, max_normalized_xcorr, mesh_timeout,
-    render_tick, run_mesh, transfer_tick_timeout,
-};
+use mesh::{VirtualNode, mesh_timeout, render_tick, run_mesh, transfer_tick_timeout};
 use std::collections::HashMap;
 use std::time::Duration;
+
+fn goertzel_energy(samples: &[f32], freq: f32, sr: f32) -> f64 {
+    let w = 2.0 * std::f64::consts::PI * freq as f64 / sr as f64;
+    let (cw, sw) = (w.cos(), w.sin());
+    let (mut u1, mut u2) = (0.0f64, 0.0f64);
+    for &s in samples.iter() {
+        let u0 = s as f64 + 2.0 * cw * u1 - u2;
+        u2 = u1;
+        u1 = u0;
+    }
+    let real = u1 * cw - u2;
+    let imag = u1 * sw;
+    real * real + imag * imag
+}
 
 fn pair(freq_a: f32, freq_b: f32) -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
@@ -35,11 +46,6 @@ fn edges(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Tail window skipping startup transients (jitter priming + PLC fade).
-fn tail(samples: &[f32], chunks: usize) -> &[f32] {
-    &samples[samples.len() - chunks * 960..]
-}
-
 #[tokio::test]
 async fn two_node_loopback_waveform() {
     let timeout = mesh_timeout(40, 2).saturating_add(Duration::from_secs(10));
@@ -59,7 +65,6 @@ async fn two_node_loopback_waveform() {
         for (mic, spk, label) in [(a_mic, b_spk, "a->b"), (b_mic, a_spk, "b->a")] {
             let mic_tail = tail(&mic, 20);
             let spk_tail = tail(&spk, 20);
-            // Same number of realtime ticks were rendered on both ends.
             assert_eq!(spk.len(), 40 * 960, "{label}: speaker underruns");
             let xcorr = max_normalized_xcorr(spk_tail, mic_tail, 960);
             assert!(
@@ -89,8 +94,6 @@ async fn three_node_mesh_topology() {
         let freqs = [("a", 440.0), ("b", 550.0), ("c", 660.0)];
         let mut nodes = HashMap::new();
         for (name, freq) in freqs {
-            // Low amp: two peers sum without clipping (clipped sums create
-            // intermodulation tones, e.g. 2*550-440=660, that pollute Goertzel).
             nodes.insert(name.to_string(), VirtualNode::with_amp(name, freq, 0.25));
         }
         let edge_list = edges(&[
@@ -101,15 +104,12 @@ async fn three_node_mesh_topology() {
             ("b", "c"),
             ("c", "b"),
         ]);
-        // Wire every directed edge on both ends.
         for (tx, rx) in edge_list.iter() {
             nodes.get_mut(tx).expect("node").add_outbound(rx);
             nodes.get_mut(rx).expect("node").add_inbound(tx);
         }
         run_mesh(&mut nodes, &edge_list, 40).await;
 
-        // Each speaker must carry its two peers' freqs strongly and its own
-        // (never sent back) weakly.
         let tails: HashMap<String, Vec<f32>> = nodes
             .iter()
             .map(|(n, v)| (n.clone(), tail(&v.speaker_history, 20).to_vec()))
@@ -142,18 +142,14 @@ async fn mute_gap_honesty() {
     let timeout = mesh_timeout(total_ticks, 1).saturating_add(Duration::from_secs(10));
     let res = tokio::time::timeout(timeout, async {
         let mut nodes = pair(440.0, 880.0);
-        // Only a->b is transferred; b->a stays unwired so b's sender idles.
         let edge_list = edges(&[("a", "b")]);
         run_mesh(&mut nodes, &edge_list, 10).await;
         nodes.get_mut("a").expect("node").set_muted(true);
         run_mesh(&mut nodes, &edge_list, 10).await;
-        // The first ~3 mute renders correctly drain buffered jitter audio; only
-        // the starved tail must be faded.
         let muted_tail = tail(&nodes["b"].speaker_history, 3).to_vec();
         nodes.get_mut("a").expect("node").set_muted(false);
         run_mesh(&mut nodes, &edge_list, post_mute_ticks).await;
 
-        // No time compression: every tick rendered exactly one chunk.
         assert_eq!(nodes["b"].speaker_history.len(), total_ticks * 960);
         assert!(
             loudness(&muted_tail) < 0.1,
@@ -164,7 +160,6 @@ async fn mute_gap_honesty() {
             nodes["b"].metrics_snapshot().gap_detected > 0,
             "mute gap must be recorded honestly"
         );
-        // Recovery: post-mute tail correlates again.
         let a_tail = tail(&nodes["a"].mic_history, 10).to_vec();
         let b_tail = tail(&nodes["b"].speaker_history, 10).to_vec();
         let xcorr = max_normalized_xcorr(&b_tail, &a_tail, 960);
@@ -178,8 +173,6 @@ async fn mute_gap_honesty() {
 async fn denoise_parity_on_tonal_content() {
     let timeout = mesh_timeout(40, 2).saturating_add(Duration::from_secs(10));
     let res = tokio::time::timeout(timeout, async {
-        // Same sender fans out to a denoise-off and a denoise-on receiver; sine
-        // shape must survive both (guards future denoise regressions).
         let mut nodes = HashMap::new();
         nodes.insert("a".to_string(), VirtualNode::new("a", 440.0));
         nodes.insert("b".to_string(), VirtualNode::new("b", 880.0));
@@ -188,7 +181,6 @@ async fn denoise_parity_on_tonal_content() {
             nodes.get_mut("a").expect("node").add_outbound(rx);
         }
         nodes.get_mut("b").expect("node").add_inbound("a");
-        // Denoise on for c only: tonal shape must survive both paths.
         nodes
             .get_mut("c")
             .expect("node")
@@ -197,12 +189,10 @@ async fn denoise_parity_on_tonal_content() {
         run_mesh(&mut nodes, &edge_list, 40).await;
         for rx in ["b", "c"] {
             let mic = tail(&nodes["a"].mic_history.clone(), 20).to_vec();
-            // mic_history is shared-send order; each receiver got every chunk.
             let spk = tail(&nodes[rx].speaker_history.clone(), 20).to_vec();
             let xcorr = max_normalized_xcorr(&spk, &mic, 960);
             assert!(xcorr > 0.7, "{rx}: tonal shape survives, xcorr {xcorr:.3}");
         }
-        // Single-direction smoke for the transfer helper itself.
         let mut nodes2 = pair(440.0, 880.0);
         assert!(transfer_tick_timeout(&mut nodes2, "a", "b").await);
         render_tick(nodes2.get_mut("b").expect("node"));

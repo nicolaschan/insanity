@@ -1,19 +1,21 @@
 use std::sync::{
-    Arc,
-    atomic::{AtomicU8, AtomicU32, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicU8, Ordering},
 };
 
 use bon::bon;
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::mixer::DEFAULT_OUT_FRAMES;
+use insanity_core::audio::mixer::{DEFAULT_OUT_FRAMES, SlotId};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::{AppEvent, Peer, PeerState};
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
 use veq::veq::VeqSocket;
 
 use crate::{
     audio::{
-        AudioInputHub, MixerClient, NO_SLOT, PeerControls, output_resampler, rebuild_opus_decoder,
+        AudioInputHub, MixerClient, PeerControls, chain_from_controls, lock, output_resampler,
+        rebuild_opus_decoder,
     },
     clerver::run_clerver,
     connection_manager::AugmentedInfo,
@@ -49,10 +51,15 @@ pub struct ManagedPeer {
     connection_status: Arc<AtomicU8>,
     display_name: String,
     controls: PeerControls,
-    slot: Arc<AtomicU32>,
+    task: Arc<Mutex<PeerTask>>,
     out_format: AudioFormat,
     hub: Arc<AudioInputHub>,
     client: MixerClient,
+}
+
+struct PeerTask {
+    slot: Option<SlotId>,
+    handle: Option<JoinHandle<()>>,
 }
 
 #[bon]
@@ -81,7 +88,10 @@ impl ManagedPeer {
             app_event_tx,
             id,
             controls: PeerControls::new(volume, denoise),
-            slot: Arc::new(AtomicU32::new(NO_SLOT)),
+            task: Arc::new(Mutex::new(PeerTask {
+                slot: None,
+                handle: None,
+            })),
             out_format,
             hub,
             client,
@@ -131,10 +141,23 @@ impl ManagedPeer {
     }
 
     pub fn enable(&self) {
+        let stale = {
+            let mut task = lock(&self.task, "peer task");
+            if let Some(handle) = task.handle.take() {
+                handle.abort();
+            }
+            task.slot.take()
+        };
+        if let Some(stale) = stale {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                client.unsubscribe(stale).await;
+            });
+        }
         let id = self.id;
         let mut shutdown_rx = self.shutdown_tx.subscribe();
         let peer = self.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             tokio::select! {
                 _ = run_connection_loop(peer) => {
                     log::debug!("Connection loop to {id} ended early.");
@@ -144,15 +167,21 @@ impl ManagedPeer {
                 }
             }
         });
+        lock(&self.task, "peer task").handle.replace(handle);
     }
 
     pub async fn disable(&self) -> anyhow::Result<()> {
-        self.unsubscribe_mixer().await;
-        self.shutdown_tx.send(())?;
-        log::info!("Disabled peer: {}", self.id);
-
         self.connection_status
             .store(ConnectionStatus::Disabled as u8, Ordering::Release);
+        let _ = self.shutdown_tx.send(());
+        {
+            let mut task = lock(&self.task, "peer task");
+            if let Some(handle) = task.handle.take() {
+                handle.abort();
+            }
+        }
+        self.unsubscribe_mixer().await;
+        log::info!("Disabled peer: {}", self.id);
 
         if let Some(app_event_tx) = &self.app_event_tx
             && let Err(e) = app_event_tx.send(AppEvent::AddPeer(Peer::new(
@@ -171,27 +200,24 @@ impl ManagedPeer {
 
     async fn subscribe_mixer(&self) {
         self.unsubscribe_mixer().await;
+        let chain = chain_from_controls(&self.controls);
         let resampler = output_resampler(self.out_format.clone(), DEFAULT_OUT_FRAMES);
         let slot = self
             .client
-            .subscribe(self.controls.clone(), rebuild_opus_decoder, resampler)
-            .await
-            .unwrap_or(NO_SLOT);
-        self.slot.store(slot, Ordering::Release);
+            .subscribe(chain, rebuild_opus_decoder, resampler)
+            .await;
+        lock(&self.task, "peer task").slot = slot;
     }
 
     async fn unsubscribe_mixer(&self) {
-        let slot = self.slot.swap(NO_SLOT, Ordering::AcqRel);
-        if slot != NO_SLOT {
+        let slot = lock(&self.task, "peer task").slot.take();
+        if let Some(slot) = slot {
             self.client.unsubscribe(slot).await;
         }
     }
 
-    fn audio_endpoint(&self) -> Option<(MixerClient, u32)> {
-        let slot = self.slot.load(Ordering::Acquire);
-        if slot == NO_SLOT {
-            return None;
-        }
+    fn audio_endpoint(&self) -> Option<(MixerClient, SlotId)> {
+        let slot = lock(&self.task, "peer task").slot?;
         Some((self.client.clone(), slot))
     }
 }
@@ -236,6 +262,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                     // register peer with single output mixer before streaming
                     peer.subscribe_mixer().await;
                     let Some((client, slot)) = peer.audio_endpoint() else {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                         continue;
                     };
                     let loudness = peer.controls.loudness.clone();
@@ -243,7 +270,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                         session,
                         peer.app_event_tx.clone(),
                         peer.hub.clone(),
-                        |frame| client.push_frame(slot, frame),
+                        |frame| std::future::ready(client.push_frame(slot, frame)),
                         loudness,
                         peer.id.to_string(),
                         peer.peer_message_tx.subscribe(),
@@ -263,6 +290,7 @@ async fn run_connection_loop(peer: ManagedPeer) {
                 log::debug!("Connecting status updater ended early.");
              },
         }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
 }
 

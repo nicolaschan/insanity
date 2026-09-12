@@ -1,8 +1,15 @@
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
+#[path = "../tests/common/audio_math.rs"]
+mod audio_math;
+#[path = "../tests/common/unit_mixer.rs"]
+mod unit_mixer;
+
+use audio_math::sine;
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio_test_support::{add_unit_peer, push_chunk, render, unit_mixer};
 use std::fs;
 use std::path::Path;
+use unit_mixer::{add_unit_peer, push_chunk, render, unit_mixer};
 
 fn write_f32_le(path: &Path, data: &[f32]) {
     let mut buf = Vec::with_capacity(data.len() * 4);
@@ -10,12 +17,6 @@ fn write_f32_le(path: &Path, data: &[f32]) {
         buf.extend(&v.to_le_bytes());
     }
     fs::write(path, buf).unwrap();
-}
-
-fn sine(freq: f32, sr: u32, len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|i| ((i as f32 * freq / sr as f32) * 2.0 * std::f32::consts::PI).sin() * 0.5)
-        .collect()
 }
 
 fn main() {

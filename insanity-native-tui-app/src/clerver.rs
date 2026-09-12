@@ -45,6 +45,7 @@ async fn run_peer_message_sender(
     }
 }
 
+/// Loudness reports the previous chunk (~10ms lag): push only queues the frame.
 async fn run_receiver<P, F>(
     mut conn: VeqSessionAlias,
     mut push: P,
@@ -53,14 +54,15 @@ async fn run_receiver<P, F>(
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
 ) where
     P: FnMut(EncodedChunk) -> F,
-    F: Future<Output = ()> + Send,
+    F: Future<Output = bool> + Send,
 {
     while let Ok(packet) = conn.recv().await {
         if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
                 ProtocolMessage::Encoded(frame) => {
-                    push(frame).await;
-                    if let Some(sender) = &app_event_sender {
+                    if push(frame).await
+                        && let Some(sender) = &app_event_sender
+                    {
                         let level = loudness.loudness();
                         let _ = sender.send(AppEvent::Loudness(peer_id.clone(), level));
                     }
@@ -88,7 +90,7 @@ pub async fn run_clerver<P, F>(
     peer_message_receiver: broadcast::Receiver<ProtocolMessage>,
 ) where
     P: FnMut(EncodedChunk) -> F,
-    F: Future<Output = ()> + Send,
+    F: Future<Output = bool> + Send,
 {
     tokio::select! {
         _ = run_audio_sender(

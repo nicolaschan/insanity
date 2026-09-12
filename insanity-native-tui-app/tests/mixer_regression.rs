@@ -10,18 +10,20 @@
 //! - mixer_cleanup (unsubscribe on all exits)
 //! - denoise_remainder_no_loss (chunks_exact tail)
 
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
 use insanity_core::audio::sample_ops::convert_to_mixer_channels;
 use insanity_core::audio::transform::volume_multiplier;
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio_test_support::{
-    add_unit_peer, push_chunk, push_value, render, unit_mixer,
-};
 use insanity_native_tui_app::denoise::nnnoiseless::NnnoiselessDenoiser;
 use insanity_native_tui_app::processor::MAX_VOLUME;
+use unit_mixer::{add_unit_peer, push_chunk, push_value, render, unit_mixer};
 
 #[test]
 fn jitter_target_pins_current_behavior() {

@@ -10,34 +10,28 @@ struct Interval {
     peers: usize,
 }
 
-fn parse_value(parts: &[&str], key: &str) -> Option<usize> {
-    parts
-        .iter()
-        .find_map(|p| p.strip_prefix(&format!("{key}=")))
-        .and_then(|v| v.parse().ok())
-}
-
-fn parse_value_u64(parts: &[&str], key: &str) -> Option<u64> {
-    parts
-        .iter()
-        .find_map(|p| p.strip_prefix(&format!("{key}=")))
-        .and_then(|v| v.parse().ok())
+fn field(message: &str, key: &str) -> usize {
+    message
+        .split_whitespace()
+        .filter_map(|token| token.split_once('='))
+        .find(|(k, _)| *k == key)
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(0)
 }
 
 fn parse_interval(line: &str) -> Option<Interval> {
-    let (prefix, message) = line.split_once("] audio ")?;
-    let stamp = prefix.to_string();
-    let parts: Vec<&str> = message.split_whitespace().collect();
+    let (prefix, _) = line.split_once("] audio ")?;
+    let (_, message) = line.split_once("] audio ")?;
     Some(Interval {
-        stamp,
-        gaps: parse_value(&parts, "gaps")?,
-        late: parse_value(&parts, "late")?,
-        underruns: parse_value(&parts, "underruns")?,
-        plc: parse_value(&parts, "plc")?,
-        clips: parse_value(&parts, "clips")?,
-        fills: parse_value(&parts, "fills")?,
-        fill_avg_ns: parse_value_u64(&parts, "fill_avg_ns")?,
-        peers: parse_value(&parts, "peers")?,
+        stamp: prefix.to_string(),
+        gaps: field(message, "gaps"),
+        late: field(message, "late"),
+        underruns: field(message, "underruns"),
+        plc: field(message, "plc"),
+        clips: field(message, "clips"),
+        fills: field(message, "fills"),
+        fill_avg_ns: field(message, "fill_avg_ns") as u64,
+        peers: field(message, "peers"),
     })
 }
 

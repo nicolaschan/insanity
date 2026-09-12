@@ -24,7 +24,7 @@ use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::codec::{AudioEncoder, EncodedChunk};
 use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::{
-    DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mixer, MixerInput, MixerMetrics,
+    DEFAULT_JITTER_CHUNKS, DEFAULT_OUT_FRAMES, Mixer, MixerInput, MixerMetrics, SlotId,
 };
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::{
@@ -32,6 +32,7 @@ use insanity_core::audio::transform::{
     MetricsState, Mute, MuteControl,
 };
 use insanity_core::user_input_event::DenoiseSelection;
+use rtrb::{Consumer, Producer, RingBuffer};
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::codec_opus::{OpusDecoder, OpusEncoder};
@@ -245,6 +246,13 @@ impl AudioInputHub {
         }
     }
 
+    pub fn from_chunk_source<R>(source: R) -> Self
+    where
+        R: ChunkSource + Send + 'static,
+    {
+        Self::spawn_chunk_source(source, UNKNOWN_DEVICE_NAME.into())
+    }
+
     fn spawn_silent(device_name: String) -> Self {
         Self::spawn_chunk_source(SilentChunkSource::default(), device_name)
     }
@@ -260,13 +268,13 @@ impl AudioInputHub {
         tokio::spawn(async move {
             let mut pacer = Pacer::new(Pacer::chunk_period());
             while let Some(chunk) = source.next_chunk().await {
+                pacer.pace().await;
                 let Some(chunk) = transform.transform(chunk) else {
                     continue;
                 };
                 let Some(frame) = encoder.encode_chunk(chunk) else {
                     continue;
                 };
-                pacer.pace().await;
                 let _ = tx.send(frame);
             }
         });
@@ -292,13 +300,13 @@ impl AudioInputHub {
         tokio::spawn(async move {
             let mut pacer = Pacer::new(Pacer::chunk_period());
             loop {
-                match capture.next_output().await {
-                    CaptureOutput::EndOfStream => break,
-                    CaptureOutput::Skipped => {}
-                    CaptureOutput::Encoded(frame) => {
-                        pacer.pace().await;
-                        let _ = tx.send(frame);
-                    }
+                let output = capture.next_output().await;
+                if matches!(output, CaptureOutput::EndOfStream) {
+                    break;
+                }
+                pacer.pace().await;
+                if let CaptureOutput::Encoded(frame) = output {
+                    let _ = tx.send(frame);
                 }
             }
         });
@@ -367,22 +375,70 @@ impl Default for FillStats {
     }
 }
 
-pub fn format_metrics_line(
+const RING_CAPACITY_BLOCKS: usize = 8;
+
+pub(crate) struct OutputStats {
+    underruns: AtomicUsize,
+    overruns: AtomicUsize,
+}
+
+impl OutputStats {
+    fn new() -> Self {
+        OutputStats {
+            underruns: AtomicUsize::new(0),
+            overruns: AtomicUsize::new(0),
+        }
+    }
+
+    fn note_underrun(&self) {
+        self.underruns.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn note_overrun(&self, samples: usize) {
+        self.overruns.fetch_add(samples, Ordering::Relaxed);
+    }
+
+    pub(crate) fn underruns(&self) -> usize {
+        self.underruns.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn overruns(&self) -> usize {
+        self.overruns.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for OutputStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn format_audio_interval(
     prev: &MixerMetrics,
     current: &MixerMetrics,
     fill_avg_nanos: u64,
     peer_count: usize,
+    dropped: usize,
+    ring_underruns: usize,
+    ring_overruns: usize,
 ) -> String {
     format!(
-        "audio gaps={} late={} underruns={} plc={} clips={} fills={} fill_avg_ns={} peers={}",
+        "audio gaps={} late={} overflow={} underruns={} plc={} clips={} fills={} stale={} fill_avg_ns={} peers={} dropped={} ring_underruns={} ring_overruns={}",
         current.gap_detected.saturating_sub(prev.gap_detected),
         current.late_dropped.saturating_sub(prev.late_dropped),
+        current
+            .overflow_dropped
+            .saturating_sub(prev.overflow_dropped),
         current.underrun.saturating_sub(prev.underrun),
         current.plc_hold.saturating_sub(prev.plc_hold),
         current.clip_hits.saturating_sub(prev.clip_hits),
         current.fills.saturating_sub(prev.fills),
+        current.stale_dropped.saturating_sub(prev.stale_dropped),
         fill_avg_nanos,
         peer_count,
+        dropped,
+        ring_underruns,
+        ring_overruns,
     )
 }
 
@@ -398,7 +454,7 @@ pub struct PeerControls {
 }
 
 impl PeerControls {
-    pub(crate) fn new(volume: usize, denoise: DenoiseSelection) -> Self {
+    pub fn new(volume: usize, denoise: DenoiseSelection) -> Self {
         let (_, gain) = Gain::shared(volume, MAX_VOLUME);
         let (_, denoise) = Denoise::<NnnoiselessDenoiser>::shared(denoise);
         let (_, loudness) = MetricsReader::shared();
@@ -410,50 +466,58 @@ impl PeerControls {
     }
 }
 
-pub(crate) fn chain_from_controls(controls: &PeerControls) -> PeerChain {
+pub fn chain_from_controls(controls: &PeerControls) -> PeerChain {
     Denoise::new(controls.denoise.clone()).chain(
         Gain::new(controls.gain.clone()).chain(MetricsReader::new(controls.loudness.clone())),
     )
 }
 
-pub(crate) const NO_SLOT: u32 = u32::MAX;
-const MIXER_OPS_BOUND: usize = 64;
+pub(crate) const MIXER_OPS_BOUND: usize = 64;
 
 enum MixerOp {
     Push {
-        slot: u32,
+        slot: SlotId,
         chunk: EncodedChunk,
     },
     Subscribe {
-        controls: PeerControls,
+        transform: PeerChain,
         decoder: OpusRebuild,
         resampler: StreamResampler,
-        reply: oneshot::Sender<u32>,
+        reply: oneshot::Sender<SlotId>,
     },
-    Unsubscribe(u32),
+    Unsubscribe(SlotId),
     Snapshot(oneshot::Sender<(MixerMetrics, usize)>),
 }
 
 #[derive(Clone)]
 pub(crate) struct MixerClient {
     tx: mpsc::Sender<MixerOp>,
+    dropped: Arc<AtomicUsize>,
 }
 
 impl MixerClient {
-    pub(crate) async fn push_frame(&self, slot: u32, chunk: EncodedChunk) {
-        let _ = self.tx.send(MixerOp::Push { slot, chunk }).await;
+    pub(crate) fn push_frame(&self, slot: SlotId, chunk: EncodedChunk) -> bool {
+        if self.tx.try_send(MixerOp::Push { slot, chunk }).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn dropped(&self) -> usize {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     pub(crate) async fn subscribe(
         &self,
-        controls: PeerControls,
+        transform: PeerChain,
         decoder: OpusRebuild,
         resampler: StreamResampler,
-    ) -> Option<u32> {
+    ) -> Option<SlotId> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(MixerOp::Subscribe {
-                controls,
+                transform,
                 decoder,
                 resampler,
                 reply: reply_tx,
@@ -463,7 +527,7 @@ impl MixerClient {
         reply_rx.await.ok()
     }
 
-    pub(crate) async fn unsubscribe(&self, slot: u32) {
+    pub(crate) async fn unsubscribe(&self, slot: SlotId) {
         let _ = self.tx.send(MixerOp::Unsubscribe(slot)).await;
     }
 
@@ -474,35 +538,68 @@ impl MixerClient {
     }
 }
 
-async fn run_mixer_owner(mixer: Arc<Mutex<AppMixer>>, mut rx: mpsc::Receiver<MixerOp>) {
+impl MixerInput<OpusDecoder, PeerChain, StreamResampler, OpusRebuild> for MixerClient {
+    fn push_frame(&mut self, slot: SlotId, frame: EncodedChunk) -> bool {
+        MixerClient::push_frame(self, slot, frame)
+    }
+
+    async fn subscribe(
+        &mut self,
+        transform: PeerChain,
+        rebuild: OpusRebuild,
+        resampler: StreamResampler,
+    ) -> Option<SlotId> {
+        MixerClient::subscribe(self, transform, rebuild, resampler).await
+    }
+
+    async fn unsubscribe(&mut self, slot: SlotId) {
+        MixerClient::unsubscribe(self, slot).await;
+    }
+
+    async fn snapshot(&self) -> Option<(MixerMetrics, usize)> {
+        MixerClient::snapshot(self).await
+    }
+}
+
+async fn run_mixer_owner(
+    mut mixer: AppMixer,
+    mut ring: Producer<f32>,
+    stats: Arc<OutputStats>,
+    mut rx: mpsc::Receiver<MixerOp>,
+    block_samples: usize,
+) {
     let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
-    while rx.recv_many(&mut batch, MIXER_OPS_BOUND).await > 0 {
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(10));
+    let mut block = Vec::with_capacity(block_samples.max(1));
+    loop {
+        tokio::select! {
+            biased;
+            count = rx.recv_many(&mut batch, MIXER_OPS_BOUND) => {
+                if count == 0 {
+                    break;
+                }
+            }
+            _ = ticker.tick() => {}
+        }
         let mut slot_replies = Vec::new();
         let mut snapshot_replies = Vec::new();
-        {
-            let mut guard = lock(&mixer, "mixer");
-            for op in batch.drain(..) {
-                match op {
-                    MixerOp::Push { slot, chunk } => {
-                        if let Some(input) = guard.input_mut(slot) {
-                            input.push_frame(chunk);
-                        }
-                    }
-                    MixerOp::Subscribe {
-                        controls,
-                        decoder,
-                        resampler,
-                        reply,
-                    } => {
-                        let slot =
-                            guard.subscribe(chain_from_controls(&controls), decoder, resampler);
-                        slot_replies.push((reply, slot));
-                    }
-                    MixerOp::Unsubscribe(slot) => guard.unsubscribe(slot),
-                    MixerOp::Snapshot(reply) => {
-                        snapshot_replies
-                            .push((reply, (guard.metrics_snapshot(), guard.peer_count())));
-                    }
+        for op in batch.drain(..) {
+            match op {
+                MixerOp::Push { slot, chunk } => {
+                    mixer.push_to_slot(slot, chunk);
+                }
+                MixerOp::Subscribe {
+                    transform,
+                    decoder,
+                    resampler,
+                    reply,
+                } => {
+                    let slot = mixer.subscribe(transform, decoder, resampler);
+                    slot_replies.push((reply, slot));
+                }
+                MixerOp::Unsubscribe(slot) => mixer.unsubscribe(slot),
+                MixerOp::Snapshot(reply) => {
+                    snapshot_replies.push((reply, (mixer.metrics_snapshot(), mixer.peer_count())));
                 }
             }
         }
@@ -511,6 +608,21 @@ async fn run_mixer_owner(mixer: Arc<Mutex<AppMixer>>, mut rx: mpsc::Receiver<Mix
         }
         for (reply, snapshot) in snapshot_replies {
             let _ = reply.send(snapshot);
+        }
+        for _ in 0..RING_CAPACITY_BLOCKS {
+            if ring.slots() < block_samples {
+                break;
+            }
+            block.extend((0..block_samples).map(|_| mixer.next_sync().unwrap_or(0.0)));
+            let mut overruns = 0;
+            for sample in block.drain(..) {
+                if ring.push(sample).is_err() {
+                    overruns += 1;
+                }
+            }
+            if overruns > 0 {
+                stats.note_overrun(overruns);
+            }
         }
     }
 }
@@ -527,14 +639,21 @@ pub fn output_resampler(out: AudioFormat, block_frames: usize) -> StreamResample
     )
 }
 
-/// Live output handles. Besides the mixer client, timing stats, and format,
-/// this owns the cpal output `Stream`: dropping it stops the audio callback,
-/// so the stream must live as long as the program does.
-pub(crate) struct AudioOutput {
+#[derive(Clone)]
+pub(crate) struct OutputHandle {
     pub(crate) client: MixerClient,
     pub(crate) timing: Arc<FillStats>,
     pub(crate) format: AudioFormat,
+    pub(crate) stats: Arc<OutputStats>,
+}
+
+pub(crate) struct OutputGuard {
     _stream: Option<send_safe::SendWrapperThread<Option<Stream>>>,
+}
+
+pub(crate) struct AudioOutput {
+    pub(crate) handle: OutputHandle,
+    pub(crate) _guard: OutputGuard,
 }
 
 pub(crate) fn start_output() -> AudioOutput {
@@ -553,15 +672,18 @@ pub(crate) fn start_output() -> AudioOutput {
         .map(|(_, _, config)| AudioFormat::new(config.channels, config.sample_rate))
         .unwrap_or(AudioFormat::new(AUDIO_CHANNELS, AUDIO_SAMPLE_RATE));
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mixer: Arc<Mutex<AppMixer>> = Arc::new(Mutex::new(Mixer::new(
+    let mixer = Mixer::new(
         format.clone(),
         DEFAULT_JITTER_CHUNKS,
         DEFAULT_OUT_FRAMES,
         bus,
-    )));
+    );
     let timing = Arc::new(FillStats::new());
-    let callback_mixer = mixer.clone();
+    let stats = Arc::new(OutputStats::new());
+    let block_samples = format.channel_count.max(1) as usize * DEFAULT_OUT_FRAMES;
+    let (producer, consumer) = RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
     let callback_timing = timing.clone();
+    let callback_stats = stats.clone();
     let stream = match output {
         Some((device, sample_format, config)) => {
             let mut wrapper =
@@ -570,8 +692,9 @@ pub(crate) fn start_output() -> AudioOutput {
                         sample_format,
                         config,
                         &device,
-                        &callback_mixer,
-                        &callback_timing,
+                        consumer,
+                        callback_timing,
+                        callback_stats,
                     ) {
                         Ok(s) => Some(s),
                         Err(e) => {
@@ -598,13 +721,21 @@ pub(crate) fn start_output() -> AudioOutput {
         None => None,
     };
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
-    let owner_mixer = mixer.clone();
-    tokio::spawn(async move { run_mixer_owner(owner_mixer, op_rx).await });
+    let task_stats = stats.clone();
+    tokio::spawn(async move {
+        run_mixer_owner(mixer, producer, task_stats, op_rx, block_samples).await
+    });
     AudioOutput {
-        client: MixerClient { tx: op_tx },
-        timing,
-        format,
-        _stream: stream,
+        handle: OutputHandle {
+            client: MixerClient {
+                tx: op_tx,
+                dropped: Arc::new(AtomicUsize::new(0)),
+            },
+            timing,
+            format,
+            stats,
+        },
+        _guard: OutputGuard { _stream: stream },
     }
 }
 
@@ -612,20 +743,21 @@ fn build_output_stream(
     sample_format: SampleFormat,
     config: StreamConfig,
     device: &Device,
-    mixer: &Arc<Mutex<AppMixer>>,
-    timing: &Arc<FillStats>,
+    consumer: Consumer<f32>,
+    timing: Arc<FillStats>,
+    stats: Arc<OutputStats>,
 ) -> anyhow::Result<Stream> {
     match sample_format {
-        SampleFormat::I8 => run_output::<i8>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::I16 => run_output::<i16>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::I32 => run_output::<i32>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::I64 => run_output::<i64>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::U8 => run_output::<u8>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::U16 => run_output::<u16>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::U32 => run_output::<u32>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::U64 => run_output::<u64>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::F32 => run_output::<f32>(config, device, mixer.clone(), timing.clone()),
-        SampleFormat::F64 => run_output::<f64>(config, device, mixer.clone(), timing.clone()),
+        SampleFormat::I8 => run_output::<i8>(config, device, consumer, timing, stats),
+        SampleFormat::I16 => run_output::<i16>(config, device, consumer, timing, stats),
+        SampleFormat::I32 => run_output::<i32>(config, device, consumer, timing, stats),
+        SampleFormat::I64 => run_output::<i64>(config, device, consumer, timing, stats),
+        SampleFormat::U8 => run_output::<u8>(config, device, consumer, timing, stats),
+        SampleFormat::U16 => run_output::<u16>(config, device, consumer, timing, stats),
+        SampleFormat::U32 => run_output::<u32>(config, device, consumer, timing, stats),
+        SampleFormat::U64 => run_output::<u64>(config, device, consumer, timing, stats),
+        SampleFormat::F32 => run_output::<f32>(config, device, consumer, timing, stats),
+        SampleFormat::F64 => run_output::<f64>(config, device, consumer, timing, stats),
         other => Err(anyhow::anyhow!(
             "unsupported output sample format {other:?}"
         )),
@@ -635,8 +767,9 @@ fn build_output_stream(
 fn run_output<T>(
     config: StreamConfig,
     device: &Device,
-    mixer: Arc<Mutex<AppMixer>>,
+    mut consumer: Consumer<f32>,
     timing: Arc<FillStats>,
+    stats: Arc<OutputStats>,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -647,11 +780,12 @@ where
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 let start = std::time::Instant::now();
-                {
-                    let mut mixer = lock(&mixer, "mixer");
-                    for out in data.iter_mut() {
-                        *out = T::from_sample(mixer.next_sync().unwrap_or(0.0));
-                    }
+                for out in data.iter_mut() {
+                    let sample = consumer.pop().unwrap_or_else(|_| {
+                        stats.note_underrun();
+                        0.0
+                    });
+                    *out = T::from_sample(sample);
                 }
                 timing.record(start.elapsed());
             },

@@ -1,34 +1,15 @@
-use insanity_core::audio::{
-    AudioFormat,
-    chunk::{AudioChunk, ChunkSource},
-};
+#[path = "common/audio_math.rs"]
+mod audio_math;
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use audio_math::count_dips;
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::AudioInputHub;
-use insanity_native_tui_app::audio_test_support::{add_unit_peer, push_value, render, unit_mixer};
 use std::time::Duration;
-
-fn window_rms(samples: &[f32]) -> f64 {
-    let e: f64 = samples.iter().map(|v| (*v as f64).powi(2)).sum();
-    (e / samples.len().max(1) as f64).sqrt()
-}
-
-fn count_dips(samples: &[f32], window: usize, thresh_db: f64) -> usize {
-    let mut energies = Vec::new();
-    for w in samples.chunks(window) {
-        if w.len() == window {
-            energies.push(window_rms(w));
-        }
-    }
-    let median = {
-        let mut s = energies.clone();
-        s.sort_by(|a, b| a.partial_cmp(b).expect("rms"));
-        s[s.len() / 2]
-    };
-    energies
-        .iter()
-        .filter(|e| 20.0 * (**e / median.max(1e-9)).log10() < -thresh_db)
-        .count()
-}
+use unit_mixer::{add_unit_peer, assert_all_finite, push_value, render, unit_mixer};
 
 #[test]
 fn empty_buffer_4096_matches_log_signature() {
@@ -65,9 +46,7 @@ fn sustained_960_with_steady_feed_stays_clean() {
     }
     for _ in 0..30 {
         let out = render(&mut mixer, 960);
-        for s in out.iter() {
-            assert!(s.is_finite());
-        }
+        assert_all_finite(&out);
         push_value(&mut mixer, id, seq, 0.4);
         seq += 1;
     }
@@ -97,13 +76,13 @@ struct BurstySource {
 
 impl BurstySource {
     fn chunk(&mut self) -> AudioChunk {
-        let mut data = Vec::with_capacity(960);
-        for _ in 0..480 {
-            let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.4;
-            self.phase = (self.phase + 440.0 / 48000.0) % 1.0;
-            data.push(v);
-            data.push(v);
-        }
+        let data: Vec<f32> = (0..480)
+            .flat_map(|_| {
+                let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.4;
+                self.phase = (self.phase + 440.0 / 48000.0) % 1.0;
+                [v, v]
+            })
+            .collect();
         let chunk = AudioChunk::new(self.seq, AudioFormat::new(2, 48000), data);
         self.seq += 1;
         chunk

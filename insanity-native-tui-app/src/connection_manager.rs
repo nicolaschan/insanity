@@ -6,7 +6,6 @@ use std::{
 };
 
 use base64::{Engine, prelude::BASE64_URL_SAFE};
-use insanity_core::audio::AudioFormat;
 use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
 use insanity_tui_adapter::AppEvent;
 
@@ -18,7 +17,10 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    audio::{AUDIO_CALLBACK_FRAMES, AudioInputHub, MixerClient, format_metrics_line, start_output},
+    audio::{
+        AUDIO_CALLBACK_FRAMES, AudioInputHub, AudioOutput, OutputHandle, format_audio_interval,
+        start_output,
+    },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
 use veq::snow_types::SnowPublicKey;
@@ -42,13 +44,13 @@ pub struct ConnectionManager {
     socket: VeqSocket,
     cancellation_token: CancellationToken,
     user_action_tx: mpsc::UnboundedSender<UserInputEvent>,
+    _audio_output: Option<AudioOutput>,
 }
 
 #[derive(Clone)]
 struct SharedAudio {
     hub: Arc<AudioInputHub>,
-    client: MixerClient,
-    out_format: AudioFormat,
+    handle: OutputHandle,
 }
 
 impl ConnectionManager {
@@ -82,12 +84,13 @@ impl ConnectionManager {
         let connection_info = self.socket.connection_info();
         log::debug!("Connection info: {:?}", connection_info);
 
-        let conn_info_tx = manage_peers(
+        let (conn_info_tx, audio_output) = manage_peers(
             self.socket.clone(),
             app_event_tx.clone(),
             user_action_rx,
             self.cancellation_token.clone(),
         );
+        self._audio_output = Some(audio_output);
 
         if let Some(room_name) = &room_name {
             log::debug!("Attempting to join room {room_name} on server {bridge_servers:?}.");
@@ -246,6 +249,7 @@ impl ConnectionManagerBuilder {
             socket,
             cancellation_token,
             user_action_tx,
+            _audio_output: None,
         };
         connection_manager
             .start(
@@ -267,7 +271,7 @@ fn manage_peers(
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     mut user_action_rx: mpsc::UnboundedReceiver<UserInputEvent>,
     cancellation_token: CancellationToken,
-) -> mpsc::UnboundedSender<AugmentedInfo> {
+) -> (mpsc::UnboundedSender<AugmentedInfo>, AudioOutput) {
     // Channel for the manage_peers task to receive updated peers info.
     let (conn_info_tx, mut conn_info_rx) = mpsc::unbounded_channel::<AugmentedInfo>();
     // single input hub and single output mixer
@@ -278,40 +282,50 @@ fn manage_peers(
             .expect("could not set input device name");
     }
     let output = start_output();
-    let timing = output.timing.clone();
     let audio = SharedAudio {
         hub: hub.clone(),
-        client: output.client,
-        out_format: output.format,
+        handle: output.handle.clone(),
     };
     let metrics_audio = audio.clone();
-    let metrics_timing = timing.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
             "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES}",
-            metrics_audio.out_format.channel_count,
-            metrics_audio.out_format.sample_rate,
+            metrics_audio.handle.format.channel_count,
+            metrics_audio.handle.format.sample_rate,
         );
         let mut prev = metrics_audio
+            .handle
             .client
             .snapshot()
             .await
             .map(|(snapshot, _)| snapshot)
             .unwrap_or_default();
+        let mut prev_dropped = metrics_audio.handle.client.dropped();
+        let mut prev_underruns = metrics_audio.handle.stats.underruns();
+        let mut prev_overruns = metrics_audio.handle.stats.overruns();
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    if let Some((current, peers)) = metrics_audio.client.snapshot().await {
-                        let line = format_metrics_line(
+                    if let Some((current, peers)) = metrics_audio.handle.client.snapshot().await {
+                        let dropped = metrics_audio.handle.client.dropped();
+                        let ring_underruns = metrics_audio.handle.stats.underruns();
+                        let ring_overruns = metrics_audio.handle.stats.overruns();
+                        let line = format_audio_interval(
                             &prev,
                             &current,
-                            metrics_timing.avg_nanos(),
+                            metrics_audio.handle.timing.avg_nanos(),
                             peers,
+                            dropped.saturating_sub(prev_dropped),
+                            ring_underruns.saturating_sub(prev_underruns),
+                            ring_overruns.saturating_sub(prev_overruns),
                         );
                         log::info!("{line}");
                         prev = current;
+                        prev_dropped = dropped;
+                        prev_underruns = ring_underruns;
+                        prev_overruns = ring_overruns;
                     }
                 }
                 _ = metrics_token.cancelled() => {
@@ -354,7 +368,7 @@ fn manage_peers(
             }
         }
     });
-    conn_info_tx
+    (conn_info_tx, output)
 }
 
 async fn reconnect(managed_peer: ManagedPeer) {
@@ -404,9 +418,9 @@ fn update_peer_info(
                 .display_name(new_info.display_name)
                 .denoise(DenoiseSelection::default())
                 .volume(100)
-                .out_format(audio.out_format)
+                .out_format(audio.handle.format.clone())
                 .hub(audio.hub)
-                .client(audio.client)
+                .client(audio.handle.client.clone())
                 .build();
             managed_peers.insert(id, managed_peer.clone());
             Some(managed_peer)

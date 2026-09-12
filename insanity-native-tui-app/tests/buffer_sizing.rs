@@ -1,37 +1,15 @@
-use insanity_core::audio::mixer::DEFAULT_JITTER_CHUNKS;
-use insanity_core::audio::{AudioFormat, chunk::AudioChunk};
-use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::format_metrics_line;
-use insanity_native_tui_app::audio_test_support::{
-    UnitMixer, add_unit_peer, push_chunk, push_value, render, unit_mixer, unit_mixer_with_jitter,
-};
+#[path = "common/unit_mixer.rs"]
+mod unit_mixer;
+
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::AudioChunk;
+use insanity_core::audio::mixer::{DEFAULT_JITTER_CHUNKS, SlotId};
+use insanity_native_tui_app::audio::format_audio_interval;
 use opus::{Application, Channels, Decoder, Encoder};
-
-fn mixer_with_capacity(chunks: usize) -> UnitMixer {
-    unit_mixer_with_jitter(100, chunks).0
-}
-
-fn add_peer(mixer: &mut UnitMixer) -> u32 {
-    add_unit_peer(mixer, 100, DenoiseSelection::None)
-}
-
-fn feed(mixer: &mut UnitMixer, id: u32, first_seq: u128, count: usize, value: f32) {
-    for seq in first_seq..first_seq + count as u128 {
-        push_value(mixer, id, seq, value);
-    }
-}
-
-fn fill(mixer: &mut UnitMixer, samples: usize) -> Vec<f32> {
-    render(mixer, samples)
-}
-
-fn underruns(mixer: &UnitMixer) -> usize {
-    mixer.metrics_snapshot().underrun
-}
-
-fn plc_hold(mixer: &UnitMixer) -> usize {
-    mixer.metrics_snapshot().plc_hold
-}
+use unit_mixer::{
+    add_peer, assert_all_finite, feed, fill, mixer_with_capacity, plc_hold, push_chunk, underruns,
+    unit_mixer,
+};
 
 struct Cell {
     capacity: usize,
@@ -111,9 +89,7 @@ fn callback_demand_vs_buffer_capacity() {
         for f in 0..cell.fills {
             let before = underruns(&mixer);
             let out = fill(&mut mixer, cell.callback);
-            for s in out.iter() {
-                assert!(s.is_finite());
-            }
+            assert_all_finite(&out);
             if underruns(&mixer) > before {
                 starved_fills += 1;
             }
@@ -140,6 +116,16 @@ fn callback_demand_vs_buffer_capacity() {
             assert_eq!(
                 snap.underrun, 0,
                 "{label}: adequate capacity must not starve, got {snap:?}"
+            );
+            assert_eq!(
+                snap.overflow_dropped, 0,
+                "{label}: matched producer must not overrun, got {snap:?}"
+            );
+        }
+        if cell.expect_every_fill {
+            assert!(
+                snap.overflow_dropped > 0,
+                "{label}: overfed buffer must count overrun loss, got {snap:?}"
             );
         }
         if cell.expect_every_fill {
@@ -212,18 +198,23 @@ fn playback_before_data_conceals_then_recovers() {
 
 #[test]
 fn starved_predicate_matches_incident_and_healthy_logs() {
-    let line = format_metrics_line(
+    let line = format_audio_interval(
         &insanity_core::audio::mixer::MixerMetrics::default(),
         &insanity_core::audio::mixer::MixerMetrics {
             gap_detected: 0,
             late_dropped: 0,
+            overflow_dropped: 0,
             underrun: 291264,
             plc_hold: 291264,
             clip_hits: 495,
             fills: 234,
+            stale_dropped: 0,
         },
         256299,
         1,
+        0,
+        0,
+        0,
     );
     assert!(line.contains("underruns=291264"), "{line}");
     assert!(line.contains("peers=1"), "{line}");
@@ -281,7 +272,7 @@ fn production_capacity_recovers_within_ten_fills() {
 #[test]
 fn summed_peers_count_clips_and_stay_bounded() {
     let mut mixer = mixer_with_capacity(10);
-    let ids: Vec<u32> = (0..2).map(|_| add_peer(&mut mixer)).collect();
+    let ids: Vec<SlotId> = (0..2).map(|_| add_peer(&mut mixer)).collect();
     for id in &ids {
         feed(&mut mixer, *id, 0, 3, 0.6);
     }
@@ -381,7 +372,7 @@ fn producer_stall_conceals_without_gap_and_predicate_stays_quiet() {
 }
 
 #[test]
-fn bulk_overfeed_silently_drops_early_audio_with_clean_counters() {
+fn bulk_overfeed_drops_early_audio_with_overflow_count() {
     let mut mixer = mixer_with_capacity(10);
     let id = add_peer(&mut mixer);
     for seq in 0..20u128 {
@@ -421,22 +412,24 @@ fn bulk_overfeed_silently_drops_early_audio_with_clean_counters() {
     );
     assert_eq!(
         snap.late_dropped, 0,
-        "evicted audio records no late, got {snap:?}"
+        "overrun is not late audio, got {snap:?}"
+    );
+    assert_eq!(
+        snap.overflow_dropped, 10,
+        "ten overfed chunks must be counted, got {snap:?}"
     );
 }
 
 #[test]
 fn production_capacity_covers_observed_callback() {
-    let (mut mixer, _) = insanity_native_tui_app::audio_test_support::unit_mixer(100);
+    let (mut mixer, _) = unit_mixer(100);
     let id = add_peer(&mut mixer);
     feed(&mut mixer, id, 0, DEFAULT_JITTER_CHUNKS, 0.4);
     let mut next_seq = DEFAULT_JITTER_CHUNKS as u128;
     let pattern = [4usize, 4, 4, 5];
     for f in 0..25 {
         let out = fill(&mut mixer, 4100);
-        for s in out.iter() {
-            assert!(s.is_finite());
-        }
+        assert_all_finite(&out);
         let n = pattern[f % pattern.len()];
         feed(&mut mixer, id, next_seq, n, 0.4);
         next_seq += n as u128;

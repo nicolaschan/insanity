@@ -5,6 +5,7 @@ use std::sync::{
 
 use crate::audio::chunk::AudioChunk;
 use crate::audio::denoiser::{Denoiser, MultiChannelDenoiser};
+use crate::audio::jitter::JitterBuffer;
 use crate::audio::sample_ops::convert_to_mixer_channels;
 use crate::loudness::calculate_loudness;
 use crate::user_input_event::DenoiseSelection;
@@ -270,6 +271,51 @@ impl ChunkTransform for MetricsReader {
             Ordering::Relaxed,
         );
         Some(chunk)
+    }
+}
+
+pub struct JitterStage {
+    buffer: JitterBuffer<AudioChunk>,
+    pub gap_detected: usize,
+    pub late_dropped: usize,
+    pub overflow_dropped: usize,
+}
+
+impl JitterStage {
+    pub fn new(capacity_chunks: usize) -> Self {
+        assert!(capacity_chunks > 0);
+        JitterStage {
+            buffer: JitterBuffer::new(capacity_chunks),
+            gap_detected: 0,
+            late_dropped: 0,
+            overflow_dropped: 0,
+        }
+    }
+
+    pub fn push(&mut self, chunk: AudioChunk) {
+        let sequence = chunk.sequence_number;
+        if sequence < self.buffer.head() {
+            self.late_dropped += 1;
+        } else if self.buffer.is_empty() {
+            if sequence != self.buffer.head() {
+                self.gap_detected += 1;
+            }
+        } else if sequence > self.buffer.prev() && sequence != self.buffer.prev() + 1 {
+            self.gap_detected += 1;
+        }
+        self.overflow_dropped += self.buffer.set(sequence, chunk);
+    }
+
+    pub fn reset(&mut self) {
+        self.buffer.reset();
+    }
+
+    pub fn buffered_chunks(&self) -> usize {
+        self.buffer.len()
+    }
+
+    pub fn pull(&mut self) -> Option<AudioChunk> {
+        self.buffer.next_item()
     }
 }
 
