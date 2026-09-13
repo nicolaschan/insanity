@@ -136,7 +136,7 @@ async fn three_node_mesh_topology() {
 }
 
 #[tokio::test]
-async fn mute_gap_honesty() {
+async fn mute_sends_silence() {
     let post_mute_ticks = 10 + AudioPipelineConfig::default().jitter_chunks();
     let total_ticks = 20 + post_mute_ticks;
     let timeout = mesh_timeout(total_ticks, 1).saturating_add(Duration::from_secs(10));
@@ -156,17 +156,16 @@ async fn mute_gap_honesty() {
             "muted window must fade, loudness {:.3}",
             loudness(&muted_tail)
         );
-        assert!(
-            nodes["b"].metrics_snapshot().gap_detected > 0,
-            "mute gap must be recorded honestly"
-        );
         let a_tail = tail(&nodes["a"].mic_history, 10).to_vec();
         let b_tail = tail(&nodes["b"].speaker_history, 10).to_vec();
         let xcorr = max_normalized_xcorr(&b_tail, &a_tail, 960);
         assert!(xcorr > 0.8, "post-mute recovery xcorr {xcorr:.3}");
     })
     .await;
-    assert!(res.is_ok(), "mute_gap_honesty timed out after {timeout:?}");
+    assert!(
+        res.is_ok(),
+        "mute_sends_silence timed out after {timeout:?}"
+    );
 }
 
 #[tokio::test]

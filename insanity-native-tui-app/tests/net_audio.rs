@@ -70,8 +70,7 @@ fn subscribe_peer(mixer: &Arc<Mutex<AppMixer>>) -> (SlotId, Arc<MetricsState>) {
 fn push_to(mixer: Arc<Mutex<AppMixer>>, slot: SlotId) -> impl FnMut(EncodedChunk) -> Ready<bool> {
     move |frame: EncodedChunk| {
         let mut guard = mixer.lock().expect("mixer lock");
-        let accepted = guard.push_to_slot(slot, frame);
-        std::future::ready(accepted)
+        std::future::ready(guard.push_to_slot(slot, frame))
     }
 }
 

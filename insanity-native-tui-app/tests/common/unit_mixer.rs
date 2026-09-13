@@ -103,7 +103,7 @@ pub fn add_unit_peer(mixer: &mut UnitMixer, volume: usize, denoise: DenoiseSelec
 pub fn push_chunk(mixer: &mut UnitMixer, slot: SlotId, chunk: AudioChunk) {
     let mut encoder = PassthroughEncoder;
     let frame = encoder.encode(&chunk).expect("encode");
-    let _ = mixer.push_to_slot(slot, frame);
+    mixer.push_to_slot(slot, frame);
 }
 
 pub fn push_value(mixer: &mut UnitMixer, slot: SlotId, sequence: u128, value: f32) {

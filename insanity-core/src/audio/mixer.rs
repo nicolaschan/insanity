@@ -170,12 +170,8 @@ where
         let Some(decoded) = self.decoder.decode_frame(&frame) else {
             return;
         };
-        let Some(converted) = self.channel_map.transform(decoded) else {
-            return;
-        };
-        let Some(processed) = self.transform.transform(converted) else {
-            return;
-        };
+        let converted = self.channel_map.transform(decoded);
+        let processed = self.transform.transform(converted);
         self.jitter.push(processed);
     }
 }
@@ -334,16 +330,11 @@ where
             Self::pump_slot(slot, needed, &mut mixed);
         }
         let chunk = AudioChunk::new(self.out_sequence, self.out_format.clone(), mixed);
-        let emitted = self
-            .bus
-            .transform(chunk)
-            .and_then(|converted| self.clip.transform(converted));
+        let chunk = self.bus.transform(chunk);
+        let output = self.clip.transform(chunk);
         self.fills += 1;
         self.out_sequence += 1;
-        match emitted {
-            Some(output) => self.pending.extend(output.audio_data),
-            None => self.pending.extend(core::iter::repeat_n(0.0, needed)),
-        }
+        self.pending.extend(output.audio_data);
     }
 }
 

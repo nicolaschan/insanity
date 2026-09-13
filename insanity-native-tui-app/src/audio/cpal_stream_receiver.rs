@@ -1,11 +1,11 @@
 use anyhow::anyhow;
 use cpal::{
     Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
-    traits::{DeviceTrait, StreamTrait},
+    traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
+use insanity_core::audio::{AudioFormat, device::UNKNOWN_DEVICE_NAME};
 
 use super::config::get_input_config;
 
@@ -13,6 +13,21 @@ pub struct CpalStreamReceiver {
     _stream: send_safe::SendWrapperThread<Option<Stream>>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
     format: AudioFormat,
+    name: String,
+}
+
+impl CpalStreamReceiver {
+    pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
+        let device = cpal::default_host().default_input_device();
+        match device {
+            Some(device) => make_single_input(device, audio_config),
+            None => Err(anyhow!("No default device available")),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 impl SampleSource for CpalStreamReceiver {
@@ -29,6 +44,7 @@ pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
+    let name = device_name(&device);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
         return Err(anyhow!(
@@ -60,7 +76,15 @@ pub fn make_single_input(
         _stream: wrapper,
         receiver: rx,
         format,
+        name,
     })
+}
+
+fn device_name(device: &Device) -> String {
+    device
+        .description()
+        .map(|d| d.name().to_owned())
+        .unwrap_or(UNKNOWN_DEVICE_NAME.into())
 }
 
 fn setup_input_stream(

@@ -183,11 +183,10 @@ pub async fn transfer_tick(
 }
 
 pub fn render_tick(node: &mut VirtualNode) {
-    let count = node.out_samples;
-    let out: Vec<f32> = (0..count)
-        .map(|_| node.mixer.next_sync().unwrap_or(0.0))
-        .collect();
-    node.speaker_history.extend(out);
+    for _ in 0..node.out_samples {
+        let sample = node.mixer.next_sync().unwrap_or(0.0);
+        node.speaker_history.push(sample);
+    }
 }
 
 pub async fn run_mesh(

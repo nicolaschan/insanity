@@ -12,7 +12,8 @@ use insanity_native_tui_app::audio::{
     hub::AudioInputHub,
     mixer::{PeerControls, chain_from_controls, output_resampler},
 };
-use sine::{SineSource, hub_from_source};
+use opus::Decoder;
+use sine::{SineSource, decode_frame_to_chunk, hub_from_source, opus_channels};
 use std::sync::Arc;
 use unit_mixer::{
     UnitMixer, add_unit_peer, push_chunk, push_value, rebuild_passthrough, render, unit_mixer,
@@ -51,20 +52,44 @@ async fn hub_fanout_same_chunk() {
 }
 
 #[tokio::test]
-async fn hub_mute_skips_send() {
+async fn hub_mute_sends_silence() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 440.0);
         let hub = hub_from_source(src);
         hub.set_muted(true);
         let mut rx = hub.subscribe();
-        let res = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
-        assert!(res.is_err(), "muted hub should not send");
+        let mut decoder = Decoder::new(48000, opus_channels(2)).expect("decoder");
+        let peak = |decoder: &mut Decoder, frame| {
+            decode_frame_to_chunk(decoder, &frame)
+                .expect("decodable frame")
+                .audio_data
+                .iter()
+                .fold(0.0f32, |acc, s| acc.max(s.abs()))
+        };
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("muted hub should still send")
+            .expect("hub open");
+        assert!(
+            peak(&mut decoder, frame) < 1e-3,
+            "muted frame must be silent"
+        );
         hub.set_muted(false);
-        let res2 = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await;
-        assert!(res2.is_ok(), "unmuted hub should send within 2s");
+        let mut loudest = 0.0f32;
+        for _ in 0..10 {
+            let frame = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .expect("unmuted hub should send within 2s")
+                .expect("hub open");
+            loudest = loudest.max(peak(&mut decoder, frame));
+        }
+        assert!(
+            loudest > 0.1,
+            "unmuted frames must carry audio, peak {loudest}"
+        );
     })
     .await;
-    assert!(res.is_ok(), "hub_mute_skips_send timed out");
+    assert!(res.is_ok(), "hub_mute_sends_silence timed out");
 }
 
 #[test]
