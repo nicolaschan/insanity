@@ -23,24 +23,6 @@ pub struct MixerMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SlotId(u32);
 
-pub trait MixerInput<D, T, R, FD>
-where
-    D: AudioDecoder,
-    T: ChunkTransform,
-    R: Resampler,
-    FD: FnMut(&AudioFormat) -> Option<D> + Send,
-{
-    fn push_frame(&mut self, slot: SlotId, frame: EncodedChunk) -> bool;
-    fn subscribe(
-        &mut self,
-        transform: T,
-        rebuild: FD,
-        resampler: R,
-    ) -> impl Future<Output = Option<SlotId>>;
-    fn unsubscribe(&mut self, slot: SlotId) -> impl Future<Output = ()>;
-    fn snapshot(&self) -> impl Future<Output = Option<(MixerMetrics, usize)>>;
-}
-
 pub(crate) struct ChunkDecoder<D: AudioDecoder, F: FnMut(&AudioFormat) -> Option<D>> {
     decoder_cache: FormatCache<D, F>,
 }
@@ -365,31 +347,6 @@ where
     }
 }
 
-impl<D, T, R, M, FD> MixerInput<D, T, R, FD> for Mixer<D, T, R, M, FD>
-where
-    D: AudioDecoder,
-    T: ChunkTransform,
-    R: Resampler,
-    M: ChunkTransform,
-    FD: FnMut(&AudioFormat) -> Option<D> + Send,
-{
-    fn push_frame(&mut self, slot: SlotId, frame: EncodedChunk) -> bool {
-        self.push_to_slot(slot, frame)
-    }
-
-    async fn subscribe(&mut self, transform: T, rebuild: FD, resampler: R) -> Option<SlotId> {
-        Some(self.subscribe(transform, rebuild, resampler))
-    }
-
-    async fn unsubscribe(&mut self, slot: SlotId) {
-        self.unsubscribe(slot);
-    }
-
-    async fn snapshot(&self) -> Option<(MixerMetrics, usize)> {
-        Some((self.metrics_snapshot(), self.peer_count()))
-    }
-}
-
 impl<D, T, R, M, FD> SampleSource for Mixer<D, T, R, M, FD>
 where
     D: AudioDecoder,
@@ -424,7 +381,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ChunkDecoder, Conceal, Mixer, MixerInput, SlotId};
+    use super::{ChunkDecoder, Conceal, Mixer, SlotId};
     use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
     use crate::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
@@ -554,8 +511,8 @@ mod tests {
     fn mixer_input_trait_routes_push() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        assert!(MixerInput::push_frame(&mut mixer, id, frame(2)));
-        assert!(!MixerInput::push_frame(&mut mixer, SlotId(99), frame(2)));
+        assert!(mixer.push_to_slot(id, frame(2)));
+        assert!(!mixer.push_to_slot(SlotId(99), frame(2)));
         let out = pull(&mut mixer, 960);
         assert!(out.iter().all(|sample| (*sample - 0.2).abs() < 1e-6));
     }
