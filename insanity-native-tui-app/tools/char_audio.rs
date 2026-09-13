@@ -6,8 +6,9 @@ mod mesh;
 mod sine;
 
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr};
+use futures_util::stream;
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
+use insanity_core::audio::sample::{SampleSource, Sampled};
 use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -54,17 +55,21 @@ impl ChirpSource {
 }
 
 impl SampleSource for ChirpSource {
+    type Samples = stream::Iter<Self>;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
 
-    async fn next(&mut self) -> Option<f32> {
-        Some(self.step())
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
-impl SyncSampleSource for ChirpSource {
-    fn next_sync(&mut self) -> Option<f32> {
+impl Iterator for ChirpSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
@@ -103,17 +108,21 @@ impl AmSpeechSource {
 }
 
 impl SampleSource for AmSpeechSource {
+    type Samples = stream::Iter<Self>;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
 
-    async fn next(&mut self) -> Option<f32> {
-        Some(self.step())
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
-impl SyncSampleSource for AmSpeechSource {
-    fn next_sync(&mut self) -> Option<f32> {
+impl Iterator for AmSpeechSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
@@ -127,7 +136,7 @@ struct NoiseSource {
 impl NoiseSource {
     fn new(amp: f32, seed: u64) -> Self {
         Self {
-            format: AudioFormat::new(2, 48000),
+            format: stereo(),
             state: seed,
             amp,
         }
@@ -140,37 +149,31 @@ impl NoiseSource {
 }
 
 impl SampleSource for NoiseSource {
+    type Samples = stream::Iter<Self>;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
 
-    async fn next(&mut self) -> Option<f32> {
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
+    }
+}
+
+impl Iterator for NoiseSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
 
-impl SyncSampleSource for NoiseSource {
-    fn next_sync(&mut self) -> Option<f32> {
-        Some(self.step())
-    }
+fn stereo() -> AudioFormat {
+    AudioFormat::new(2, 48000)
 }
 
-struct SilenceSource(AudioFormat);
-
-impl SampleSource for SilenceSource {
-    fn format(&self) -> &AudioFormat {
-        &self.0
-    }
-
-    async fn next(&mut self) -> Option<f32> {
-        Some(0.0)
-    }
-}
-
-impl SyncSampleSource for SilenceSource {
-    fn next_sync(&mut self) -> Option<f32> {
-        Some(0.0)
-    }
+fn silence() -> impl SampleSource {
+    Sampled::new(stereo(), stream::repeat(0.0))
 }
 
 fn lcg_next(state: &mut u64) -> u64 {
@@ -208,7 +211,7 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
         "chirp" => VirtualNode::with_source("a", ChirpSource::new(48000, 0.4, 40 * 960)),
         "amspeech" => VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5)),
         "noise" => VirtualNode::with_source("a", NoiseSource::new(0.4, seed)),
-        "silence" => VirtualNode::with_source("a", SilenceSource(AudioFormat::new(2, 48000))),
+        "silence" => VirtualNode::with_source("a", silence()),
         _ => VirtualNode::with_amp("a", 440.0, 0.5),
     }
 }
@@ -216,7 +219,7 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
 fn make_pair(signal: &str, seed: u64) -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
     let mut a = make_sender(signal, seed);
-    let mut b = VirtualNode::with_source("b", SilenceSource(AudioFormat::new(2, 48000)));
+    let mut b = VirtualNode::with_source("b", silence());
     a.add_outbound("b");
     b.add_inbound("a");
     nodes.insert("a".to_string(), a);

@@ -8,7 +8,6 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::SlotId;
-use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::MetricsState;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
@@ -41,7 +40,7 @@ async fn sample_speaker(mixer: &Arc<Mutex<AppMixer>>, chunks: usize) -> (Vec<f32
         {
             let mut guard = mixer.lock().expect("mixer lock");
             for sample in buf.iter_mut() {
-                *sample = guard.next_sync().unwrap_or(0.0);
+                *sample = guard.next().unwrap_or(0.0);
             }
         }
         total_nanos += start.elapsed().as_nanos() as u64;
@@ -91,8 +90,12 @@ async fn connected_peers_exchange_audio() {
         .expect("connect timed out");
         let (session_a, session_b) = (session_a.expect("connect a"), session_b.expect("connect b"));
 
-        let hub_a = Arc::new(hub_from_source(SineSource::new_amp(48000, 440.0, 0.5)));
-        let hub_b = Arc::new(hub_from_source(SineSource::new_amp(48000, 880.0, 0.5)));
+        let hub_a = Arc::new(hub_from_source(
+            SineSource::new_amp(48000, 440.0, 0.5),
+        ));
+        let hub_b = Arc::new(hub_from_source(
+            SineSource::new_amp(48000, 880.0, 0.5),
+        ));
         let mixer_a: Arc<Mutex<AppMixer>> = Arc::new(Mutex::new(new_no_device_mixer()));
         let mixer_b: Arc<Mutex<AppMixer>> = Arc::new(Mutex::new(new_no_device_mixer()));
         let (slot_a, loudness_a) = subscribe_peer(&mixer_a);

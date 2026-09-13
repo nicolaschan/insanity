@@ -1,15 +1,15 @@
 #![allow(dead_code)]
+use futures_util::stream;
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::Mixer;
-use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
+use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::Gain;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::mixer::{AppMixer, MAX_VOLUME};
 use opus::{Channels, Decoder};
-use rubato_audio_source::RubatoResampler;
 
 pub struct SineSource {
     phase: f32,
@@ -45,29 +45,27 @@ impl SineSource {
 }
 
 impl SampleSource for SineSource {
+    type Samples = stream::Iter<Self>;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
 
-    async fn next(&mut self) -> Option<f32> {
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
+    }
+}
+
+impl Iterator for SineSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
 
-impl SyncSampleSource for SineSource {
-    fn next_sync(&mut self) -> Option<f32> {
-        Some(self.step())
-    }
-}
-
-pub fn hub_from_source<S>(source: S) -> AudioInputHub
-where
-    S: SampleSource + Send + Sync + 'static,
-{
-    let audio_config = AudioPipelineConfig::default();
-    let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-    let chunked = SampleChunker::new(resampled, audio_config.frames());
-    AudioInputHub::from_chunk_source(chunked, audio_config)
+pub fn hub_from_source(source: impl SampleSource) -> AudioInputHub {
+    AudioInputHub::new(source, AudioPipelineConfig::default())
 }
 
 pub fn new_no_device_mixer() -> AppMixer {

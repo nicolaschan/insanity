@@ -8,13 +8,14 @@ mod sine;
 mod unit_mixer;
 
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
+use futures_util::stream;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::AudioEncoder;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::mixer::Mixer;
-use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
+use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::Gain;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::codec::OpusEncoder;
@@ -60,17 +61,21 @@ impl ChirpSource {
 }
 
 impl SampleSource for ChirpSource {
+    type Samples = stream::Iter<Self>;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
 
-    async fn next(&mut self) -> Option<f32> {
-        Some(self.step())
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
-impl SyncSampleSource for ChirpSource {
-    fn next_sync(&mut self) -> Option<f32> {
+impl Iterator for ChirpSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
@@ -108,17 +113,21 @@ impl AmSpeechSource {
 }
 
 impl SampleSource for AmSpeechSource {
+    type Samples = stream::Iter<Self>;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
 
-    async fn next(&mut self) -> Option<f32> {
-        Some(self.step())
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
-impl SyncSampleSource for AmSpeechSource {
-    fn next_sync(&mut self) -> Option<f32> {
+impl Iterator for AmSpeechSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
@@ -187,7 +196,7 @@ async fn non48k_input_resample_loopback() {
         );
         let mut reference = SineSource::new_amp(48000, 440.0, 0.5);
         let expected: Vec<f32> = (0..20 * 960)
-            .map(|_| reference.next_sync().expect("sine"))
+            .map(|_| reference.next().expect("sine"))
             .collect();
         let spk_tail = tail(&nodes["b"].speaker_history, 20).to_vec();
         let xcorr = max_normalized_xcorr(&spk_tail, &expected, 960);

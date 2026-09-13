@@ -1,49 +1,49 @@
 use anyhow::anyhow;
 use cpal::{
-    Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
+    Device, FromSample, SampleFormat, SizedSample, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
+use futures_util::{Stream, stream};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::{AudioFormat, device::UNKNOWN_DEVICE_NAME};
 
 use super::config::get_input_config;
 
-pub struct CpalStreamReceiver {
-    _stream: send_safe::SendWrapperThread<Option<Stream>>,
-    receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
+pub struct CpalInput<S> {
+    pub name: String,
     format: AudioFormat,
-    name: String,
+    samples: S,
 }
 
-impl CpalStreamReceiver {
-    pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
+impl CpalInput<()> {
+    pub fn default(
+        audio_config: AudioPipelineConfig,
+    ) -> anyhow::Result<CpalInput<impl Stream<Item = f32> + Send + 'static>> {
         let device = cpal::default_host().default_input_device();
         match device {
             Some(device) => make_single_input(device, audio_config),
             None => Err(anyhow!("No default device available")),
         }
     }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
 }
 
-impl SampleSource for CpalStreamReceiver {
+impl<S: Stream<Item = f32> + Send + 'static> SampleSource for CpalInput<S> {
+    type Samples = S;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
 
-    async fn next(&mut self) -> Option<f32> {
-        self.receiver.recv().await
+    fn into_samples(self) -> S {
+        self.samples
     }
 }
 
 pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
-) -> Result<CpalStreamReceiver, anyhow::Error> {
+) -> anyhow::Result<CpalInput<impl Stream<Item = f32> + Send + 'static>> {
     let name = device_name(&device);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
@@ -72,11 +72,14 @@ pub fn make_single_input(
             "Failed to start input stream, falling back to silence"
         ));
     }
-    Ok(CpalStreamReceiver {
-        _stream: wrapper,
-        receiver: rx,
-        format,
+    let samples = stream::unfold((rx, wrapper), |(mut rx, wrapper)| async move {
+        let sample = rx.recv().await?;
+        Some((sample, (rx, wrapper)))
+    });
+    Ok(CpalInput {
         name,
+        format,
+        samples,
     })
 }
 
@@ -92,7 +95,7 @@ fn setup_input_stream(
     config: StreamConfig,
     device: &Device,
     sender: tokio::sync::mpsc::UnboundedSender<f32>,
-) -> anyhow::Result<Stream> {
+) -> anyhow::Result<cpal::Stream> {
     match sample_format {
         SampleFormat::I8 => run_input::<i8>(config, device, sender),
         SampleFormat::I16 => run_input::<i16>(config, device, sender),
@@ -112,7 +115,7 @@ fn run_input<T>(
     config: StreamConfig,
     device: &Device,
     sender: tokio::sync::mpsc::UnboundedSender<f32>,
-) -> anyhow::Result<Stream>
+) -> anyhow::Result<cpal::Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,
