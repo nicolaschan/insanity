@@ -17,11 +17,13 @@ pub fn volume_multiplier(volume: usize) -> f32 {
 }
 
 pub trait ChunkTransform: Send {
-    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk;
+    type OutputT;
+
+    fn transform(&mut self, chunk: AudioChunk) -> Self::OutputT;
 
     fn chain<N: ChunkTransform>(self, next: N) -> Link<Self, N>
     where
-        Self: Sized,
+        Self: Sized + ChunkTransform<OutputT = AudioChunk>,
     {
         Link {
             first: self,
@@ -35,14 +37,18 @@ pub struct Link<A: ChunkTransform, B: ChunkTransform> {
     second: B,
 }
 
-impl<A: ChunkTransform, B: ChunkTransform> ChunkTransform for Link<A, B> {
-    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+impl<A: ChunkTransform<OutputT = AudioChunk>, B: ChunkTransform> ChunkTransform for Link<A, B> {
+    type OutputT = B::OutputT;
+
+    fn transform(&mut self, chunk: AudioChunk) -> Self::OutputT {
         let chunk = self.first.transform(chunk);
         self.second.transform(chunk)
     }
 }
 
 impl ChunkTransform for () {
+    type OutputT = AudioChunk;
+
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         chunk
     }
@@ -84,6 +90,8 @@ impl Mute {
 }
 
 impl ChunkTransform for Mute {
+    type OutputT = AudioChunk;
+
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let mut chunk = chunk;
         if self.control.is_muted() {
@@ -132,6 +140,8 @@ impl Gain {
 }
 
 impl ChunkTransform for Gain {
+    type OutputT = AudioChunk;
+
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let volume = self.control.get();
         if volume == 100 {
@@ -163,6 +173,8 @@ impl Default for Clip {
 }
 
 impl ChunkTransform for Clip {
+    type OutputT = AudioChunk;
+
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let mut chunk = chunk;
         for sample in chunk.audio_data.iter_mut() {
@@ -222,6 +234,8 @@ impl<D: Denoiser> Denoise<D> {
 }
 
 impl<D: Denoiser> ChunkTransform for Denoise<D> {
+    type OutputT = AudioChunk;
+
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         match self.control.get() {
             DenoiseSelection::None => chunk,
@@ -264,6 +278,8 @@ impl MetricsReader {
 }
 
 impl ChunkTransform for MetricsReader {
+    type OutputT = AudioChunk;
+
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         self.state.loudness_bits.store(
             calculate_loudness(&chunk.audio_data).to_bits(),
@@ -345,6 +361,8 @@ impl ChannelMap {
 }
 
 impl ChunkTransform for ChannelMap {
+    type OutputT = AudioChunk;
+
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let dst = if self.cap_channels {
             chunk.format.channel_count.min(self.dst_channels)

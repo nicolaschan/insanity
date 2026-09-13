@@ -134,7 +134,7 @@ impl Conceal {
 pub struct InputSlot<D, T, R, FD>
 where
     D: AudioDecoder,
-    T: ChunkTransform,
+    T: ChunkTransform<OutputT = AudioChunk>,
     R: Resampler,
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
@@ -151,7 +151,7 @@ where
 impl<D, T, R, FD> InputSlot<D, T, R, FD>
 where
     D: AudioDecoder,
-    T: ChunkTransform,
+    T: ChunkTransform<OutputT = AudioChunk>,
     R: Resampler,
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
@@ -179,7 +179,7 @@ where
 impl<D, T, R, FD> InputSlot<D, T, R, FD>
 where
     D: AudioDecoder,
-    T: ChunkTransform,
+    T: ChunkTransform<OutputT = AudioChunk>,
     R: Resampler,
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
@@ -194,9 +194,9 @@ where
 pub struct Mixer<D, T, R, M, FD>
 where
     D: AudioDecoder,
-    T: ChunkTransform,
+    T: ChunkTransform<OutputT = AudioChunk>,
     R: Resampler,
-    M: ChunkTransform,
+    M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
     slots: HashMap<SlotId, InputSlot<D, T, R, FD>>,
@@ -215,9 +215,9 @@ where
 impl<D, T, R, M, FD> Mixer<D, T, R, M, FD>
 where
     D: AudioDecoder,
-    T: ChunkTransform,
+    T: ChunkTransform<OutputT = AudioChunk>,
     R: Resampler,
-    M: ChunkTransform,
+    M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
     pub fn new(out_format: AudioFormat, audio_config: AudioPipelineConfig, bus: M) -> Self {
@@ -341,9 +341,9 @@ where
 impl<D, T, R, M, FD> SampleSource for Mixer<D, T, R, M, FD>
 where
     D: AudioDecoder,
-    T: ChunkTransform,
+    T: ChunkTransform<OutputT = AudioChunk>,
     R: Resampler,
-    M: ChunkTransform,
+    M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
     fn format(&self) -> &AudioFormat {
@@ -358,9 +358,9 @@ where
 impl<D, T, R, M, FD> SyncSampleSource for Mixer<D, T, R, M, FD>
 where
     D: AudioDecoder,
-    T: ChunkTransform,
+    T: ChunkTransform<OutputT = AudioChunk>,
     R: Resampler,
-    M: ChunkTransform,
+    M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
     fn next_sync(&mut self) -> Option<f32> {
@@ -446,9 +446,9 @@ mod tests {
     fn push<D, T, R, M, FD>(mixer: &mut Mixer<D, T, R, M, FD>, id: SlotId, frame: EncodedChunk)
     where
         D: AudioDecoder,
-        T: ChunkTransform,
+        T: ChunkTransform<OutputT = AudioChunk>,
         R: Resampler,
-        M: ChunkTransform,
+        M: ChunkTransform<OutputT = AudioChunk>,
         FD: FnMut(&AudioFormat) -> Option<D> + Send,
     {
         mixer
@@ -460,9 +460,9 @@ mod tests {
     fn pull<D, T, R, M, FD>(mixer: &mut Mixer<D, T, R, M, FD>, count: usize) -> Vec<f32>
     where
         D: AudioDecoder,
-        T: ChunkTransform,
+        T: ChunkTransform<OutputT = AudioChunk>,
         R: Resampler,
-        M: ChunkTransform,
+        M: ChunkTransform<OutputT = AudioChunk>,
         FD: FnMut(&AudioFormat) -> Option<D> + Send,
     {
         let mut out = Vec::with_capacity(count);
