@@ -5,6 +5,7 @@ use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::Mixer;
+use insanity_core::audio::sample::AudioStream;
 use insanity_core::audio::transform::Gain;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::mixer::{AppMixer, MAX_VOLUME};
@@ -55,7 +56,8 @@ pub fn hub_from_source<S>(source: S, format: AudioFormat) -> AudioInputHub
 where
     S: Iterator<Item = f32> + Send + 'static,
 {
-    AudioInputHub::new(stream::iter(source), format, AudioPipelineConfig::default())
+    let source = AudioStream::new(format, stream::iter(source));
+    AudioInputHub::new(source, AudioPipelineConfig::default())
 }
 
 pub fn new_no_device_mixer() -> AppMixer {

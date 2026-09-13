@@ -3,22 +3,19 @@ use cpal::{
     Device, FromSample, SampleFormat, SizedSample, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use futures_core::Stream;
+use futures_util::stream;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::sample::AudioStream;
 use insanity_core::audio::{AudioFormat, device::UNKNOWN_DEVICE_NAME};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 use super::config::get_input_config;
 
-pub struct CpalStreamReceiver {
-    _stream: send_safe::SendWrapperThread<Option<cpal::Stream>>,
-    receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
-    format: AudioFormat,
-    name: String,
+pub struct CpalInput {
+    pub name: String,
+    pub samples: AudioStream,
 }
 
-impl CpalStreamReceiver {
+impl CpalInput {
     pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
         let device = cpal::default_host().default_input_device();
         match device {
@@ -26,28 +23,12 @@ impl CpalStreamReceiver {
             None => Err(anyhow!("No default device available")),
         }
     }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn format(&self) -> &AudioFormat {
-        &self.format
-    }
-}
-
-impl Stream for CpalStreamReceiver {
-    type Item = f32;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<f32>> {
-        self.get_mut().receiver.poll_recv(cx)
-    }
 }
 
 pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
-) -> Result<CpalStreamReceiver, anyhow::Error> {
+) -> anyhow::Result<CpalInput> {
     let name = device_name(&device);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
@@ -76,11 +57,13 @@ pub fn make_single_input(
             "Failed to start input stream, falling back to silence"
         ));
     }
-    Ok(CpalStreamReceiver {
-        _stream: wrapper,
-        receiver: rx,
-        format,
+    let samples = stream::unfold((rx, wrapper), |(mut rx, wrapper)| async move {
+        let sample = rx.recv().await?;
+        Some((sample, (rx, wrapper)))
+    });
+    Ok(CpalInput {
         name,
+        samples: AudioStream::new(format, samples),
     })
 }
 

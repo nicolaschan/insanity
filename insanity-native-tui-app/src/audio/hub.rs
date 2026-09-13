@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use futures_core::Stream;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::sample::AudioStream;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 use tokio::sync::broadcast;
 
 use super::codec::OpusEncoder;
-use rubato_audio_source::RubatoResampler;
+use rubato_audio_source::resample;
 
 struct Pacer {
     period: tokio::time::Duration,
@@ -47,18 +47,9 @@ pub struct AudioInputHub {
 }
 
 impl AudioInputHub {
-    pub fn new<S>(source: S, format: AudioFormat, audio_config: AudioPipelineConfig) -> Self
-    where
-        S: Stream<Item = f32> + Unpin + Send + 'static,
-    {
-        let resampled = RubatoResampler::new(
-            source,
-            format,
-            audio_config.sample_rate(),
-            audio_config.frames(),
-        );
-        let format = resampled.format().clone();
-        let chunks = SampleChunker::new(resampled, format, audio_config.frames());
+    pub fn new(source: AudioStream, audio_config: AudioPipelineConfig) -> Self {
+        let chunks = resample(source, audio_config.sample_rate(), audio_config.frames())
+            .into_chunks(audio_config.frames());
         Self::from_chunk_source(chunks, audio_config)
     }
 

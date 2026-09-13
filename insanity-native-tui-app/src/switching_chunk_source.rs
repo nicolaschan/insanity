@@ -1,22 +1,20 @@
-use futures_core::Stream;
+use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use insanity_core::audio::chunk::AudioChunk;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 pub struct SwitchingChunkSource<T> {
-    source: Option<T>,
+    chunks: BoxStream<'static, AudioChunk>,
     swap_tx: Sender<T>,
-    swap_rx: Receiver<T>,
 }
 
-impl<T> SwitchingChunkSource<T> {
+impl<T: Stream<Item = AudioChunk> + Unpin + Send + 'static> SwitchingChunkSource<T> {
     pub fn new(source: T) -> Self {
         let (swap_tx, swap_rx) = channel(1);
         Self {
-            source: Some(source),
+            chunks: switching(source, swap_rx).boxed(),
             swap_tx,
-            swap_rx,
         }
     }
 
@@ -25,26 +23,36 @@ impl<T> SwitchingChunkSource<T> {
     }
 }
 
-impl<T: Stream<Item = AudioChunk> + Unpin> Stream for SwitchingChunkSource<T> {
+fn switching<T: Stream<Item = AudioChunk> + Unpin + Send>(
+    source: T,
+    swap_rx: Receiver<T>,
+) -> impl Stream<Item = AudioChunk> + Send {
+    stream::unfold(
+        (Some(source), swap_rx),
+        |(mut source, mut swap_rx)| async move {
+            loop {
+                let Some(current) = source.as_mut() else {
+                    source = Some(swap_rx.recv().await?);
+                    continue;
+                };
+                tokio::select! {
+                    biased;
+                    swapped = swap_rx.recv() => source = Some(swapped?),
+                    chunk = current.next() => match chunk {
+                        Some(chunk) => return Some((chunk, (source, swap_rx))),
+                        None => source = None,
+                    },
+                }
+            }
+        },
+    )
+}
+
+impl<T> Stream for SwitchingChunkSource<T> {
     type Item = AudioChunk;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<AudioChunk>> {
-        let this = self.get_mut();
-        loop {
-            match this.swap_rx.poll_recv(cx) {
-                Poll::Ready(Some(swapped)) => this.source = Some(swapped),
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Pending => {}
-            }
-            let Some(source) = this.source.as_mut() else {
-                return Poll::Pending;
-            };
-            match Pin::new(source).poll_next(cx) {
-                Poll::Ready(Some(chunk)) => return Poll::Ready(Some(chunk)),
-                Poll::Ready(None) => this.source = None,
-                Poll::Pending => return Poll::Pending,
-            }
-        }
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<AudioChunk>> {
+        self.chunks.as_mut().poll_next(cx)
     }
 }
 
@@ -61,7 +69,7 @@ mod tests {
         channels: u16,
         value: f32,
         remaining: usize,
-    ) -> impl Stream<Item = AudioChunk> + Unpin {
+    ) -> impl Stream<Item = AudioChunk> + Unpin + Send {
         let chunk = AudioChunk::new(0, AudioFormat::new(channels, 48000), vec![value; 4]);
         stream::iter(std::iter::repeat_n(chunk, remaining))
     }
