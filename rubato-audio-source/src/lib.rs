@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use futures_util::{StreamExt, future, stream};
 use insanity_core::audio::{
     AudioFormat,
-    sample::{AudioStream, Resampler, SampleSource},
+    sample::{Resampler, SampleSource},
     sample_ops::{interleave_channels, split_channels},
 };
 use log::error;
@@ -20,25 +20,27 @@ fn sinc_params() -> rubato::InterpolationParameters {
 }
 
 pub fn resample(
-    source: impl SampleSource + Send + 'static,
+    source: impl SampleSource,
     target_rate: u32,
     chunk_size: usize,
-) -> AudioStream {
+) -> impl SampleSource {
     let source_format = source.format().clone();
     let out_format = AudioFormat::new(source_format.channel_count, target_rate);
     let channels = source_format.channel_count as usize;
     let Some(mut resampler) =
         build_sinc(source_format.sample_rate, channels, target_rate, chunk_size)
     else {
-        return AudioStream::new(out_format, source);
+        return source.with_format(out_format, |samples| samples.left_stream());
     };
     let block = chunk_size * channels;
-    let samples = source
-        .chunks(block)
-        .take_while(move |samples| future::ready(samples.len() == block))
-        .map(move |samples| stream::iter(resample_block(&mut resampler, samples, channels)))
-        .flatten();
-    AudioStream::new(out_format, samples)
+    source.with_format(out_format, move |samples| {
+        samples
+            .chunks(block)
+            .take_while(move |samples| future::ready(samples.len() == block))
+            .map(move |samples| stream::iter(resample_block(&mut resampler, samples, channels)))
+            .flatten()
+            .right_stream()
+    })
 }
 
 fn resample_block(
@@ -186,16 +188,16 @@ mod tests {
     use futures_util::{StreamExt, stream};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::AudioChunk;
-    use insanity_core::audio::sample::{AudioStream, Resampler, SampleSource};
+    use insanity_core::audio::sample::{Resampler, SampleSource, Sampled};
 
-    fn sine(sample_rate: u32, freq: f32) -> AudioStream {
+    fn sine(sample_rate: u32, freq: f32) -> impl SampleSource {
         let mut index = 0u64;
         let samples = stream::repeat_with(move || {
             let t = index as f32 / sample_rate as f32;
             index += 1;
             (2.0 * std::f32::consts::PI * freq * t).sin()
         });
-        AudioStream::new(AudioFormat::new(2, sample_rate), samples)
+        Sampled::new(AudioFormat::new(2, sample_rate), samples)
     }
 
     #[tokio::test]

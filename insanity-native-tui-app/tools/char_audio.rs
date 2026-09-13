@@ -8,7 +8,7 @@ mod sine;
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr};
 use futures_util::stream;
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::sample::AudioStream;
+use insanity_core::audio::sample::{SampleSource, Sampled};
 use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -54,9 +54,15 @@ impl ChirpSource {
     }
 }
 
-impl ChirpSource {
-    pub fn into_source(self) -> AudioStream {
-        AudioStream::new(self.format.clone(), stream::iter(self))
+impl SampleSource for ChirpSource {
+    type Samples = stream::Iter<Self>;
+
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
@@ -101,9 +107,15 @@ impl AmSpeechSource {
     }
 }
 
-impl AmSpeechSource {
-    pub fn into_source(self) -> AudioStream {
-        AudioStream::new(self.format.clone(), stream::iter(self))
+impl SampleSource for AmSpeechSource {
+    type Samples = stream::Iter<Self>;
+
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
@@ -136,9 +148,15 @@ impl NoiseSource {
     }
 }
 
-impl NoiseSource {
-    pub fn into_source(self) -> AudioStream {
-        AudioStream::new(self.format.clone(), stream::iter(self))
+impl SampleSource for NoiseSource {
+    type Samples = stream::Iter<Self>;
+
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
@@ -154,8 +172,8 @@ fn stereo() -> AudioFormat {
     AudioFormat::new(2, 48000)
 }
 
-fn silence() -> AudioStream {
-    AudioStream::new(stereo(), stream::repeat(0.0))
+fn silence() -> impl SampleSource {
+    Sampled::new(stereo(), stream::repeat(0.0))
 }
 
 fn lcg_next(state: &mut u64) -> u64 {
@@ -190,11 +208,9 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
         "sine440_05" => VirtualNode::new("a", 440.0),
         "sine880_05" => VirtualNode::new("a", 880.0),
         "sine440_025" => VirtualNode::with_amp("a", 440.0, 0.25),
-        "chirp" => {
-            VirtualNode::with_source("a", ChirpSource::new(48000, 0.4, 40 * 960).into_source())
-        }
-        "amspeech" => VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5).into_source()),
-        "noise" => VirtualNode::with_source("a", NoiseSource::new(0.4, seed).into_source()),
+        "chirp" => VirtualNode::with_source("a", ChirpSource::new(48000, 0.4, 40 * 960)),
+        "amspeech" => VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5)),
+        "noise" => VirtualNode::with_source("a", NoiseSource::new(0.4, seed)),
         "silence" => VirtualNode::with_source("a", silence()),
         _ => VirtualNode::with_amp("a", 440.0, 0.5),
     }

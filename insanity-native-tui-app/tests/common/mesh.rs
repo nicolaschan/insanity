@@ -54,11 +54,11 @@ impl VirtualNode {
         let audio_config = AudioPipelineConfig::default();
         Self::with_source(
             _name,
-            crate::sine::SineSource::new_amp(audio_config.sample_rate(), freq, amp).into_source(),
+            crate::sine::SineSource::new_amp(audio_config.sample_rate(), freq, amp),
         )
     }
 
-    pub fn with_source(_name: &str, source: impl SampleSource + Send + 'static) -> Self {
+    pub fn with_source(_name: &str, source: impl SampleSource) -> Self {
         let audio_config = AudioPipelineConfig::default();
         let format = source.format().clone();
         let hub = Arc::new(hub_from_source(source));

@@ -91,10 +91,10 @@ async fn connected_peers_exchange_audio() {
         let (session_a, session_b) = (session_a.expect("connect a"), session_b.expect("connect b"));
 
         let hub_a = Arc::new(hub_from_source(
-            SineSource::new_amp(48000, 440.0, 0.5).into_source(),
+            SineSource::new_amp(48000, 440.0, 0.5),
         ));
         let hub_b = Arc::new(hub_from_source(
-            SineSource::new_amp(48000, 880.0, 0.5).into_source(),
+            SineSource::new_amp(48000, 880.0, 0.5),
         ));
         let mixer_a: Arc<Mutex<AppMixer>> = Arc::new(Mutex::new(new_no_device_mixer()));
         let mixer_b: Arc<Mutex<AppMixer>> = Arc::new(Mutex::new(new_no_device_mixer()));

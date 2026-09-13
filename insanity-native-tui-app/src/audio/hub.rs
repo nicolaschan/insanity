@@ -47,10 +47,7 @@ pub struct AudioInputHub {
 }
 
 impl AudioInputHub {
-    pub fn new(
-        source: impl SampleSource + Send + 'static,
-        audio_config: AudioPipelineConfig,
-    ) -> Self {
+    pub fn new(source: impl SampleSource, audio_config: AudioPipelineConfig) -> Self {
         let chunks = resample(source, audio_config.sample_rate(), audio_config.frames())
             .into_chunks(audio_config.frames());
         Self::from_chunk_source(chunks, audio_config)

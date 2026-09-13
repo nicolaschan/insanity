@@ -22,12 +22,12 @@ impl AudioChunk {
 mod tests {
     use super::AudioChunk;
     use crate::audio::AudioFormat;
-    use crate::audio::sample::{AudioStream, SampleSource};
+    use crate::audio::sample::{SampleSource, Sampled};
     use futures_util::future::FutureExt;
     use futures_util::stream::{self, BoxStream, StreamExt};
 
     fn chunker(samples: Vec<f32>, channels: u16, frames: usize) -> BoxStream<'static, AudioChunk> {
-        AudioStream::new(AudioFormat::new(channels, 44100), stream::iter(samples))
+        Sampled::new(AudioFormat::new(channels, 44100), stream::iter(samples))
             .into_chunks(frames)
             .boxed()
     }

@@ -2,7 +2,7 @@ use futures_util::{StreamExt, stream};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::jitter::JitterBuffer;
-use insanity_core::audio::sample::AudioStream;
+use insanity_core::audio::sample::{SampleSource, Sampled};
 use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::loudness::calculate_loudness;
 use rubato_audio_source::resample;
@@ -67,9 +67,11 @@ fn volume_curve() {
 #[test]
 fn resampler_passthrough() {
     let data: Vec<f32> = (0..960).map(|i| i as f32 / 960.0).collect();
-    let src = AudioStream::new(AudioFormat::new(2, 48000), stream::iter(data.clone()));
+    let src = Sampled::new(AudioFormat::new(2, 48000), stream::iter(data.clone()));
     let audio_config = AudioPipelineConfig::default();
-    let mut res = resample(src, 48000, audio_config.frames());
+    let mut res = resample(src, 48000, audio_config.frames())
+        .into_samples()
+        .boxed();
     // passthrough should be identical
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

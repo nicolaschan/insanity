@@ -3,20 +3,23 @@ use cpal::{
     Device, FromSample, SampleFormat, SizedSample, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use futures_util::stream;
+use futures_util::{Stream, stream};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::sample::AudioStream;
+use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::{AudioFormat, device::UNKNOWN_DEVICE_NAME};
 
 use super::config::get_input_config;
 
-pub struct CpalInput {
+pub struct CpalInput<S> {
     pub name: String,
-    pub samples: AudioStream,
+    format: AudioFormat,
+    samples: S,
 }
 
-impl CpalInput {
-    pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
+impl CpalInput<()> {
+    pub fn default(
+        audio_config: AudioPipelineConfig,
+    ) -> anyhow::Result<CpalInput<impl Stream<Item = f32> + Send + 'static>> {
         let device = cpal::default_host().default_input_device();
         match device {
             Some(device) => make_single_input(device, audio_config),
@@ -25,10 +28,22 @@ impl CpalInput {
     }
 }
 
+impl<S: Stream<Item = f32> + Send + 'static> SampleSource for CpalInput<S> {
+    type Samples = S;
+
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
+    fn into_samples(self) -> S {
+        self.samples
+    }
+}
+
 pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
-) -> anyhow::Result<CpalInput> {
+) -> anyhow::Result<CpalInput<impl Stream<Item = f32> + Send + 'static>> {
     let name = device_name(&device);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
@@ -63,7 +78,8 @@ pub fn make_single_input(
     });
     Ok(CpalInput {
         name,
-        samples: AudioStream::new(format, samples),
+        format,
+        samples,
     })
 }
 

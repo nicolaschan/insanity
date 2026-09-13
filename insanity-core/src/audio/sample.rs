@@ -1,65 +1,72 @@
 use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
 use futures_core::Stream;
-use futures_util::stream::BoxStream;
-use futures_util::{StreamExt, stream};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use futures_util::{StreamExt, future, stream};
 
-pub trait SampleSource: Stream<Item = f32> {
+pub trait SampleSource {
+    type Samples: Stream<Item = f32> + Send + 'static;
+
     fn format(&self) -> &AudioFormat;
 
-    fn into_chunks(self, frames: usize) -> impl Stream<Item = AudioChunk> + Send
+    fn into_samples(self) -> Self::Samples;
+
+    fn map_samples<S>(self, f: impl FnOnce(Self::Samples) -> S) -> Sampled<S>
     where
-        Self: Sized + Send + 'static,
+        Self: Sized,
+        S: Stream<Item = f32> + Send + 'static,
+    {
+        let format = self.format().clone();
+        self.with_format(format, f)
+    }
+
+    fn with_format<S>(self, format: AudioFormat, f: impl FnOnce(Self::Samples) -> S) -> Sampled<S>
+    where
+        Self: Sized,
+        S: Stream<Item = f32> + Send + 'static,
+    {
+        Sampled::new(format, f(self.into_samples()))
+    }
+
+    fn into_chunks(self, frames: usize) -> impl Stream<Item = AudioChunk> + Send + 'static
+    where
+        Self: Sized,
     {
         let format = self.format().clone();
         let len = frames * format.channel_count as usize;
-        stream::unfold(
-            (Box::pin(self), 0u128),
-            move |(mut samples, sequence_number)| {
-                let format = format.clone();
-                async move {
-                    if len == 0 {
-                        return None;
-                    }
-                    let mut audio_data = Vec::with_capacity(len);
-                    for _ in 0..len {
-                        audio_data.push(samples.next().await?);
-                    }
-                    let chunk = AudioChunk::new(sequence_number, format, audio_data);
-                    Some((chunk, (samples, sequence_number + 1)))
-                }
-            },
-        )
-    }
-}
-
-pub struct AudioStream {
-    format: AudioFormat,
-    samples: BoxStream<'static, f32>,
-}
-
-impl AudioStream {
-    pub fn new(format: AudioFormat, samples: impl Stream<Item = f32> + Send + 'static) -> Self {
-        AudioStream {
-            format,
-            samples: Box::pin(samples),
+        if len == 0 {
+            return stream::empty().left_stream();
         }
+        self.into_samples()
+            .chunks(len)
+            .take_while(move |audio_data| future::ready(audio_data.len() == len))
+            .enumerate()
+            .map(move |(sequence_number, audio_data)| {
+                AudioChunk::new(sequence_number as u128, format.clone(), audio_data)
+            })
+            .right_stream()
     }
 }
 
-impl SampleSource for AudioStream {
+pub struct Sampled<S> {
+    format: AudioFormat,
+    samples: S,
+}
+
+impl<S> Sampled<S> {
+    pub fn new(format: AudioFormat, samples: S) -> Self {
+        Sampled { format, samples }
+    }
+}
+
+impl<S: Stream<Item = f32> + Send + 'static> SampleSource for Sampled<S> {
+    type Samples = S;
+
     fn format(&self) -> &AudioFormat {
         &self.format
     }
-}
 
-impl Stream for AudioStream {
-    type Item = f32;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<f32>> {
-        self.samples.as_mut().poll_next(cx)
+    fn into_samples(self) -> S {
+        self.samples
     }
 }
 

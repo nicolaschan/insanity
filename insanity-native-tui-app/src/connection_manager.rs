@@ -284,8 +284,9 @@ fn manage_peers(
 
     // single input hub and single output mixer
     let audio_config = AudioPipelineConfig::default();
-    let CpalInput { name, samples } = CpalInput::default(audio_config).unwrap();
-    let hub = Arc::new(AudioInputHub::new(samples, audio_config));
+    let input = CpalInput::default(audio_config).unwrap();
+    let name = input.name.clone();
+    let hub = Arc::new(AudioInputHub::new(input, audio_config));
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
             .send(AppEvent::SetInputDeviceName(name))

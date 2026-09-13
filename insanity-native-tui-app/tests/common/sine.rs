@@ -5,7 +5,7 @@ use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::Mixer;
-use insanity_core::audio::sample::{AudioStream, SampleSource};
+use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::Gain;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::mixer::{AppMixer, MAX_VOLUME};
@@ -44,9 +44,15 @@ impl SineSource {
     }
 }
 
-impl SineSource {
-    pub fn into_source(self) -> AudioStream {
-        AudioStream::new(self.format.clone(), stream::iter(self))
+impl SampleSource for SineSource {
+    type Samples = stream::Iter<Self>;
+
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
+    fn into_samples(self) -> Self::Samples {
+        stream::iter(self)
     }
 }
 
@@ -58,7 +64,7 @@ impl Iterator for SineSource {
     }
 }
 
-pub fn hub_from_source(source: impl SampleSource + Send + 'static) -> AudioInputHub {
+pub fn hub_from_source(source: impl SampleSource) -> AudioInputHub {
     AudioInputHub::new(source, AudioPipelineConfig::default())
 }
 
