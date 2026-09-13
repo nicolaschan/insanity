@@ -9,6 +9,3 @@ bon = "2.1.1"
 
 [build-dependencies]
 built = { version = "0.7.4", features = ["chrono", "git2"] }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
