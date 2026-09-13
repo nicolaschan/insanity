@@ -288,8 +288,9 @@ impl Resampler for StreamResampler {
 #[cfg(test)]
 mod tests {
     use super::{RubatoResampler, StreamResampler};
+    use futures_util::StreamExt;
     use insanity_core::audio::AudioFormat;
-    use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
+    use insanity_core::audio::chunk::{AudioChunk, chunk_samples};
     use insanity_core::audio::sample::{Resampler, SampleSource};
 
     struct Sine {
@@ -322,13 +323,10 @@ mod tests {
             480,
         );
         let target = AudioFormat::new(2, 48000);
-        let mut chunker = SampleChunker::new(resampled, 480);
+        let chunks: Vec<AudioChunk> = chunk_samples(resampled, 480).take(20).collect().await;
+        assert_eq!(chunks.len(), 20);
         let mut total = 0usize;
-        for _ in 0..20 {
-            let chunk = chunker
-                .next_chunk()
-                .await
-                .expect("resampled stream is infinite");
+        for chunk in chunks {
             assert_eq!(chunk.format, target);
             assert_eq!(chunk.audio_data.len(), 960);
             total += chunk.audio_data.len();

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use futures_util::{Stream, StreamExt};
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{ChunkSource, SampleChunker};
+use insanity_core::audio::chunk::{AudioChunk, ChunkStreamExt, chunk_samples};
 use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
@@ -53,36 +54,36 @@ impl AudioInputHub {
         let resampled =
             RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
         let transform = ChannelMap::capped(audio_config.channels());
-        let source = SampleChunker::new(resampled, audio_config.frames()).transform(transform);
+        let source = chunk_samples(resampled, audio_config.frames()).transform(transform);
         Self::spawn_chunk_source(source, audio_config)
     }
 
     pub fn from_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
     where
-        R: ChunkSource + Send + 'static,
+        R: Stream<Item = AudioChunk> + Send + 'static,
     {
         Self::spawn_chunk_source(source, audio_config)
     }
 
     pub(crate) fn spawn_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
     where
-        R: ChunkSource + Send + 'static,
+        R: Stream<Item = AudioChunk> + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
         let transform = mute.chain(ChannelMap::capped(audio_config.channels()));
-        let mut source = source.transform(transform);
-        let mut encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
+        let encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
+        let pacer = Pacer::new(audio_config.chunk_period());
         let (hub, tx) = Self::with_channel(mute_control);
-        tokio::spawn(async move {
-            let mut pacer = Pacer::new(audio_config.chunk_period());
-            while let Some(chunk) = source.next_chunk().await {
+        tokio::spawn(source.transform(transform).fold(
+            (pacer, encoder, tx),
+            |(mut pacer, mut encoder, tx), chunk| async move {
                 pacer.pace().await;
-                let Some(frame) = encoder.encode_chunk(chunk) else {
-                    continue;
-                };
-                let _ = tx.send(frame);
-            }
-        });
+                if let Some(frame) = encoder.encode_chunk(chunk) {
+                    let _ = tx.send(frame);
+                }
+                (pacer, encoder, tx)
+            },
+        ));
         hub
     }
 
