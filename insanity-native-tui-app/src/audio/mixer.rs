@@ -6,7 +6,7 @@ use std::sync::{
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::mixer::{Mixer, MixerInput, MixerMetrics, SlotId};
+use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{
     ChunkTransform, Denoise, DenoiseControl, Gain, GainControl, Link, MetricsReader, MetricsState,
@@ -127,29 +127,6 @@ impl MixerClient {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx.send(MixerOp::Snapshot(reply_tx)).await.ok()?;
         reply_rx.await.ok()
-    }
-}
-
-impl MixerInput<OpusDecoder, PeerChain, StreamResampler, OpusRebuild> for MixerClient {
-    fn push_frame(&mut self, slot: SlotId, frame: EncodedChunk) -> bool {
-        MixerClient::push_frame(self, slot, frame)
-    }
-
-    async fn subscribe(
-        &mut self,
-        transform: PeerChain,
-        rebuild: OpusRebuild,
-        resampler: StreamResampler,
-    ) -> Option<SlotId> {
-        MixerClient::subscribe(self, transform, rebuild, resampler).await
-    }
-
-    async fn unsubscribe(&mut self, slot: SlotId) {
-        MixerClient::unsubscribe(self, slot).await;
-    }
-
-    async fn snapshot(&self) -> Option<(MixerMetrics, usize)> {
-        MixerClient::snapshot(self).await
     }
 }
 
