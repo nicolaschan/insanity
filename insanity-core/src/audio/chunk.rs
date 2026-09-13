@@ -1,7 +1,4 @@
 use crate::audio::AudioFormat;
-use crate::audio::sample::AudioStream;
-use futures_core::Stream;
-use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -21,32 +18,11 @@ impl AudioChunk {
     }
 }
 
-impl AudioStream {
-    pub fn into_chunks(self, frames: usize) -> impl Stream<Item = AudioChunk> + Send {
-        let format = self.format().clone();
-        let len = frames * format.channel_count as usize;
-        stream::unfold((self, 0u128), move |(mut samples, sequence_number)| {
-            let format = format.clone();
-            async move {
-                if len == 0 {
-                    return None;
-                }
-                let mut audio_data = Vec::with_capacity(len);
-                for _ in 0..len {
-                    audio_data.push(samples.next().await?);
-                }
-                let chunk = AudioChunk::new(sequence_number, format, audio_data);
-                Some((chunk, (samples, sequence_number + 1)))
-            }
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::AudioChunk;
     use crate::audio::AudioFormat;
-    use crate::audio::sample::AudioStream;
+    use crate::audio::sample::{AudioStream, SampleSource};
     use futures_util::future::FutureExt;
     use futures_util::stream::{self, BoxStream, StreamExt};
 

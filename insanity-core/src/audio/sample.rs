@@ -1,8 +1,39 @@
 use crate::audio::AudioFormat;
+use crate::audio::chunk::AudioChunk;
 use futures_core::Stream;
 use futures_util::stream::BoxStream;
+use futures_util::{StreamExt, stream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+pub trait SampleSource: Stream<Item = f32> {
+    fn format(&self) -> &AudioFormat;
+
+    fn into_chunks(self, frames: usize) -> impl Stream<Item = AudioChunk> + Send
+    where
+        Self: Sized + Send + 'static,
+    {
+        let format = self.format().clone();
+        let len = frames * format.channel_count as usize;
+        stream::unfold(
+            (Box::pin(self), 0u128),
+            move |(mut samples, sequence_number)| {
+                let format = format.clone();
+                async move {
+                    if len == 0 {
+                        return None;
+                    }
+                    let mut audio_data = Vec::with_capacity(len);
+                    for _ in 0..len {
+                        audio_data.push(samples.next().await?);
+                    }
+                    let chunk = AudioChunk::new(sequence_number, format, audio_data);
+                    Some((chunk, (samples, sequence_number + 1)))
+                }
+            },
+        )
+    }
+}
 
 pub struct AudioStream {
     format: AudioFormat,
@@ -16,8 +47,10 @@ impl AudioStream {
             samples: Box::pin(samples),
         }
     }
+}
 
-    pub fn format(&self) -> &AudioFormat {
+impl SampleSource for AudioStream {
+    fn format(&self) -> &AudioFormat {
         &self.format
     }
 }

@@ -5,7 +5,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::sample::AudioStream;
+use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 use tokio::sync::broadcast;
 
@@ -47,7 +47,10 @@ pub struct AudioInputHub {
 }
 
 impl AudioInputHub {
-    pub fn new(source: AudioStream, audio_config: AudioPipelineConfig) -> Self {
+    pub fn new(
+        source: impl SampleSource + Send + 'static,
+        audio_config: AudioPipelineConfig,
+    ) -> Self {
         let chunks = resample(source, audio_config.sample_rate(), audio_config.frames())
             .into_chunks(audio_config.frames());
         Self::from_chunk_source(chunks, audio_config)

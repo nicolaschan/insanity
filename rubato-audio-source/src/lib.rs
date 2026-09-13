@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use futures_util::{StreamExt, future, stream};
 use insanity_core::audio::{
     AudioFormat,
-    sample::{AudioStream, Resampler},
+    sample::{AudioStream, Resampler, SampleSource},
     sample_ops::{interleave_channels, split_channels},
 };
 use log::error;
@@ -19,7 +19,11 @@ fn sinc_params() -> rubato::InterpolationParameters {
     }
 }
 
-pub fn resample(source: AudioStream, target_rate: u32, chunk_size: usize) -> AudioStream {
+pub fn resample(
+    source: impl SampleSource + Send + 'static,
+    target_rate: u32,
+    chunk_size: usize,
+) -> AudioStream {
     let source_format = source.format().clone();
     let out_format = AudioFormat::new(source_format.channel_count, target_rate);
     let channels = source_format.channel_count as usize;
@@ -182,7 +186,7 @@ mod tests {
     use futures_util::{StreamExt, stream};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::AudioChunk;
-    use insanity_core::audio::sample::{AudioStream, Resampler};
+    use insanity_core::audio::sample::{AudioStream, Resampler, SampleSource};
 
     fn sine(sample_rate: u32, freq: f32) -> AudioStream {
         let mut index = 0u64;
