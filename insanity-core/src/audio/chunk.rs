@@ -1,5 +1,7 @@
+use crate::audio::AudioFormat;
 use crate::audio::sample::SampleSource;
-use crate::audio::{AudioFormat, transform::ChunkTransform};
+use futures_core::Stream;
+use futures_util::stream;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -19,20 +21,6 @@ impl AudioChunk {
     }
 }
 
-pub trait ChunkSource: Sized {
-    fn next_chunk(&mut self) -> impl Future<Output = Option<AudioChunk>> + Send;
-
-    fn transform<ChunkTransformT: ChunkTransform>(
-        self,
-        transform: ChunkTransformT,
-    ) -> TransformedChunkSource<Self, ChunkTransformT> {
-        TransformedChunkSource {
-            source: self,
-            transform,
-        }
-    }
-}
-
 pub struct SampleChunker<S: SampleSource + Send> {
     source: S,
     frames: usize,
@@ -47,9 +35,17 @@ impl<S: SampleSource + Send> SampleChunker<S> {
             next_sequence: 0,
         }
     }
-}
 
-impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
+    pub fn into_stream(self) -> impl Stream<Item = AudioChunk> + Send
+    where
+        S: 'static,
+    {
+        stream::unfold(self, |mut chunker| async move {
+            let chunk = chunker.next_chunk().await?;
+            Some((chunk, chunker))
+        })
+    }
+
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         let channels = self.source.format().channel_count as usize;
         if channels == 0 {
@@ -70,28 +66,12 @@ impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
     }
 }
 
-pub struct TransformedChunkSource<ChunkSourceT: ChunkSource, ChunkTransformT: ChunkTransform> {
-    source: ChunkSourceT,
-    transform: ChunkTransformT,
-}
-
-impl<ChunkSourceT: ChunkSource + Send, ChunkTransformT: ChunkTransform> ChunkSource
-    for TransformedChunkSource<ChunkSourceT, ChunkTransformT>
-{
-    async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        match self.source.next_chunk().await {
-            Some(chunk) => Some(self.transform.transform(chunk)),
-            None => None,
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
-    use super::{ChunkSource, SampleChunker};
+    use super::SampleChunker;
     use crate::audio::AudioFormat;
     use crate::audio::sample::SampleSource;
-    use crate::audio::transform::Mute;
+    use futures_util::StreamExt;
     use std::collections::VecDeque;
     use std::future::Future;
     use std::pin::pin;
@@ -172,15 +152,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn transformed_source_applies_transform_and_keeps_sequence() {
-        let (mute, control) = Mute::shared(true);
-        let mut source = SampleChunker::new(scripted(vec![0.5; 8], 2), 2).transform(mute);
-        let muted = block_on(source.next_chunk()).expect("chunk");
-        assert_eq!(muted.sequence_number, 0);
-        assert_eq!(muted.audio_data, vec![0.0; 4]);
-        control.set(false);
-        let live = block_on(source.next_chunk()).expect("chunk");
-        assert_eq!(live.sequence_number, 1);
-        assert_eq!(live.audio_data, vec![0.5; 4]);
+    fn into_stream_numbers_chunks_and_ends() {
+        let mut chunks = Box::pin(SampleChunker::new(scripted(vec![0.5; 8], 2), 2).into_stream());
+        let first = block_on(chunks.next()).expect("chunk");
+        assert_eq!(first.sequence_number, 0);
+        assert_eq!(first.audio_data, vec![0.5; 4]);
+        let second = block_on(chunks.next()).expect("chunk");
+        assert_eq!(second.sequence_number, 1);
+        assert!(block_on(chunks.next()).is_none());
     }
 }

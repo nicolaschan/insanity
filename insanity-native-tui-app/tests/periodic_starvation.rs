@@ -4,8 +4,9 @@ mod audio_math;
 mod unit_mixer;
 
 use audio_math::count_dips;
+use futures_util::{Stream, stream};
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
@@ -90,21 +91,22 @@ impl BurstySource {
     }
 }
 
-impl ChunkSource for BurstySource {
-    async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        if self.seq.is_multiple_of(4) && self.seq != 0 {
-            tokio::time::sleep(Duration::from_millis(40)).await;
-        }
-        Some(self.chunk())
-    }
+fn bursty_source() -> impl Stream<Item = AudioChunk> + Send {
+    stream::unfold(
+        BurstySource { seq: 0, phase: 0.0 },
+        |mut source| async move {
+            if source.seq.is_multiple_of(4) && source.seq != 0 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            let chunk = source.chunk();
+            Some((chunk, source))
+        },
+    )
 }
 
 #[tokio::test]
 async fn bursty_source_is_paced_to_10ms() {
-    let hub = AudioInputHub::from_chunk_source(
-        BurstySource { seq: 0, phase: 0.0 },
-        AudioPipelineConfig::default(),
-    );
+    let hub = AudioInputHub::from_chunk_source(bursty_source(), AudioPipelineConfig::default());
     let mut rx = hub.subscribe();
     let mut times = Vec::new();
     for _ in 0..12 {

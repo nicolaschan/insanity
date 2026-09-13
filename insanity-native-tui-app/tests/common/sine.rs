@@ -66,7 +66,7 @@ where
 {
     let audio_config = AudioPipelineConfig::default();
     let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-    let chunked = SampleChunker::new(resampled, audio_config.frames());
+    let chunked = SampleChunker::new(resampled, audio_config.frames()).into_stream();
     AudioInputHub::from_chunk_source(chunked, audio_config)
 }
 

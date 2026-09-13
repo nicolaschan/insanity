@@ -10,3 +10,4 @@ rubato = "0.10"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+futures-util = "0.3"
