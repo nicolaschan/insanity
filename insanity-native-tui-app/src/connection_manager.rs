@@ -19,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     audio::{
         config::AUDIO_CALLBACK_FRAMES,
+        cpal_stream_receiver::CpalStreamReceiver,
         hub::AudioInputHub,
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, start_output},
@@ -280,14 +281,18 @@ fn manage_peers(
 ) -> (mpsc::UnboundedSender<AugmentedInfo>, AudioOutput) {
     // Channel for the manage_peers task to receive updated peers info.
     let (conn_info_tx, mut conn_info_rx) = mpsc::unbounded_channel::<AugmentedInfo>();
+
     // single input hub and single output mixer
     let audio_config = AudioPipelineConfig::default();
-    let hub = Arc::new(AudioInputHub::new(audio_config));
+    let source = CpalStreamReceiver::default(audio_config).unwrap();
+    let source_name = source.name().to_owned();
+    let hub = Arc::new(AudioInputHub::new(source, audio_config));
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
-            .send(AppEvent::SetInputDeviceName(hub.name().into()))
+            .send(AppEvent::SetInputDeviceName(source_name))
             .expect("could not set input device name");
     }
+
     let output = start_output(audio_config);
     let audio = SharedAudio {
         hub: hub.clone(),

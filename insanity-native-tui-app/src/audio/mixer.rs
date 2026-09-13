@@ -7,7 +7,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
-use insanity_core::audio::sample::SyncSampleSource;
+use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::{
     ChunkTransform, Denoise, DenoiseControl, Gain, GainControl, Link, MetricsReader, MetricsState,
 };
@@ -186,7 +186,7 @@ pub(crate) async fn run_mixer_owner(
         for op in batch.drain(..) {
             match op {
                 MixerOp::Push { slot, chunk } => {
-                    mixer.push_to_slot(slot, chunk);
+                    mixer.push_to_slot(slot, chunk).await;
                 }
                 MixerOp::Subscribe {
                     transform,
@@ -213,7 +213,9 @@ pub(crate) async fn run_mixer_owner(
             if ring.slots() < block_samples {
                 break;
             }
-            block.extend((0..block_samples).map(|_| mixer.next_sync().unwrap_or(0.0)));
+            for _ in 0..block_samples {
+                block.push(mixer.next().await.unwrap_or(0.0));
+            }
             let mut overruns = 0;
             for sample in block.drain(..) {
                 if ring.push(sample).is_err() {

@@ -70,13 +70,27 @@ impl<
         if chunk.format.channel_count == 0 {
             return CaptureOutput::EndOfStream;
         }
-        let Some(chunk) = self.transform.transform(chunk) else {
-            return CaptureOutput::Skipped;
-        };
+        let chunk = self.transform.transform(chunk).await;
         match self.encoder.encode_chunk(chunk) {
             Some(frame) => CaptureOutput::Encoded(frame),
             None => CaptureOutput::Skipped,
         }
+    }
+}
+
+impl<
+    R: SampleSource + Send,
+    T: ChunkTransform,
+    E: AudioEncoder + Send,
+    F: FnMut(&AudioFormat) -> Option<E> + Send,
+> ChunkSource for Capture<R, T, E, F>
+{
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        let chunk = self.chunker.next_chunk().await?;
+        if chunk.format.channel_count == 0 {
+            return None;
+        }
+        Some(self.transform.transform(chunk).await)
     }
 }
 
@@ -156,17 +170,18 @@ mod tests {
     }
 
     #[test]
-    fn muted_chunks_skip_but_consume_sequence() {
+    fn muted_chunks_encode_silence_and_advance_sequence() {
         let format = AudioFormat::new(2, 48000);
         let (mute, control) = Mute::shared(false);
-        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 8]), format), mute, |_| {
+        let mut cap = capture(Scripted(VecDeque::from(vec![0.5; 8]), format), mute, |_| {
             Some(TagEncoder)
         });
         control.set(true);
-        assert!(matches!(
-            block_on(cap.next_output()),
-            CaptureOutput::Skipped
-        ));
+        let frame = match block_on(cap.next_output()) {
+            CaptureOutput::Encoded(frame) => frame,
+            _ => panic!("expected encoded while muted"),
+        };
+        assert_eq!(frame.sequence_number, 0);
         control.set(false);
         let frame = match block_on(cap.next_output()) {
             CaptureOutput::Encoded(frame) => frame,
@@ -239,8 +254,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn tracks_format_switches_with_continuous_sequence() {
+    #[tokio::test]
+    async fn tracks_format_switches_with_continuous_sequence() {
         let mono = AudioFormat::new(1, 48000);
         let stereo = AudioFormat::new(2, 48000);
         let rebuilds = AtomicUsize::new(0);
@@ -263,9 +278,7 @@ mod tests {
         let mut formats = Vec::new();
         let mut sequences = Vec::new();
         while let Some(input) = block_on(chunks.next_chunk()) {
-            let Some(converted) = transform.transform(input) else {
-                panic!("expected converted");
-            };
+            let converted = transform.transform(input).await;
             match encoder.encode_chunk(converted) {
                 Some(frame) => {
                     formats.push(frame.format.clone());

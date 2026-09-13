@@ -2272,6 +2272,7 @@ dependencies = [
  "bon",
  "built",
  "serde",
+ "tokio",
 ]
 
 [[package]]

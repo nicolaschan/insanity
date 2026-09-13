@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
 use crate::audio::codec::{AudioDecoder, EncodedChunk, FormatCache};
-use crate::audio::sample::{Resampler, SampleSource, SyncSampleSource};
+use crate::audio::sample::{Resampler, SampleSource};
 use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, JitterStage};
 
 use crate::audio::config::AudioPipelineConfig;
@@ -155,7 +155,7 @@ where
     R: Resampler,
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
-    fn push_frame(&mut self, frame: EncodedChunk) {
+    async fn push_frame(&mut self, frame: EncodedChunk) {
         if self.decoder.format() != Some(&frame.format) {
             self.jitter.reset();
             self.resampler.reset();
@@ -170,12 +170,8 @@ where
         let Some(decoded) = self.decoder.decode_frame(&frame) else {
             return;
         };
-        let Some(converted) = self.channel_map.transform(decoded) else {
-            return;
-        };
-        let Some(processed) = self.transform.transform(converted) else {
-            return;
-        };
+        let converted = self.channel_map.transform(decoded).await;
+        let processed = self.transform.transform(converted).await;
         self.jitter.push(processed);
     }
 }
@@ -273,12 +269,12 @@ where
         true
     }
 
-    pub fn push_to_slot(&mut self, id: SlotId, frame: EncodedChunk) -> bool {
+    pub async fn push_to_slot(&mut self, id: SlotId, frame: EncodedChunk) -> bool {
         let Some(slot) = self.slots.get_mut(&id) else {
             self.stale_dropped += 1;
             return false;
         };
-        slot.push_frame(frame);
+        slot.push_frame(frame).await;
         true
     }
 
@@ -326,7 +322,7 @@ where
             .for_each(|sample| *sample += slot.conceal.next(slot.resampler.pop_sample()));
     }
 
-    fn refill(&mut self) {
+    async fn refill(&mut self) {
         let channels = self.out_format.channel_count as usize;
         let needed = self.out_frames * channels;
         let mut mixed = vec![0.0; needed];
@@ -334,16 +330,11 @@ where
             Self::pump_slot(slot, needed, &mut mixed);
         }
         let chunk = AudioChunk::new(self.out_sequence, self.out_format.clone(), mixed);
-        let emitted = self
-            .bus
-            .transform(chunk)
-            .and_then(|converted| self.clip.transform(converted));
+        let chunk = self.bus.transform(chunk).await;
+        let output = self.clip.transform(chunk).await;
         self.fills += 1;
         self.out_sequence += 1;
-        match emitted {
-            Some(output) => self.pending.extend(output.audio_data),
-            None => self.pending.extend(core::iter::repeat_n(0.0, needed)),
-        }
+        self.pending.extend(output.audio_data);
     }
 }
 
@@ -360,24 +351,11 @@ where
     }
 
     async fn next(&mut self) -> Option<f32> {
-        self.next_sync()
-    }
-}
-
-impl<D, T, R, M, FD> SyncSampleSource for Mixer<D, T, R, M, FD>
-where
-    D: AudioDecoder,
-    T: ChunkTransform,
-    R: Resampler,
-    M: ChunkTransform,
-    FD: FnMut(&AudioFormat) -> Option<D> + Send,
-{
-    fn next_sync(&mut self) -> Option<f32> {
         if self.slots.is_empty() {
             return Some(0.0);
         }
         if self.pending.is_empty() {
-            self.refill();
+            self.refill().await;
         }
         Some(self.pending.pop_front().unwrap_or(0.0))
     }
@@ -390,7 +368,7 @@ mod tests {
     use crate::audio::chunk::AudioChunk;
     use crate::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
     use crate::audio::config::AudioPipelineConfig;
-    use crate::audio::sample::{Resampler, SyncSampleSource};
+    use crate::audio::sample::{Resampler, SampleSource};
     use crate::audio::transform::{ChunkTransform, Gain, JitterStage};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -452,8 +430,11 @@ mod tests {
         }
     }
 
-    fn push<D, T, R, M, FD>(mixer: &mut Mixer<D, T, R, M, FD>, id: SlotId, frame: EncodedChunk)
-    where
+    async fn push<D, T, R, M, FD>(
+        mixer: &mut Mixer<D, T, R, M, FD>,
+        id: SlotId,
+        frame: EncodedChunk,
+    ) where
         D: AudioDecoder,
         T: ChunkTransform,
         R: Resampler,
@@ -463,10 +444,11 @@ mod tests {
         mixer
             .input_mut(id)
             .expect("subscribed slot")
-            .push_frame(frame);
+            .push_frame(frame)
+            .await;
     }
 
-    fn pull<D, T, R, M, FD>(mixer: &mut Mixer<D, T, R, M, FD>, count: usize) -> Vec<f32>
+    async fn pull<D, T, R, M, FD>(mixer: &mut Mixer<D, T, R, M, FD>, count: usize) -> Vec<f32>
     where
         D: AudioDecoder,
         T: ChunkTransform,
@@ -476,7 +458,7 @@ mod tests {
     {
         let mut out = Vec::with_capacity(count);
         for _ in 0..count {
-            out.push(mixer.next_sync().expect("mixer never ends"));
+            out.push(mixer.next().await.expect("mixer never ends"));
         }
         out
     }
@@ -497,86 +479,86 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pushes_flow_to_output_in_order() {
+    #[tokio::test]
+    async fn pushes_flow_to_output_in_order() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(0));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(0)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
         assert_eq!(mixer.metrics_snapshot().fills, 1);
-        push(&mut mixer, id, frame(1));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(1)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| (*sample - 0.1).abs() < 1e-6));
         assert_eq!(mixer.metrics_snapshot().fills, 2);
     }
 
-    #[test]
-    fn mixer_input_trait_routes_push() {
+    #[tokio::test]
+    async fn mixer_input_trait_routes_push() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        assert!(mixer.push_to_slot(id, frame(2)));
-        assert!(!mixer.push_to_slot(SlotId(99), frame(2)));
-        let out = pull(&mut mixer, 960);
+        assert!(mixer.push_to_slot(id, frame(2)).await);
+        assert!(!mixer.push_to_slot(SlotId(99), frame(2)).await);
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| (*sample - 0.2).abs() < 1e-6));
     }
 
-    #[test]
-    fn buffered_future_chunk_releases_on_next_push() {
+    #[tokio::test]
+    async fn buffered_future_chunk_releases_on_next_push() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(0));
-        push(&mut mixer, id, frame(2));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(0)).await;
+        push(&mut mixer, id, frame(2)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
         assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
-        push(&mut mixer, id, frame(3));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(3)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
-        let out = pull(&mut mixer, 960);
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| (*sample - 0.2).abs() < 1e-6));
     }
 
-    #[test]
-    fn refill_releases_only_what_the_block_needs() {
+    #[tokio::test]
+    async fn refill_releases_only_what_the_block_needs() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(0));
-        push(&mut mixer, id, frame(1));
-        let _ = pull(&mut mixer, 100);
+        push(&mut mixer, id, frame(0)).await;
+        push(&mut mixer, id, frame(1)).await;
+        let _ = pull(&mut mixer, 100).await;
         let slot = mixer.input_mut(id).expect("slot");
         assert_eq!(slot.jitter.buffered_chunks(), 1);
     }
 
-    #[test]
-    fn duplicate_seq_counts_late_drop() {
+    #[tokio::test]
+    async fn duplicate_seq_counts_late_drop() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(0));
-        let _ = pull(&mut mixer, 960);
-        push(&mut mixer, id, frame(0));
+        push(&mut mixer, id, frame(0)).await;
+        let _ = pull(&mut mixer, 960).await;
+        push(&mut mixer, id, frame(0)).await;
         assert_eq!(mixer.metrics_snapshot().late_dropped, 1);
     }
 
-    #[test]
-    fn virgin_nonzero_seq_counts_gap_but_plays() {
+    #[tokio::test]
+    async fn virgin_nonzero_seq_counts_gap_but_plays() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(5));
+        push(&mut mixer, id, frame(5)).await;
         assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
-        let out = pull(&mut mixer, 960);
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| (*sample - 0.5).abs() < 1e-6));
     }
 
-    #[test]
-    fn starvation_holds_last_sample_then_fades() {
+    #[tokio::test]
+    async fn starvation_holds_last_sample_then_fades() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(1));
-        let _ = pull(&mut mixer, 960);
-        let held = pull(&mut mixer, 1);
+        push(&mut mixer, id, frame(1)).await;
+        let _ = pull(&mut mixer, 960).await;
+        let held = pull(&mut mixer, 1).await;
         assert!((held[0] - 0.1).abs() < 1e-6);
-        let faded = pull(&mut mixer, 4);
+        let faded = pull(&mut mixer, 4).await;
         assert!(faded[0] < 0.1 && faded[0] > 0.0);
         assert!(faded.windows(2).all(|pair| pair[1] < pair[0]));
         let snapshot = mixer.metrics_snapshot();
@@ -607,54 +589,54 @@ mod tests {
         assert_eq!(conceal.next(Some(0.3)), 0.3);
     }
 
-    #[test]
-    fn two_peers_sum_and_clip() {
+    #[tokio::test]
+    async fn two_peers_sum_and_clip() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let first = mixer.subscribe((), rebuild, script());
         let second = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, first, frame(4));
-        push(&mut mixer, second, frame(4));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, first, frame(4)).await;
+        push(&mut mixer, second, frame(4)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.8));
         mixer.unsubscribe(first);
         mixer.unsubscribe(second);
         let first = mixer.subscribe((), rebuild, script());
         let second = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, first, frame(9));
-        push(&mut mixer, second, frame(9));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, first, frame(9)).await;
+        push(&mut mixer, second, frame(9)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 1.0));
         assert_eq!(mixer.metrics_snapshot().clip_hits, 960);
     }
 
-    #[test]
-    fn per_peer_transform_selects_processing() {
+    #[tokio::test]
+    async fn per_peer_transform_selects_processing() {
         let (gain, _) = Gain::shared(0, 500);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe(gain, rebuild, script());
-        push(&mut mixer, id, frame(5));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(5)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
     }
 
-    #[test]
-    fn bus_transform_applies_to_mix() {
+    #[tokio::test]
+    async fn bus_transform_applies_to_mix() {
         let (gain, _) = Gain::shared(0, 500);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(5));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(5)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
     }
 
-    #[test]
-    fn unsubscribe_stops_peer() {
+    #[tokio::test]
+    async fn unsubscribe_stops_peer() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         assert_eq!(mixer.peer_count(), 1);
         mixer.unsubscribe(id);
         assert_eq!(mixer.peer_count(), 0);
-        let out = pull(&mut mixer, 4);
+        let out = pull(&mut mixer, 4).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
     }
 
@@ -713,12 +695,12 @@ mod tests {
         assert_eq!(stage.late_dropped, 0);
     }
 
-    #[test]
-    fn input_slot_runs_config_on_push() {
+    #[tokio::test]
+    async fn input_slot_runs_config_on_push() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         let slot = mixer.input_mut(id).expect("slot");
-        slot.push_frame(frame(3));
+        slot.push_frame(frame(3)).await;
         let ordered = slot.jitter.pull().expect("ordered chunk");
         assert_eq!(ordered.sequence_number, 3);
         for sample in ordered.audio_data {
@@ -727,50 +709,50 @@ mod tests {
         assert_eq!(slot.resampler.pop_sample(), Some(0.3));
     }
 
-    #[test]
-    fn bus_gain_overshoot_caught_by_terminal_clip() {
+    #[tokio::test]
+    async fn bus_gain_overshoot_caught_by_terminal_clip() {
         let (gain, _) = Gain::shared(200, 500);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(9));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(9)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 1.0));
         assert_eq!(mixer.metrics_snapshot().clip_hits, 960);
     }
 
-    #[test]
-    fn reset_input_replays_fresh_stream_on_same_slot() {
+    #[tokio::test]
+    async fn reset_input_replays_fresh_stream_on_same_slot() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild, script());
         for seq in 0..10u128 {
-            push(&mut mixer, id, frame(seq));
+            push(&mut mixer, id, frame(seq)).await;
         }
-        let _ = pull(&mut mixer, 960 * 10);
+        let _ = pull(&mut mixer, 960 * 10).await;
         assert!(mixer.reset_input(id));
-        push(&mut mixer, id, frame(0));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(0)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
         assert!(!mixer.reset_input(SlotId(99)));
     }
 
-    #[test]
-    fn push_to_unknown_slot_counts_stale() {
+    #[tokio::test]
+    async fn push_to_unknown_slot_counts_stale() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        assert!(!mixer.push_to_slot(SlotId(7), frame(0)));
+        assert!(!mixer.push_to_slot(SlotId(7), frame(0)).await);
         assert_eq!(mixer.metrics_snapshot().stale_dropped, 1);
         let id = mixer.subscribe((), rebuild, script());
-        assert!(mixer.push_to_slot(id, frame(0)));
+        assert!(mixer.push_to_slot(id, frame(0)).await);
         assert_eq!(mixer.metrics_snapshot().stale_dropped, 1);
     }
 
-    #[test]
-    fn muted_bus_serves_cached_silence() {
+    #[tokio::test]
+    async fn muted_bus_serves_cached_silence() {
         use crate::audio::transform::Mute;
         let (mute, control) = Mute::shared(true);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), mute);
         let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(3));
-        let out = pull(&mut mixer, 960);
+        push(&mut mixer, id, frame(3)).await;
+        let out = pull(&mut mixer, 960).await;
         assert!(out.iter().all(|sample| *sample == 0.0));
         assert_eq!(mixer.metrics_snapshot().fills, 1);
         control.set(false);
@@ -789,8 +771,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn format_change_reconfigures_and_plays() {
+    #[tokio::test]
+    async fn format_change_reconfigures_and_plays() {
         struct CountingResampler {
             buffer: VecDeque<f32>,
             reconfigures: usize,
@@ -827,10 +809,10 @@ mod tests {
                 reconfigures: 0,
             },
         );
-        push(&mut mixer, id, frame(0));
+        push(&mut mixer, id, frame(0)).await;
         let mut mono = frame(1);
         mono.format = AudioFormat::new(1, 48000);
-        push(&mut mixer, id, mono);
+        push(&mut mixer, id, mono).await;
         let slot = mixer.input_mut(id).expect("slot");
         assert_eq!(slot.resampler.reconfigures, 2);
     }

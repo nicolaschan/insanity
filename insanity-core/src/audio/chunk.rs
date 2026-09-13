@@ -1,7 +1,6 @@
-use crate::audio::AudioFormat;
 use crate::audio::sample::SampleSource;
+use crate::audio::{AudioFormat, transform::ChunkTransform};
 use serde::{Deserialize, Serialize};
-use std::future::Future;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AudioChunk {
@@ -20,8 +19,18 @@ impl AudioChunk {
     }
 }
 
-pub trait ChunkSource {
+pub trait ChunkSource: Sized {
     fn next_chunk(&mut self) -> impl Future<Output = Option<AudioChunk>> + Send;
+
+    fn transform<ChunkTransformT: ChunkTransform>(
+        self,
+        transform: ChunkTransformT,
+    ) -> TransformedChunkSource<Self, ChunkTransformT> {
+        TransformedChunkSource {
+            source: self,
+            transform,
+        }
+    }
 }
 
 pub struct SampleChunker<S: SampleSource + Send> {
@@ -54,6 +63,22 @@ impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
             self.source.format().clone(),
             audio_data,
         ))
+    }
+}
+
+pub struct TransformedChunkSource<ChunkSourceT: ChunkSource, ChunkTransformT: ChunkTransform> {
+    source: ChunkSourceT,
+    transform: ChunkTransformT,
+}
+
+impl<ChunkSourceT: ChunkSource + Send, ChunkTransformT: ChunkTransform> ChunkSource
+    for TransformedChunkSource<ChunkSourceT, ChunkTransformT>
+{
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        match self.source.next_chunk().await {
+            Some(chunk) => Some(self.transform.transform(chunk).await),
+            None => None,
+        }
     }
 }
 
