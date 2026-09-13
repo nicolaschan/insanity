@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
+use insanity_core::audio::chunk::{AudioChunk, chunk_samples};
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::Mixer;
@@ -66,7 +66,7 @@ where
 {
     let audio_config = AudioPipelineConfig::default();
     let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-    let chunked = SampleChunker::new(resampled, audio_config.frames()).into_stream();
+    let chunked = chunk_samples(resampled, audio_config.frames());
     AudioInputHub::from_chunk_source(chunked, audio_config)
 }
 

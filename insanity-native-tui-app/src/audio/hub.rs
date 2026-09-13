@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
+use insanity_core::audio::chunk::{AudioChunk, ChunkStreamExt, chunk_samples};
 use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
@@ -53,10 +53,8 @@ impl AudioInputHub {
     ) -> Self {
         let resampled =
             RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-        let mut transform = ChannelMap::capped(audio_config.channels());
-        let source = SampleChunker::new(resampled, audio_config.frames())
-            .into_stream()
-            .map(move |chunk| transform.transform(chunk));
+        let transform = ChannelMap::capped(audio_config.channels());
+        let source = chunk_samples(resampled, audio_config.frames()).transform(transform);
         Self::spawn_chunk_source(source, audio_config)
     }
 
@@ -72,8 +70,8 @@ impl AudioInputHub {
         R: Stream<Item = AudioChunk> + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
-        let mut transform = mute.chain(ChannelMap::capped(audio_config.channels()));
-        let mut source = Box::pin(source.map(move |chunk| transform.transform(chunk)));
+        let transform = mute.chain(ChannelMap::capped(audio_config.channels()));
+        let mut source = Box::pin(source.transform(transform));
         let mut encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
         let (hub, tx) = Self::with_channel(mute_control);
         tokio::spawn(async move {

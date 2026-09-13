@@ -290,7 +290,7 @@ mod tests {
     use super::{RubatoResampler, StreamResampler};
     use futures_util::StreamExt;
     use insanity_core::audio::AudioFormat;
-    use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
+    use insanity_core::audio::chunk::{AudioChunk, chunk_samples};
     use insanity_core::audio::sample::{Resampler, SampleSource};
 
     struct Sine {
@@ -323,7 +323,7 @@ mod tests {
             480,
         );
         let target = AudioFormat::new(2, 48000);
-        let mut chunker = Box::pin(SampleChunker::new(resampled, 480).into_stream());
+        let mut chunker = Box::pin(chunk_samples(resampled, 480));
         let mut total = 0usize;
         for _ in 0..20 {
             let chunk = chunker.next().await.expect("resampled stream is infinite");
