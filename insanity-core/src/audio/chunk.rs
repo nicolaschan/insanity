@@ -22,7 +22,7 @@ impl AudioChunk {
 pub trait ChunkSource: Sized {
     fn next_chunk(&mut self) -> impl Future<Output = Option<AudioChunk>> + Send;
 
-    fn transform<ChunkTransformT: ChunkTransform>(
+    fn transform<ChunkTransformT: ChunkTransform<OutputT = AudioChunk>>(
         self,
         transform: ChunkTransformT,
     ) -> TransformedChunkSource<Self, ChunkTransformT> {
@@ -75,8 +75,8 @@ pub struct TransformedChunkSource<ChunkSourceT: ChunkSource, ChunkTransformT: Ch
     transform: ChunkTransformT,
 }
 
-impl<ChunkSourceT: ChunkSource + Send, ChunkTransformT: ChunkTransform> ChunkSource
-    for TransformedChunkSource<ChunkSourceT, ChunkTransformT>
+impl<ChunkSourceT: ChunkSource + Send, ChunkTransformT: ChunkTransform<OutputT = AudioChunk>>
+    ChunkSource for TransformedChunkSource<ChunkSourceT, ChunkTransformT>
 {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         match self.source.next_chunk().await {

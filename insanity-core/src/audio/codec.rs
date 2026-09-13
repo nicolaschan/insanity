@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
+use crate::audio::transform::ChunkTransform;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AudioCodec {
@@ -73,8 +74,14 @@ impl<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E>> ChunkEncoder<E, F> {
             frames,
         }
     }
+}
 
-    pub fn encode_chunk(&mut self, chunk: AudioChunk) -> Option<EncodedChunk> {
+impl<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E> + Send> ChunkTransform
+    for ChunkEncoder<E, F>
+{
+    type OutputT = Option<EncodedChunk>;
+
+    fn transform(&mut self, chunk: AudioChunk) -> Option<EncodedChunk> {
         if chunk.format.channel_count == 0 {
             return None;
         }
@@ -126,7 +133,7 @@ mod tests {
         );
         for seq in 0..2 {
             let frame = encoder
-                .encode_chunk(chunk(seq, format.clone(), vec![0.0; 4]))
+                .transform(chunk(seq, format.clone(), vec![0.0; 4]))
                 .expect("encoded");
             assert_eq!(frame.sequence_number, seq);
         }
@@ -137,14 +144,14 @@ mod tests {
     fn failed_rebuild_skips_chunk() {
         let mut encoder = ChunkEncoder::new(|_: &AudioFormat| None::<TagEncoder>, 2);
         let chunk = chunk(0, AudioFormat::new(2, 48000), vec![0.0; 4]);
-        assert!(encoder.encode_chunk(chunk).is_none());
+        assert!(encoder.transform(chunk).is_none());
     }
 
     #[test]
     fn zero_channel_chunk_is_skipped() {
         let mut encoder = ChunkEncoder::new(|_: &AudioFormat| Some(TagEncoder), 2);
         let chunk = chunk(0, AudioFormat::new(0, 48000), Vec::new());
-        assert!(encoder.encode_chunk(chunk).is_none());
+        assert!(encoder.transform(chunk).is_none());
     }
 
     #[test]
@@ -172,7 +179,7 @@ mod tests {
         let mut sequences = Vec::new();
         for input in inputs {
             let converted = transform.transform(input);
-            let frame = encoder.encode_chunk(converted).expect("encoded");
+            let frame = encoder.transform(converted).expect("encoded");
             formats.push(frame.format);
             sequences.push(frame.sequence_number);
         }
