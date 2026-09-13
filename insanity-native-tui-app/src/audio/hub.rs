@@ -1,3 +1,4 @@
+use std::pin::pin;
 use std::sync::Arc;
 
 use futures_util::{Stream, StreamExt};
@@ -71,10 +72,11 @@ impl AudioInputHub {
     {
         let (mute, mute_control) = Mute::shared(false);
         let transform = mute.chain(ChannelMap::capped(audio_config.channels()));
-        let mut source = Box::pin(source.transform(transform));
+        let source = source.transform(transform);
         let mut encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
         let (hub, tx) = Self::with_channel(mute_control);
         tokio::spawn(async move {
+            let mut source = pin!(source);
             let mut pacer = Pacer::new(audio_config.chunk_period());
             while let Some(chunk) = source.next().await {
                 pacer.pace().await;

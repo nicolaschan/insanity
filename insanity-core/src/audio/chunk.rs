@@ -96,7 +96,7 @@ pub(crate) mod tests {
 
     #[test]
     fn sample_chunker_frames_and_counts_sequence() {
-        let mut chunker = Box::pin(chunk_samples(
+        let mut chunker = pin!(chunk_samples(
             Counting {
                 next: 0.0,
                 format: AudioFormat::new(2, 44100),
@@ -130,21 +130,21 @@ pub(crate) mod tests {
 
     #[test]
     fn exhausted_source_ends_stream() {
-        let mut chunker = Box::pin(chunk_samples(scripted(vec![0.0; 4], 2), 2));
+        let mut chunker = pin!(chunk_samples(scripted(vec![0.0; 4], 2), 2));
         assert!(block_on(chunker.next()).is_some());
         assert!(block_on(chunker.next()).is_none());
     }
 
     #[test]
     fn zero_channel_source_ends_stream() {
-        let mut chunker = Box::pin(chunk_samples(scripted(vec![0.0; 4], 0), 2));
+        let mut chunker = pin!(chunk_samples(scripted(vec![0.0; 4], 0), 2));
         assert!(block_on(chunker.next()).is_none());
     }
 
     #[test]
     fn transform_applies_and_keeps_sequence() {
         let (mute, control) = Mute::shared(true);
-        let mut chunks = Box::pin(chunk_samples(scripted(vec![0.5; 8], 2), 2).transform(mute));
+        let mut chunks = pin!(chunk_samples(scripted(vec![0.5; 8], 2), 2).transform(mute));
         let muted = block_on(chunks.next()).expect("chunk");
         assert_eq!(muted.sequence_number, 0);
         assert_eq!(muted.audio_data, vec![0.0; 4]);
