@@ -24,7 +24,7 @@ use unit_mixer::{
 async fn hub_fanout_same_chunk() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 440.0);
-        let hub = Arc::new(hub_from_source(src, AudioFormat::new(2, 48000)));
+        let hub = Arc::new(hub_from_source(src.into_source()));
         let mut rx1 = hub.subscribe();
         let mut rx2 = hub.subscribe();
         let mut rx3 = hub.subscribe();
@@ -56,7 +56,7 @@ async fn hub_fanout_same_chunk() {
 async fn hub_mute_sends_silence() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 440.0);
-        let hub = hub_from_source(src, AudioFormat::new(2, 48000));
+        let hub = hub_from_source(src.into_source());
         hub.set_muted(true);
         let mut rx = hub.subscribe();
         let mut decoder = Decoder::new(48000, opus_channels(2)).expect("decoder");

@@ -3,8 +3,11 @@ use std::collections::{HashMap, VecDeque};
 use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
 use crate::audio::codec::{AudioDecoder, EncodedChunk, FormatCache};
-use crate::audio::sample::Resampler;
+use crate::audio::sample::{Resampler, SampleSource};
 use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, JitterStage};
+use futures_core::Stream;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use crate::audio::config::AudioPipelineConfig;
 
@@ -356,6 +359,36 @@ where
             self.refill();
         }
         Some(self.pending.pop_front().unwrap_or(0.0))
+    }
+}
+
+impl<D, T, R, M, FD> Stream for Mixer<D, T, R, M, FD>
+where
+    D: AudioDecoder,
+    T: ChunkTransform,
+    R: Resampler,
+    M: ChunkTransform,
+    FD: FnMut(&AudioFormat) -> Option<D> + Send,
+    Self: Unpin,
+{
+    type Item = f32;
+
+    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<f32>> {
+        Poll::Ready(self.get_mut().next())
+    }
+}
+
+impl<D, T, R, M, FD> SampleSource for Mixer<D, T, R, M, FD>
+where
+    D: AudioDecoder,
+    T: ChunkTransform,
+    R: Resampler,
+    M: ChunkTransform,
+    FD: FnMut(&AudioFormat) -> Option<D> + Send,
+    Self: Unpin,
+{
+    fn format(&self) -> &AudioFormat {
+        &self.out_format
     }
 }
 

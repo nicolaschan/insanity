@@ -9,7 +9,7 @@ pub struct SwitchingChunkSource<T> {
     swap_tx: Sender<T>,
 }
 
-impl<T: Stream<Item = AudioChunk> + Unpin + Send + 'static> SwitchingChunkSource<T> {
+impl<T: Stream<Item = AudioChunk> + Send + 'static> SwitchingChunkSource<T> {
     pub fn new(source: T) -> Self {
         let (swap_tx, swap_rx) = channel(1);
         Self {
@@ -23,21 +23,21 @@ impl<T: Stream<Item = AudioChunk> + Unpin + Send + 'static> SwitchingChunkSource
     }
 }
 
-fn switching<T: Stream<Item = AudioChunk> + Unpin + Send>(
+fn switching<T: Stream<Item = AudioChunk> + Send>(
     source: T,
     swap_rx: Receiver<T>,
 ) -> impl Stream<Item = AudioChunk> + Send {
     stream::unfold(
-        (Some(source), swap_rx),
+        (Some(Box::pin(source)), swap_rx),
         |(mut source, mut swap_rx)| async move {
             loop {
                 let Some(current) = source.as_mut() else {
-                    source = Some(swap_rx.recv().await?);
+                    source = Some(Box::pin(swap_rx.recv().await?));
                     continue;
                 };
                 tokio::select! {
                     biased;
-                    swapped = swap_rx.recv() => source = Some(swapped?),
+                    swapped = swap_rx.recv() => source = Some(Box::pin(swapped?)),
                     chunk = current.next() => match chunk {
                         Some(chunk) => return Some((chunk, (source, swap_rx))),
                         None => source = None,
@@ -69,7 +69,7 @@ mod tests {
         channels: u16,
         value: f32,
         remaining: usize,
-    ) -> impl Stream<Item = AudioChunk> + Unpin + Send {
+    ) -> impl Stream<Item = AudioChunk> + Send {
         let chunk = AudioChunk::new(0, AudioFormat::new(channels, 48000), vec![value; 4]);
         stream::iter(std::iter::repeat_n(chunk, remaining))
     }

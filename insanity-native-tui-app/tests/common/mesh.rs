@@ -4,6 +4,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
+use insanity_core::audio::sample::SampleSource;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
     hub::AudioInputHub,
@@ -53,17 +54,14 @@ impl VirtualNode {
         let audio_config = AudioPipelineConfig::default();
         Self::with_source(
             _name,
-            crate::sine::SineSource::new_amp(audio_config.sample_rate(), freq, amp),
-            AudioFormat::new(2, audio_config.sample_rate()),
+            crate::sine::SineSource::new_amp(audio_config.sample_rate(), freq, amp).into_source(),
         )
     }
 
-    pub fn with_source<S>(_name: &str, source: S, format: AudioFormat) -> Self
-    where
-        S: Iterator<Item = f32> + Send + 'static,
-    {
+    pub fn with_source(_name: &str, source: impl SampleSource + Send + 'static) -> Self {
         let audio_config = AudioPipelineConfig::default();
-        let hub = Arc::new(hub_from_source(source, format.clone()));
+        let format = source.format().clone();
+        let hub = Arc::new(hub_from_source(source));
         Self {
             hub_taps: HashMap::new(),
             mixer: new_no_device_mixer(),

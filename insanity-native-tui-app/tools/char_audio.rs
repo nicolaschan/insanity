@@ -6,7 +6,9 @@ mod mesh;
 mod sine;
 
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr};
+use futures_util::stream;
 use insanity_core::audio::AudioFormat;
+use insanity_core::audio::sample::AudioStream;
 use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -52,6 +54,12 @@ impl ChirpSource {
     }
 }
 
+impl ChirpSource {
+    pub fn into_source(self) -> AudioStream {
+        AudioStream::new(self.format.clone(), stream::iter(self))
+    }
+}
+
 impl Iterator for ChirpSource {
     type Item = f32;
 
@@ -93,6 +101,12 @@ impl AmSpeechSource {
     }
 }
 
+impl AmSpeechSource {
+    pub fn into_source(self) -> AudioStream {
+        AudioStream::new(self.format.clone(), stream::iter(self))
+    }
+}
+
 impl Iterator for AmSpeechSource {
     type Item = f32;
 
@@ -102,18 +116,29 @@ impl Iterator for AmSpeechSource {
 }
 
 struct NoiseSource {
+    format: AudioFormat,
     state: u64,
     amp: f32,
 }
 
 impl NoiseSource {
     fn new(amp: f32, seed: u64) -> Self {
-        Self { state: seed, amp }
+        Self {
+            format: stereo(),
+            state: seed,
+            amp,
+        }
     }
     fn step(&mut self) -> f32 {
         self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
         let u = ((self.state >> 16) & 0xFFFF) as f32 / 65535.0;
         (u * 2.0 - 1.0) * self.amp
+    }
+}
+
+impl NoiseSource {
+    pub fn into_source(self) -> AudioStream {
+        AudioStream::new(self.format.clone(), stream::iter(self))
     }
 }
 
@@ -127,6 +152,10 @@ impl Iterator for NoiseSource {
 
 fn stereo() -> AudioFormat {
     AudioFormat::new(2, 48000)
+}
+
+fn silence() -> AudioStream {
+    AudioStream::new(stereo(), stream::repeat(0.0))
 }
 
 fn lcg_next(state: &mut u64) -> u64 {
@@ -161,10 +190,12 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
         "sine440_05" => VirtualNode::new("a", 440.0),
         "sine880_05" => VirtualNode::new("a", 880.0),
         "sine440_025" => VirtualNode::with_amp("a", 440.0, 0.25),
-        "chirp" => VirtualNode::with_source("a", ChirpSource::new(48000, 0.4, 40 * 960), stereo()),
-        "amspeech" => VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5), stereo()),
-        "noise" => VirtualNode::with_source("a", NoiseSource::new(0.4, seed), stereo()),
-        "silence" => VirtualNode::with_source("a", std::iter::repeat(0.0f32), stereo()),
+        "chirp" => {
+            VirtualNode::with_source("a", ChirpSource::new(48000, 0.4, 40 * 960).into_source())
+        }
+        "amspeech" => VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5).into_source()),
+        "noise" => VirtualNode::with_source("a", NoiseSource::new(0.4, seed).into_source()),
+        "silence" => VirtualNode::with_source("a", silence()),
         _ => VirtualNode::with_amp("a", 440.0, 0.5),
     }
 }
@@ -172,7 +203,7 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
 fn make_pair(signal: &str, seed: u64) -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
     let mut a = make_sender(signal, seed);
-    let mut b = VirtualNode::with_source("b", std::iter::repeat(0.0f32), stereo());
+    let mut b = VirtualNode::with_source("b", silence());
     a.add_outbound("b");
     b.add_inbound("a");
     nodes.insert("a".to_string(), a);
