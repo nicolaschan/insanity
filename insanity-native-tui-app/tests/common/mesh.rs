@@ -4,7 +4,6 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
-use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
     hub::AudioInputHub,
@@ -55,16 +54,16 @@ impl VirtualNode {
         Self::with_source(
             _name,
             crate::sine::SineSource::new_amp(audio_config.sample_rate(), freq, amp),
+            AudioFormat::new(2, audio_config.sample_rate()),
         )
     }
 
-    pub fn with_source<S>(_name: &str, source: S) -> Self
+    pub fn with_source<S>(_name: &str, source: S, format: AudioFormat) -> Self
     where
-        S: SampleSource + Send + Sync + 'static,
+        S: Iterator<Item = f32> + Send + 'static,
     {
         let audio_config = AudioPipelineConfig::default();
-        let format = source.format().clone();
-        let hub = Arc::new(hub_from_source(source));
+        let hub = Arc::new(hub_from_source(source, format.clone()));
         Self {
             hub_taps: HashMap::new(),
             mixer: new_no_device_mixer(),
@@ -184,7 +183,7 @@ pub async fn transfer_tick(
 
 pub fn render_tick(node: &mut VirtualNode) {
     for _ in 0..node.out_samples {
-        let sample = node.mixer.next_sync().unwrap_or(0.0);
+        let sample = node.mixer.next().unwrap_or(0.0);
         node.speaker_history.push(sample);
     }
 }

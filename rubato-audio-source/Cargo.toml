@@ -7,6 +7,8 @@ edition = "2024"
 insanity-core = { path = "../insanity-core" }
 log = "0.4.22"
 rubato = "0.10"
+futures-core = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+futures-util = "0.3"

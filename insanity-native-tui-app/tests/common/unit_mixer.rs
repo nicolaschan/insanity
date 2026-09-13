@@ -4,7 +4,6 @@ use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, SlotId};
-use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{Gain, GainControl};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
@@ -120,9 +119,7 @@ pub fn push_value(mixer: &mut UnitMixer, slot: SlotId, sequence: u128, value: f3
 }
 
 pub fn render(mixer: &mut UnitMixer, count: usize) -> Vec<f32> {
-    (0..count)
-        .map(|_| mixer.next_sync().unwrap_or(0.0))
-        .collect()
+    (0..count).map(|_| mixer.next().unwrap_or(0.0)).collect()
 }
 
 pub fn mixer_with_capacity(chunks: usize) -> UnitMixer {

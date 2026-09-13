@@ -14,7 +14,6 @@ use insanity_core::audio::codec::AudioEncoder;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::mixer::Mixer;
-use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::Gain;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::codec::OpusEncoder;
@@ -59,18 +58,10 @@ impl ChirpSource {
     }
 }
 
-impl SampleSource for ChirpSource {
-    fn format(&self) -> &AudioFormat {
-        &self.format
-    }
+impl Iterator for ChirpSource {
+    type Item = f32;
 
-    async fn next(&mut self) -> Option<f32> {
-        Some(self.step())
-    }
-}
-
-impl SyncSampleSource for ChirpSource {
-    fn next_sync(&mut self) -> Option<f32> {
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
@@ -107,26 +98,19 @@ impl AmSpeechSource {
     }
 }
 
-impl SampleSource for AmSpeechSource {
-    fn format(&self) -> &AudioFormat {
-        &self.format
-    }
+impl Iterator for AmSpeechSource {
+    type Item = f32;
 
-    async fn next(&mut self) -> Option<f32> {
-        Some(self.step())
-    }
-}
-
-impl SyncSampleSource for AmSpeechSource {
-    fn next_sync(&mut self) -> Option<f32> {
+    fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
 }
 
 fn music_pair() -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
-    let mut a = VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5));
-    let mut b = VirtualNode::with_source("b", ChirpSource::new(48000, 0.0, 1));
+    let format = AudioFormat::new(2, 48000);
+    let mut a = VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5), format.clone());
+    let mut b = VirtualNode::with_source("b", ChirpSource::new(48000, 0.0, 1), format);
     a.add_outbound("b");
     b.add_inbound("a");
     nodes.insert("a".to_string(), a);
@@ -172,8 +156,16 @@ async fn non48k_input_resample_loopback() {
     let timeout = Duration::from_secs(60);
     let res = tokio::time::timeout(timeout, async {
         let mut nodes = HashMap::new();
-        let mut a = VirtualNode::with_source("a", SineSource::new_amp(44100, 440.0, 0.5));
-        let mut b = VirtualNode::with_source("b", SineSource::new_amp(48000, 880.0, 0.0));
+        let mut a = VirtualNode::with_source(
+            "a",
+            SineSource::new_amp(44100, 440.0, 0.5),
+            AudioFormat::new(2, 44100),
+        );
+        let mut b = VirtualNode::with_source(
+            "b",
+            SineSource::new_amp(48000, 880.0, 0.0),
+            AudioFormat::new(2, 48000),
+        );
         a.add_outbound("b");
         b.add_inbound("a");
         nodes.insert("a".to_string(), a);
@@ -187,7 +179,7 @@ async fn non48k_input_resample_loopback() {
         );
         let mut reference = SineSource::new_amp(48000, 440.0, 0.5);
         let expected: Vec<f32> = (0..20 * 960)
-            .map(|_| reference.next_sync().expect("sine"))
+            .map(|_| reference.next().expect("sine"))
             .collect();
         let spk_tail = tail(&nodes["b"].speaker_history, 20).to_vec();
         let xcorr = max_normalized_xcorr(&spk_tail, &expected, 960);
@@ -254,7 +246,10 @@ fn resampled_output_fill_budget() {
 #[tokio::test]
 async fn broadcast_lag_records_gap() {
     let res = tokio::time::timeout(Duration::from_secs(15), async {
-        let hub = Arc::new(hub_from_source(SineSource::new_amp(48000, 440.0, 0.5)));
+        let hub = Arc::new(hub_from_source(
+            SineSource::new_amp(48000, 440.0, 0.5),
+            AudioFormat::new(2, 48000),
+        ));
         let mut lagging = hub.subscribe();
         tokio::time::sleep(Duration::from_millis(600)).await;
         let first = tokio::time::timeout(Duration::from_secs(2), lagging.recv())

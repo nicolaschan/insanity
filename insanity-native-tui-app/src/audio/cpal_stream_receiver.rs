@@ -1,16 +1,18 @@
 use anyhow::anyhow;
 use cpal::{
-    Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
+    Device, FromSample, SampleFormat, SizedSample, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
+use futures_core::Stream;
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::{AudioFormat, device::UNKNOWN_DEVICE_NAME};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use super::config::get_input_config;
 
 pub struct CpalStreamReceiver {
-    _stream: send_safe::SendWrapperThread<Option<Stream>>,
+    _stream: send_safe::SendWrapperThread<Option<cpal::Stream>>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
     format: AudioFormat,
     name: String,
@@ -28,15 +30,17 @@ impl CpalStreamReceiver {
     pub fn name(&self) -> &str {
         &self.name
     }
-}
 
-impl SampleSource for CpalStreamReceiver {
-    fn format(&self) -> &AudioFormat {
+    pub fn format(&self) -> &AudioFormat {
         &self.format
     }
+}
 
-    async fn next(&mut self) -> Option<f32> {
-        self.receiver.recv().await
+impl Stream for CpalStreamReceiver {
+    type Item = f32;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<f32>> {
+        self.get_mut().receiver.poll_recv(cx)
     }
 }
 
@@ -92,7 +96,7 @@ fn setup_input_stream(
     config: StreamConfig,
     device: &Device,
     sender: tokio::sync::mpsc::UnboundedSender<f32>,
-) -> anyhow::Result<Stream> {
+) -> anyhow::Result<cpal::Stream> {
     match sample_format {
         SampleFormat::I8 => run_input::<i8>(config, device, sender),
         SampleFormat::I16 => run_input::<i16>(config, device, sender),
@@ -112,7 +116,7 @@ fn run_input<T>(
     config: StreamConfig,
     device: &Device,
     sender: tokio::sync::mpsc::UnboundedSender<f32>,
-) -> anyhow::Result<Stream>
+) -> anyhow::Result<cpal::Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,

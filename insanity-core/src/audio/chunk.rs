@@ -1,6 +1,8 @@
-use crate::audio::sample::SampleSource;
-use crate::audio::{AudioFormat, transform::ChunkTransform};
+use crate::audio::AudioFormat;
+use futures_core::Stream;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct AudioChunk {
@@ -19,168 +21,116 @@ impl AudioChunk {
     }
 }
 
-pub trait ChunkSource: Sized {
-    fn next_chunk(&mut self) -> impl Future<Output = Option<AudioChunk>> + Send;
-
-    fn transform<ChunkTransformT: ChunkTransform>(
-        self,
-        transform: ChunkTransformT,
-    ) -> TransformedChunkSource<Self, ChunkTransformT> {
-        TransformedChunkSource {
-            source: self,
-            transform,
-        }
-    }
-}
-
-pub struct SampleChunker<S: SampleSource + Send> {
+pub struct SampleChunker<S> {
     source: S,
+    format: AudioFormat,
     frames: usize,
+    buffer: Vec<f32>,
     next_sequence: u128,
 }
 
-impl<S: SampleSource + Send> SampleChunker<S> {
-    pub fn new(source: S, frames: usize) -> Self {
+impl<S> SampleChunker<S> {
+    pub fn new(source: S, format: AudioFormat, frames: usize) -> Self {
+        let buffer = Vec::with_capacity(frames * format.channel_count as usize);
         SampleChunker {
             source,
+            format,
             frames,
+            buffer,
             next_sequence: 0,
         }
     }
-}
 
-impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
-    async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        let channels = self.source.format().channel_count as usize;
-        if channels == 0 {
-            return None;
-        }
-        let len = self.frames * channels;
-        let mut audio_data = Vec::with_capacity(len);
-        for _ in 0..len {
-            audio_data.push(self.source.next().await?);
-        }
-        let sequence_number = self.next_sequence;
-        self.next_sequence += 1;
-        Some(AudioChunk::new(
-            sequence_number,
-            self.source.format().clone(),
-            audio_data,
-        ))
+    fn chunk_len(&self) -> usize {
+        self.frames * self.format.channel_count as usize
     }
 }
 
-pub struct TransformedChunkSource<ChunkSourceT: ChunkSource, ChunkTransformT: ChunkTransform> {
-    source: ChunkSourceT,
-    transform: ChunkTransformT,
-}
+impl<S: Stream<Item = f32> + Unpin> Stream for SampleChunker<S> {
+    type Item = AudioChunk;
 
-impl<ChunkSourceT: ChunkSource + Send, ChunkTransformT: ChunkTransform> ChunkSource
-    for TransformedChunkSource<ChunkSourceT, ChunkTransformT>
-{
-    async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        match self.source.next_chunk().await {
-            Some(chunk) => Some(self.transform.transform(chunk)),
-            None => None,
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<AudioChunk>> {
+        let this = self.get_mut();
+        let len = this.chunk_len();
+        if len == 0 {
+            return Poll::Ready(None);
         }
+        while this.buffer.len() < len {
+            match Pin::new(&mut this.source).poll_next(cx) {
+                Poll::Ready(Some(sample)) => this.buffer.push(sample),
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        let audio_data = std::mem::replace(&mut this.buffer, Vec::with_capacity(len));
+        let sequence_number = this.next_sequence;
+        this.next_sequence += 1;
+        Poll::Ready(Some(AudioChunk::new(
+            sequence_number,
+            this.format.clone(),
+            audio_data,
+        )))
     }
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::{ChunkSource, SampleChunker};
+mod tests {
+    use super::SampleChunker;
     use crate::audio::AudioFormat;
-    use crate::audio::sample::SampleSource;
-    use crate::audio::transform::Mute;
+    use futures_core::Stream;
     use std::collections::VecDeque;
-    use std::future::Future;
-    use std::pin::pin;
+    use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
 
-    pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = pin!(future);
+    fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
         let mut cx = Context::from_waker(Waker::noop());
         loop {
-            if let Poll::Ready(out) = future.as_mut().poll(&mut cx) {
+            if let Poll::Ready(out) = Pin::new(&mut *stream).poll_next(&mut cx) {
                 return out;
             }
         }
     }
 
-    pub(crate) struct Counting {
-        format: AudioFormat,
-        next: f32,
+    struct Scripted(VecDeque<f32>);
+
+    impl Stream for Scripted {
+        type Item = f32;
+
+        fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<f32>> {
+            Poll::Ready(self.get_mut().0.pop_front())
+        }
     }
 
-    impl SampleSource for Counting {
-        async fn next(&mut self) -> Option<f32> {
-            let value = self.next;
-            self.next += 1.0;
-            Some(value)
-        }
-
-        fn format(&self) -> &AudioFormat {
-            &self.format
-        }
+    fn chunker(samples: Vec<f32>, channels: u16, frames: usize) -> SampleChunker<Scripted> {
+        SampleChunker::new(
+            Scripted(VecDeque::from(samples)),
+            AudioFormat::new(channels, 44100),
+            frames,
+        )
     }
 
     #[test]
-    fn sample_chunker_frames_and_counts_sequence() {
-        let mut chunker = SampleChunker::new(
-            Counting {
-                next: 0.0,
-                format: AudioFormat::new(2, 44100),
-            },
-            3,
-        );
-        let first = block_on(chunker.next_chunk()).expect("chunk");
+    fn frames_and_counts_sequence() {
+        let mut chunker = chunker((0..12).map(|v| v as f32).collect(), 2, 3);
+        let first = next(&mut chunker).expect("chunk");
         assert_eq!(first.sequence_number, 0);
         assert_eq!(first.format, AudioFormat::new(2, 44100));
         assert_eq!(first.audio_data, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
-        let second = block_on(chunker.next_chunk()).expect("chunk");
+        let second = next(&mut chunker).expect("chunk");
         assert_eq!(second.sequence_number, 1);
         assert_eq!(second.audio_data[0], 6.0);
     }
 
-    struct Scripted(VecDeque<f32>, AudioFormat);
-
-    impl SampleSource for Scripted {
-        async fn next(&mut self) -> Option<f32> {
-            self.0.pop_front()
-        }
-
-        fn format(&self) -> &AudioFormat {
-            &self.1
-        }
-    }
-
-    fn scripted(samples: Vec<f32>, channels: u16) -> Scripted {
-        Scripted(VecDeque::from(samples), AudioFormat::new(channels, 48000))
-    }
-
     #[test]
-    fn exhausted_source_ends_stream() {
-        let mut chunker = SampleChunker::new(scripted(vec![0.0; 4], 2), 2);
-        assert!(block_on(chunker.next_chunk()).is_some());
-        assert!(block_on(chunker.next_chunk()).is_none());
+    fn partial_tail_ends_stream() {
+        let mut chunker = chunker(vec![0.0; 6], 2, 2);
+        assert!(next(&mut chunker).is_some());
+        assert!(next(&mut chunker).is_none());
     }
 
     #[test]
     fn zero_channel_source_ends_stream() {
-        let mut chunker = SampleChunker::new(scripted(vec![0.0; 4], 0), 2);
-        assert!(block_on(chunker.next_chunk()).is_none());
-    }
-
-    #[test]
-    fn transformed_source_applies_transform_and_keeps_sequence() {
-        let (mute, control) = Mute::shared(true);
-        let mut source = SampleChunker::new(scripted(vec![0.5; 8], 2), 2).transform(mute);
-        let muted = block_on(source.next_chunk()).expect("chunk");
-        assert_eq!(muted.sequence_number, 0);
-        assert_eq!(muted.audio_data, vec![0.0; 4]);
-        control.set(false);
-        let live = block_on(source.next_chunk()).expect("chunk");
-        assert_eq!(live.sequence_number, 1);
-        assert_eq!(live.audio_data, vec![0.5; 4]);
+        let mut chunker = chunker(vec![0.0; 4], 0, 2);
+        assert!(next(&mut chunker).is_none());
     }
 }

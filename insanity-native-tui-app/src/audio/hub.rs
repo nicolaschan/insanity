@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use futures_core::Stream;
+use futures_util::StreamExt;
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{ChunkSource, SampleChunker};
+use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
 use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 use tokio::sync::broadcast;
 
@@ -46,36 +47,33 @@ pub struct AudioInputHub {
 }
 
 impl AudioInputHub {
-    pub fn new<T: SampleSource + Send + 'static>(
-        source: T,
-        audio_config: AudioPipelineConfig,
-    ) -> Self {
-        let resampled =
-            RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-        let transform = ChannelMap::capped(audio_config.channels());
-        let source = SampleChunker::new(resampled, audio_config.frames()).transform(transform);
-        Self::spawn_chunk_source(source, audio_config)
+    pub fn new<S>(source: S, format: AudioFormat, audio_config: AudioPipelineConfig) -> Self
+    where
+        S: Stream<Item = f32> + Unpin + Send + 'static,
+    {
+        let resampled = RubatoResampler::new(
+            source,
+            format,
+            audio_config.sample_rate(),
+            audio_config.frames(),
+        );
+        let format = resampled.format().clone();
+        let chunks = SampleChunker::new(resampled, format, audio_config.frames());
+        Self::from_chunk_source(chunks, audio_config)
     }
 
     pub fn from_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
     where
-        R: ChunkSource + Send + 'static,
-    {
-        Self::spawn_chunk_source(source, audio_config)
-    }
-
-    pub(crate) fn spawn_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
-    where
-        R: ChunkSource + Send + 'static,
+        R: Stream<Item = AudioChunk> + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
-        let transform = mute.chain(ChannelMap::capped(audio_config.channels()));
-        let mut source = source.transform(transform);
+        let mut transform = mute.chain(ChannelMap::capped(audio_config.channels()));
+        let mut source = Box::pin(source.map(move |chunk| transform.transform(chunk)));
         let mut encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
         let (hub, tx) = Self::with_channel(mute_control);
         tokio::spawn(async move {
             let mut pacer = Pacer::new(audio_config.chunk_period());
-            while let Some(chunk) = source.next_chunk().await {
+            while let Some(chunk) = source.next().await {
                 pacer.pace().await;
                 let Some(frame) = encoder.encode_chunk(chunk) else {
                     continue;

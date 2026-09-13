@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
 use crate::audio::codec::{AudioDecoder, EncodedChunk, FormatCache};
-use crate::audio::sample::{Resampler, SampleSource, SyncSampleSource};
+use crate::audio::sample::Resampler;
 use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, JitterStage};
 
 use crate::audio::config::AudioPipelineConfig;
@@ -338,7 +338,7 @@ where
     }
 }
 
-impl<D, T, R, M, FD> SampleSource for Mixer<D, T, R, M, FD>
+impl<D, T, R, M, FD> Iterator for Mixer<D, T, R, M, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform,
@@ -346,24 +346,9 @@ where
     M: ChunkTransform,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
-    fn format(&self) -> &AudioFormat {
-        &self.out_format
-    }
+    type Item = f32;
 
-    async fn next(&mut self) -> Option<f32> {
-        self.next_sync()
-    }
-}
-
-impl<D, T, R, M, FD> SyncSampleSource for Mixer<D, T, R, M, FD>
-where
-    D: AudioDecoder,
-    T: ChunkTransform,
-    R: Resampler,
-    M: ChunkTransform,
-    FD: FnMut(&AudioFormat) -> Option<D> + Send,
-{
-    fn next_sync(&mut self) -> Option<f32> {
+    fn next(&mut self) -> Option<f32> {
         if self.slots.is_empty() {
             return Some(0.0);
         }
@@ -381,7 +366,7 @@ mod tests {
     use crate::audio::chunk::AudioChunk;
     use crate::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
     use crate::audio::config::AudioPipelineConfig;
-    use crate::audio::sample::{Resampler, SyncSampleSource};
+    use crate::audio::sample::Resampler;
     use crate::audio::transform::{ChunkTransform, Gain, JitterStage};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -467,7 +452,7 @@ mod tests {
     {
         let mut out = Vec::with_capacity(count);
         for _ in 0..count {
-            out.push(mixer.next_sync().expect("mixer never ends"));
+            out.push(mixer.next().expect("mixer never ends"));
         }
         out
     }

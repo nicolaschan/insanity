@@ -2271,6 +2271,7 @@ version = "1.6.6"
 dependencies = [
  "bon",
  "built",
+ "futures-core",
  "serde",
 ]
 
@@ -2293,6 +2294,8 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "fern",
+ "futures-core",
+ "futures-util",
  "indicatif",
  "insanity-core",
  "insanity-tui-adapter",
@@ -3758,6 +3761,8 @@ dependencies = [
 name = "rubato-audio-source"
 version = "1.6.6"
 dependencies = [
+ "futures-core",
+ "futures-util",
  "insanity-core",
  "log",
  "rubato",

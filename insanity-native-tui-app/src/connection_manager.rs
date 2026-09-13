@@ -286,7 +286,8 @@ fn manage_peers(
     let audio_config = AudioPipelineConfig::default();
     let source = CpalStreamReceiver::default(audio_config).unwrap();
     let source_name = source.name().to_owned();
-    let hub = Arc::new(AudioInputHub::new(source, audio_config));
+    let source_format = source.format().clone();
+    let hub = Arc::new(AudioInputHub::new(source, source_format, audio_config));
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
             .send(AppEvent::SetInputDeviceName(source_name))

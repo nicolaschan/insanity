@@ -3,8 +3,9 @@ mod sine;
 #[path = "common/unit_mixer.rs"]
 mod unit_mixer;
 
+use futures_util::{Stream, stream};
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
+use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
@@ -23,7 +24,7 @@ use unit_mixer::{
 async fn hub_fanout_same_chunk() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 440.0);
-        let hub = Arc::new(hub_from_source(src));
+        let hub = Arc::new(hub_from_source(src, AudioFormat::new(2, 48000)));
         let mut rx1 = hub.subscribe();
         let mut rx2 = hub.subscribe();
         let mut rx3 = hub.subscribe();
@@ -55,7 +56,7 @@ async fn hub_fanout_same_chunk() {
 async fn hub_mute_sends_silence() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 440.0);
-        let hub = hub_from_source(src);
+        let hub = hub_from_source(src, AudioFormat::new(2, 48000));
         hub.set_muted(true);
         let mut rx = hub.subscribe();
         let mut decoder = Decoder::new(48000, opus_channels(2)).expect("decoder");
@@ -245,20 +246,17 @@ fn opus_roundtrip_perceptual() {
     assert!(ratio > 0.3 && ratio < 3.0, "energy ratio {ratio}");
 }
 
-struct FormatSwitch {
-    remaining: Vec<AudioFormat>,
-    next_sequence: u128,
-}
-
-impl ChunkSource for FormatSwitch {
-    async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let format = self.remaining.pop()?;
-        let sequence_number = self.next_sequence;
-        self.next_sequence += 1;
-        let len = 480 * format.channel_count as usize;
-        Some(AudioChunk::new(sequence_number, format, vec![0.1; len]))
-    }
+fn format_switch(mut remaining: Vec<AudioFormat>) -> impl Stream<Item = AudioChunk> + Send {
+    stream::unfold(0u128, move |sequence_number| {
+        let format = remaining.pop();
+        async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let format = format?;
+            let len = 480 * format.channel_count as usize;
+            let chunk = AudioChunk::new(sequence_number, format, vec![0.1; len]);
+            Some((chunk, sequence_number + 1))
+        }
+    })
 }
 
 #[tokio::test]
@@ -269,10 +267,7 @@ async fn hub_rebuilds_encoder_on_format_change() {
         let mut remaining = vec![stereo.clone(); 3];
         remaining.extend(vec![mono.clone(); 3]);
         let hub = AudioInputHub::from_chunk_source(
-            FormatSwitch {
-                remaining,
-                next_sequence: 0,
-            },
+            format_switch(remaining),
             AudioPipelineConfig::default(),
         );
         let mut rx = hub.subscribe();
