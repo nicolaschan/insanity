@@ -1,18 +1,18 @@
-use futures_util::{Stream, StreamExt, stream};
+use futures_util::stream::{self, BoxStream, Stream, StreamExt};
 use insanity_core::audio::chunk::AudioChunk;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 pub struct SwitchingChunkSource<T> {
-    source: Option<T>,
+    source: Option<BoxStream<'static, AudioChunk>>,
     swap_tx: Sender<T>,
     swap_rx: Receiver<T>,
 }
 
-impl<T: Stream<Item = AudioChunk> + Unpin + Send> SwitchingChunkSource<T> {
+impl<T: Stream<Item = AudioChunk> + Send + 'static> SwitchingChunkSource<T> {
     pub fn new(source: T) -> Self {
         let (swap_tx, swap_rx) = channel(1);
         Self {
-            source: Some(source),
+            source: Some(source.boxed()),
             swap_tx,
             swap_rx,
         }
@@ -22,10 +22,7 @@ impl<T: Stream<Item = AudioChunk> + Unpin + Send> SwitchingChunkSource<T> {
         self.swap_tx.clone()
     }
 
-    pub fn into_stream(self) -> impl Stream<Item = AudioChunk> + Send
-    where
-        T: 'static,
-    {
+    pub fn into_stream(self) -> impl Stream<Item = AudioChunk> + Send {
         stream::unfold(self, |mut source| async move {
             let chunk = source.next_chunk().await?;
             Some((chunk, source))
@@ -35,13 +32,13 @@ impl<T: Stream<Item = AudioChunk> + Unpin + Send> SwitchingChunkSource<T> {
     pub async fn next_chunk(&mut self) -> Option<AudioChunk> {
         loop {
             let Some(source) = self.source.as_mut() else {
-                self.source = self.swap_rx.recv().await;
+                self.source = self.swap_rx.recv().await.map(StreamExt::boxed);
                 continue;
             };
             tokio::select! {
                 biased;
                 swapped = self.swap_rx.recv() => {
-                    self.source = swapped;
+                    self.source = swapped.map(StreamExt::boxed);
                 }
                 chunk = source.next() => match chunk {
                     Some(c) => return Some(c),
@@ -65,7 +62,7 @@ mod tests {
         channels: u16,
         value: f32,
         remaining: usize,
-    ) -> impl Stream<Item = AudioChunk> + Unpin + Send {
+    ) -> impl Stream<Item = AudioChunk> + Send {
         let chunk = AudioChunk::new(0, AudioFormat::new(channels, 48000), vec![value; 4]);
         stream::iter(std::iter::repeat_n(chunk, remaining))
     }

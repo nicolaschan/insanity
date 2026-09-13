@@ -56,28 +56,19 @@ pub trait ChunkStreamExt: Stream<Item = AudioChunk> + Sized {
 impl<S: Stream<Item = AudioChunk>> ChunkStreamExt for S {}
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::{ChunkStreamExt, chunk_samples};
+mod tests {
+    use super::{AudioChunk, ChunkStreamExt, chunk_samples};
     use crate::audio::AudioFormat;
     use crate::audio::sample::SampleSource;
     use crate::audio::transform::Mute;
-    use futures_util::StreamExt;
+    use futures_util::{FutureExt, Stream, StreamExt};
     use std::collections::VecDeque;
-    use std::future::Future;
-    use std::pin::pin;
-    use std::task::{Context, Poll, Waker};
 
-    pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = pin!(future);
-        let mut cx = Context::from_waker(Waker::noop());
-        loop {
-            if let Poll::Ready(out) = future.as_mut().poll(&mut cx) {
-                return out;
-            }
-        }
+    fn collect(chunks: impl Stream<Item = AudioChunk>) -> Vec<AudioChunk> {
+        chunks.collect().now_or_never().expect("sources are ready")
     }
 
-    pub(crate) struct Counting {
+    struct Counting {
         format: AudioFormat,
         next: f32,
     }
@@ -96,20 +87,16 @@ pub(crate) mod tests {
 
     #[test]
     fn sample_chunker_frames_and_counts_sequence() {
-        let mut chunker = pin!(chunk_samples(
-            Counting {
-                next: 0.0,
-                format: AudioFormat::new(2, 44100),
-            },
-            3,
-        ));
-        let first = block_on(chunker.next()).expect("chunk");
-        assert_eq!(first.sequence_number, 0);
-        assert_eq!(first.format, AudioFormat::new(2, 44100));
-        assert_eq!(first.audio_data, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
-        let second = block_on(chunker.next()).expect("chunk");
-        assert_eq!(second.sequence_number, 1);
-        assert_eq!(second.audio_data[0], 6.0);
+        let counting = Counting {
+            next: 0.0,
+            format: AudioFormat::new(2, 44100),
+        };
+        let chunks = collect(chunk_samples(counting, 3).take(2));
+        assert_eq!(chunks[0].sequence_number, 0);
+        assert_eq!(chunks[0].format, AudioFormat::new(2, 44100));
+        assert_eq!(chunks[0].audio_data, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(chunks[1].sequence_number, 1);
+        assert_eq!(chunks[1].audio_data[0], 6.0);
     }
 
     struct Scripted(VecDeque<f32>, AudioFormat);
@@ -129,29 +116,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn exhausted_source_ends_stream() {
-        let mut chunker = pin!(chunk_samples(scripted(vec![0.0; 4], 2), 2));
-        assert!(block_on(chunker.next()).is_some());
-        assert!(block_on(chunker.next()).is_none());
+    fn partial_tail_ends_stream() {
+        let chunks = collect(chunk_samples(scripted(vec![0.0; 6], 2), 2));
+        assert_eq!(chunks.len(), 1);
     }
 
     #[test]
     fn zero_channel_source_ends_stream() {
-        let mut chunker = pin!(chunk_samples(scripted(vec![0.0; 4], 0), 2));
-        assert!(block_on(chunker.next()).is_none());
+        let chunks = collect(chunk_samples(scripted(vec![0.0; 4], 0), 2));
+        assert!(chunks.is_empty());
     }
 
     #[test]
     fn transform_applies_and_keeps_sequence() {
         let (mute, control) = Mute::shared(true);
-        let mut chunks = pin!(chunk_samples(scripted(vec![0.5; 8], 2), 2).transform(mute));
-        let muted = block_on(chunks.next()).expect("chunk");
-        assert_eq!(muted.sequence_number, 0);
-        assert_eq!(muted.audio_data, vec![0.0; 4]);
-        control.set(false);
-        let live = block_on(chunks.next()).expect("chunk");
-        assert_eq!(live.sequence_number, 1);
-        assert_eq!(live.audio_data, vec![0.5; 4]);
-        assert!(block_on(chunks.next()).is_none());
+        let chunks = collect(
+            chunk_samples(scripted(vec![0.5; 8], 2), 2)
+                .transform(mute)
+                .inspect(|_| control.set(false)),
+        );
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].sequence_number, 0);
+        assert_eq!(chunks[0].audio_data, vec![0.0; 4]);
+        assert_eq!(chunks[1].sequence_number, 1);
+        assert_eq!(chunks[1].audio_data, vec![0.5; 4]);
     }
 }
