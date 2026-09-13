@@ -68,10 +68,14 @@ fn volume_curve() {
 #[test]
 fn resampler_passthrough() {
     struct Passthrough {
+        format: AudioFormat,
         data: Vec<f32>,
         pos: usize,
     }
     impl SampleSource for Passthrough {
+        fn format(&self) -> &AudioFormat {
+            &self.format
+        }
         async fn next(&mut self) -> Option<f32> {
             if self.pos < self.data.len() {
                 let v = self.data[self.pos];
@@ -95,16 +99,12 @@ fn resampler_passthrough() {
     }
     let data: Vec<f32> = (0..960).map(|i| i as f32 / 960.0).collect();
     let src = Passthrough {
+        format: AudioFormat::new(2, 48000),
         data: data.clone(),
         pos: 0,
     };
     let audio_config = AudioPipelineConfig::default();
-    let mut res = RubatoResampler::new(
-        src,
-        AudioFormat::new(2, 48000),
-        48000,
-        audio_config.frames(),
-    );
+    let mut res = RubatoResampler::new(src, 48000, audio_config.frames());
     // passthrough should be identical
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

@@ -94,10 +94,9 @@ impl AudioInputHub {
             .map(|d| d.name().to_string())
             .unwrap_or(UNKNOWN_DEVICE_NAME.into());
         match make_single_input(device, audio_config) {
-            Ok((receiver, format)) => {
+            Ok(receiver) => {
                 let resampled = RubatoResampler::new(
                     receiver,
-                    format.clone(),
                     audio_config.sample_rate(),
                     audio_config.frames(),
                 );
@@ -105,7 +104,6 @@ impl AudioInputHub {
                 let transform = mute.chain(ChannelMap::capped(audio_config.channels()));
                 let capture = Capture::new(
                     resampled,
-                    AudioFormat::new(format.channel_count, audio_config.sample_rate()),
                     audio_config.frames(),
                     transform,
                     |format: &AudioFormat| {

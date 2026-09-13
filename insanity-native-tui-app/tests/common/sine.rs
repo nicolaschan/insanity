@@ -13,7 +13,7 @@ use rubato_audio_source::RubatoResampler;
 
 pub struct SineSource {
     phase: f32,
-    sr: u32,
+    format: AudioFormat,
     freq: f32,
     amp: f32,
 }
@@ -26,7 +26,7 @@ impl SineSource {
     pub fn new_amp(sr: u32, freq: f32, amp: f32) -> Self {
         Self {
             phase: 0.0,
-            sr,
+            format: AudioFormat::new(2, sr),
             freq,
             amp,
         }
@@ -34,7 +34,7 @@ impl SineSource {
 
     fn step(&mut self) -> f32 {
         let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * self.amp;
-        self.phase = (self.phase + self.freq / self.sr as f32) % 1.0;
+        self.phase = (self.phase + self.freq / self.format.sample_rate as f32) % 1.0;
         v
     }
 
@@ -45,6 +45,10 @@ impl SineSource {
 }
 
 impl SampleSource for SineSource {
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -56,22 +60,13 @@ impl SyncSampleSource for SineSource {
     }
 }
 
-pub fn hub_from_source<S>(source: S, format: AudioFormat) -> AudioInputHub
+pub fn hub_from_source<S>(source: S) -> AudioInputHub
 where
     S: SampleSource + Send + Sync + 'static,
 {
     let audio_config = AudioPipelineConfig::default();
-    let resampled = RubatoResampler::new(
-        source,
-        format.clone(),
-        audio_config.sample_rate(),
-        audio_config.frames(),
-    );
-    let chunked = SampleChunker::new(
-        resampled,
-        audio_config.frames(),
-        AudioFormat::new(format.channel_count, audio_config.sample_rate()),
-    );
+    let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
+    let chunked = SampleChunker::new(resampled, audio_config.frames());
     AudioInputHub::from_chunk_source(chunked, audio_config)
 }
 
