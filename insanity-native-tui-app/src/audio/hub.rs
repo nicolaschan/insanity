@@ -39,9 +39,9 @@ impl Pacer {
     }
 }
 
-/// Broadcasts Opus-encoded 10ms chunks; muted chunks are sent as silence.
-pub struct AudioInputHub {
-    tx: broadcast::Sender<EncodedChunk>,
+/// Broadcasts encoded chunks; muted chunks are sent as silence.
+pub struct AudioInputHub<OutputT = EncodedChunk> {
+    tx: broadcast::Sender<OutputT>,
     mute_control: Arc<MuteControl>,
 }
 
@@ -54,30 +54,46 @@ impl AudioInputHub {
             RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
         let transform = ChannelMap::capped(audio_config.channels());
         let source = SampleChunker::new(resampled, audio_config.frames()).transform(transform);
-        Self::spawn_chunk_source(source, audio_config)
+        Self::from_chunk_source(source, audio_config)
     }
 
     pub fn from_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
     where
         R: ChunkSource + Send + 'static,
     {
-        Self::spawn_chunk_source(source, audio_config)
+        let encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
+        Self::spawn_chunk_source(source, audio_config, encoder)
     }
 
-    pub(crate) fn spawn_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
+    fn rebuild_opus(format: &AudioFormat) -> Option<OpusEncoder> {
+        OpusEncoder::new(format.sample_rate, format.channel_count)
+    }
+}
+
+impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
+    pub fn spawn_chunk_source<R, S>(
+        mut source: R,
+        audio_config: AudioPipelineConfig,
+        sink: S,
+    ) -> Self
     where
         R: ChunkSource + Send + 'static,
+        S: ChunkTransform<OutputT = Option<OutputT>> + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
-        let transform = mute.chain(ChannelMap::capped(audio_config.channels()));
-        let mut source = source.transform(transform);
-        let mut encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
-        let (hub, tx) = Self::with_channel(mute_control);
+        let mut transform = mute
+            .chain(ChannelMap::capped(audio_config.channels()))
+            .chain(sink);
+        let (tx, _) = broadcast::channel(32);
+        let hub = Self {
+            tx: tx.clone(),
+            mute_control,
+        };
         tokio::spawn(async move {
             let mut pacer = Pacer::new(audio_config.chunk_period());
             while let Some(chunk) = source.next_chunk().await {
                 pacer.pace().await;
-                let Some(frame) = encoder.encode_chunk(chunk) else {
+                let Some(frame) = transform.transform(chunk) else {
                     continue;
                 };
                 let _ = tx.send(frame);
@@ -86,20 +102,7 @@ impl AudioInputHub {
         hub
     }
 
-    fn rebuild_opus(format: &AudioFormat) -> Option<OpusEncoder> {
-        OpusEncoder::new(format.sample_rate, format.channel_count)
-    }
-
-    fn with_channel(mute_control: Arc<MuteControl>) -> (Self, broadcast::Sender<EncodedChunk>) {
-        let (tx, _) = broadcast::channel(32);
-        let hub = Self {
-            tx: tx.clone(),
-            mute_control,
-        };
-        (hub, tx)
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<EncodedChunk> {
+    pub fn subscribe(&self) -> broadcast::Receiver<OutputT> {
         self.tx.subscribe()
     }
 
