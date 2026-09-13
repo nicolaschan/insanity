@@ -1,4 +1,3 @@
-pub mod capture;
 pub mod chunk;
 pub mod codec;
 pub mod config;

@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::capture::ChunkEncoder;
 use insanity_core::audio::chunk::{ChunkSource, SampleChunker};
-use insanity_core::audio::codec::EncodedChunk;
+use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
