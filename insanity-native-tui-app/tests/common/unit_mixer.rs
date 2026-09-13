@@ -4,26 +4,14 @@ use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, SlotId};
-use insanity_core::audio::sample::SampleSource;
+use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{Gain, GainControl};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
     MAX_VOLUME, PeerChain, PeerControls, chain_from_controls, output_resampler,
 };
 use rubato_audio_source::StreamResampler;
-use std::pin::pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
-
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    let mut future = pin!(future);
-    let mut cx = Context::from_waker(Waker::noop());
-    loop {
-        if let Poll::Ready(out) = future.as_mut().poll(&mut cx) {
-            return out;
-        }
-    }
-}
 
 pub struct PassthroughEncoder;
 
@@ -115,7 +103,7 @@ pub fn add_unit_peer(mixer: &mut UnitMixer, volume: usize, denoise: DenoiseSelec
 pub fn push_chunk(mixer: &mut UnitMixer, slot: SlotId, chunk: AudioChunk) {
     let mut encoder = PassthroughEncoder;
     let frame = encoder.encode(&chunk).expect("encode");
-    block_on(mixer.push_to_slot(slot, frame));
+    mixer.push_to_slot(slot, frame);
 }
 
 pub fn push_value(mixer: &mut UnitMixer, slot: SlotId, sequence: u128, value: f32) {
@@ -133,7 +121,7 @@ pub fn push_value(mixer: &mut UnitMixer, slot: SlotId, sequence: u128, value: f3
 
 pub fn render(mixer: &mut UnitMixer, count: usize) -> Vec<f32> {
     (0..count)
-        .map(|_| block_on(mixer.next()).unwrap_or(0.0))
+        .map(|_| mixer.next_sync().unwrap_or(0.0))
         .collect()
 }
 

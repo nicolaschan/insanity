@@ -76,7 +76,7 @@ impl<ChunkSourceT: ChunkSource + Send, ChunkTransformT: ChunkTransform> ChunkSou
 {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         match self.source.next_chunk().await {
-            Some(chunk) => Some(self.transform.transform(chunk).await),
+            Some(chunk) => Some(self.transform.transform(chunk)),
             None => None,
         }
     }

@@ -267,7 +267,7 @@ async fn run_cell(signal: &str, condition: &str, run: usize, ticks: usize) -> Ce
                 ok += 1;
             }
             for name in ["a".to_string(), "b".to_string()] {
-                render_tick(nodes.get_mut(&name).expect("node")).await;
+                render_tick(nodes.get_mut(&name).expect("node"));
             }
         }
     } else if condition == "delay1" {
@@ -284,7 +284,7 @@ async fn run_cell(signal: &str, condition: &str, run: usize, ticks: usize) -> Ce
             }
             pending = fresh;
             for name in ["a".to_string(), "b".to_string()] {
-                render_tick(nodes.get_mut(&name).expect("node")).await;
+                render_tick(nodes.get_mut(&name).expect("node"));
             }
         }
         if let Some(old) = pending.take()
@@ -324,7 +324,7 @@ async fn run_cell(signal: &str, condition: &str, run: usize, ticks: usize) -> Ce
                 ok += 1;
             }
             for name in ["a".to_string(), "b".to_string()] {
-                render_tick(nodes.get_mut(&name).expect("node")).await;
+                render_tick(nodes.get_mut(&name).expect("node"));
             }
         }
     }

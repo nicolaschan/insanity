@@ -17,7 +17,7 @@ pub fn volume_multiplier(volume: usize) -> f32 {
 }
 
 pub trait ChunkTransform: Send {
-    fn transform(&mut self, chunk: AudioChunk) -> impl Future<Output = AudioChunk> + Send;
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk;
 
     fn chain<N: ChunkTransform>(self, next: N) -> Link<Self, N>
     where
@@ -36,14 +36,14 @@ pub struct Link<A: ChunkTransform, B: ChunkTransform> {
 }
 
 impl<A: ChunkTransform, B: ChunkTransform> ChunkTransform for Link<A, B> {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
-        let chunk = self.first.transform(chunk).await;
-        self.second.transform(chunk).await
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+        let chunk = self.first.transform(chunk);
+        self.second.transform(chunk)
     }
 }
 
 impl ChunkTransform for () {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         chunk
     }
 }
@@ -84,7 +84,7 @@ impl Mute {
 }
 
 impl ChunkTransform for Mute {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let mut chunk = chunk;
         if self.control.is_muted() {
             chunk.audio_data.fill(0.0);
@@ -132,7 +132,7 @@ impl Gain {
 }
 
 impl ChunkTransform for Gain {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let volume = self.control.get();
         if volume == 100 {
             return chunk;
@@ -163,7 +163,7 @@ impl Default for Clip {
 }
 
 impl ChunkTransform for Clip {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let mut chunk = chunk;
         for sample in chunk.audio_data.iter_mut() {
             let clamped = (*sample).clamp(-1.0, 1.0);
@@ -222,7 +222,7 @@ impl<D: Denoiser> Denoise<D> {
 }
 
 impl<D: Denoiser> ChunkTransform for Denoise<D> {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         match self.control.get() {
             DenoiseSelection::None => chunk,
             DenoiseSelection::Nnnoiseless => self.inner.denoise_chunk(&chunk),
@@ -264,7 +264,7 @@ impl MetricsReader {
 }
 
 impl ChunkTransform for MetricsReader {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         self.state.loudness_bits.store(
             calculate_loudness(&chunk.audio_data).to_bits(),
             Ordering::Relaxed,
@@ -345,7 +345,7 @@ impl ChannelMap {
 }
 
 impl ChunkTransform for ChannelMap {
-    async fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         let dst = if self.cap_channels {
             chunk.format.channel_count.min(self.dst_channels)
         } else {
@@ -389,27 +389,27 @@ mod tests {
         AudioChunk::new(7, AudioFormat::new(channels, 48000), data)
     }
 
-    #[tokio::test]
-    async fn mute_passes_or_silences() {
+    #[test]
+    fn mute_passes_or_silences() {
         let (mut mute, control) = Mute::shared(false);
-        let out = mute.transform(chunk(vec![0.5; 4])).await;
+        let out = mute.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.sequence_number, 7);
         assert_eq!(out.audio_data, vec![0.5; 4]);
         control.set(true);
         assert!(control.is_muted());
-        let out = mute.transform(chunk(vec![0.5; 4])).await;
+        let out = mute.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.sequence_number, 7);
         assert_eq!(out.audio_data, vec![0.0; 4]);
     }
 
-    #[tokio::test]
-    async fn gain_unity_passes_through_zero_silences() {
+    #[test]
+    fn gain_unity_passes_through_zero_silences() {
         let (mut gain, control) = Gain::shared(100, 500);
-        let out = gain.transform(chunk(vec![0.5; 4])).await;
+        let out = gain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.5; 4]);
         control.set(0);
         assert_eq!(control.get(), 0);
-        let out = gain.transform(chunk(vec![0.5; 4])).await;
+        let out = gain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.0; 4]);
     }
 
@@ -425,87 +425,87 @@ mod tests {
         assert!((volume_multiplier(100) - 1.0).abs() < 1e-6);
     }
 
-    #[tokio::test]
-    async fn clip_passes_in_range_untouched() {
+    #[test]
+    fn clip_passes_in_range_untouched() {
         let mut clip = Clip::new();
-        let out = clip.transform(chunk(vec![-1.0, -0.5, 0.0, 0.5, 1.0])).await;
+        let out = clip.transform(chunk(vec![-1.0, -0.5, 0.0, 0.5, 1.0]));
         assert_eq!(out.audio_data, vec![-1.0, -0.5, 0.0, 0.5, 1.0]);
         assert_eq!(clip.clip_hits, 0);
     }
 
-    #[tokio::test]
-    async fn clip_clamps_and_counts_hits() {
+    #[test]
+    fn clip_clamps_and_counts_hits() {
         let mut clip = Clip::default();
-        let out = clip.transform(chunk(vec![-2.0, 0.25, 1.5])).await;
+        let out = clip.transform(chunk(vec![-2.0, 0.25, 1.5]));
         assert_eq!(out.audio_data, vec![-1.0, 0.25, 1.0]);
         assert_eq!(clip.clip_hits, 2);
     }
 
-    #[tokio::test]
-    async fn denoise_none_passes_through() {
+    #[test]
+    fn denoise_none_passes_through() {
         let (mut denoise, control) = Denoise::<DoubleDenoiser>::shared(DenoiseSelection::None);
-        let out = denoise.transform(chunk(vec![0.5; 8])).await;
+        let out = denoise.transform(chunk(vec![0.5; 8]));
         assert_eq!(out.audio_data, vec![0.5; 8]);
         control.set(DenoiseSelection::Nnnoiseless);
-        let out = denoise.transform(chunk(vec![0.5; 8])).await;
+        let out = denoise.transform(chunk(vec![0.5; 8]));
         assert_eq!(out.audio_data, vec![1.0; 8]);
     }
 
-    #[tokio::test]
-    async fn meter_records_and_passes_through() {
+    #[test]
+    fn meter_records_and_passes_through() {
         let (mut meter, state) = MetricsReader::shared();
-        let out = meter.transform(chunk(vec![0.5; 8])).await;
+        let out = meter.transform(chunk(vec![0.5; 8]));
         assert_eq!(out.audio_data, vec![0.5; 8]);
         let loudness = state.loudness();
         assert!(loudness > 0.0 && loudness <= 1.0);
     }
 
-    #[tokio::test]
-    async fn channel_map_matrix() {
+    #[test]
+    fn channel_map_matrix() {
         let mut map = ChannelMap::new(2);
-        let out = map.transform(chunk_with(1, vec![0.5; 4])).await;
+        let out = map.transform(chunk_with(1, vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.5; 8]);
         assert_eq!(out.format.channel_count, 2);
         let mut map = ChannelMap::new(1);
-        let out = map.transform(chunk(vec![0.25, 0.75])).await;
+        let out = map.transform(chunk(vec![0.25, 0.75]));
         assert_eq!(out.audio_data, vec![0.5]);
         assert_eq!(out.format.channel_count, 1);
         let mut map = ChannelMap::new(2);
-        let out = map.transform(chunk(vec![0.5; 4])).await;
+        let out = map.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.5; 4]);
     }
 
-    #[tokio::test]
-    async fn channel_map_capped_never_upmixes() {
+    #[test]
+    fn channel_map_capped_never_upmixes() {
         let mut map = ChannelMap::capped(2);
-        let out = map.transform(chunk_with(1, vec![0.5; 4])).await;
+        let out = map.transform(chunk_with(1, vec![0.5; 4]));
         assert_eq!(out.format.channel_count, 1);
         assert_eq!(out.audio_data, vec![0.5; 4]);
-        let out = map.transform(chunk(vec![0.25, 0.75])).await;
+        let out = map.transform(chunk(vec![0.25, 0.75]));
         assert_eq!(out.format.channel_count, 2);
         assert_eq!(out.audio_data, vec![0.25, 0.75]);
-        let out = map.transform(chunk_with(3, vec![0.5; 6])).await;
+        let out = map.transform(chunk_with(3, vec![0.5; 6]));
         assert_eq!(out.format.channel_count, 2);
         assert_eq!(out.audio_data.len(), 4);
     }
 
-    #[tokio::test]
-    async fn link_chains_in_order() {
+    #[test]
+    fn link_chains_in_order() {
         let (mute, mute_control) = Mute::shared(false);
         let (gain, _) = Gain::shared(100, 500);
         let mut chain: Link<Mute, Gain> = mute.chain(gain);
-        let out = chain.transform(chunk(vec![0.5; 4])).await;
+        let out = chain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.5; 4]);
         mute_control.set(true);
-        let out = chain.transform(chunk(vec![0.5; 4])).await;
+        let out = chain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.0; 4]);
     }
 
-    #[tokio::test]
-    async fn unit_is_identity_and_nests() {
+    #[test]
+    fn unit_is_identity_and_nests() {
         let (gain, _) = Gain::shared(0, 500);
         let mut chain = ().chain(gain);
-        let out = chain.transform(chunk(vec![0.5; 4])).await;
+        let out = chain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.0; 4]);
     }
 }

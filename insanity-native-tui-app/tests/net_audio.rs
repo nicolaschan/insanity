@@ -2,15 +2,13 @@
 mod audio_math;
 #[path = "common/sine.rs"]
 mod sine;
-#[path = "common/unit_mixer.rs"]
-mod unit_mixer;
 
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::SlotId;
-use insanity_core::audio::sample::SampleSource;
+use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::MetricsState;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
@@ -23,7 +21,6 @@ use std::future::Ready;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::broadcast;
-use unit_mixer::block_on;
 use veq::veq::VeqSocket;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -44,7 +41,7 @@ async fn sample_speaker(mixer: &Arc<Mutex<AppMixer>>, chunks: usize) -> (Vec<f32
         {
             let mut guard = mixer.lock().expect("mixer lock");
             for sample in buf.iter_mut() {
-                *sample = block_on(guard.next()).unwrap_or(0.0);
+                *sample = guard.next_sync().unwrap_or(0.0);
             }
         }
         total_nanos += start.elapsed().as_nanos() as u64;
@@ -73,7 +70,7 @@ fn subscribe_peer(mixer: &Arc<Mutex<AppMixer>>) -> (SlotId, Arc<MetricsState>) {
 fn push_to(mixer: Arc<Mutex<AppMixer>>, slot: SlotId) -> impl FnMut(EncodedChunk) -> Ready<bool> {
     move |frame: EncodedChunk| {
         let mut guard = mixer.lock().expect("mixer lock");
-        std::future::ready(block_on(guard.push_to_slot(slot, frame)))
+        std::future::ready(guard.push_to_slot(slot, frame))
     }
 }
 

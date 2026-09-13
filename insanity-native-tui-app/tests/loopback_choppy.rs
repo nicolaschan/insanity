@@ -317,7 +317,7 @@ async fn burst_loss_still_realtime() {
             }
             let names: Vec<String> = nodes.keys().cloned().collect();
             for name in names.iter() {
-                render_tick(nodes.get_mut(name).expect("node")).await;
+                render_tick(nodes.get_mut(name).expect("node"));
             }
         }
         assert_eq!(nodes["b"].speaker_history.len(), 40 * 960);

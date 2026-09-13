@@ -194,7 +194,7 @@ async fn denoise_parity_on_tonal_content() {
         }
         let mut nodes2 = pair(440.0, 880.0);
         assert!(transfer_tick_timeout(&mut nodes2, "a", "b").await);
-        render_tick(nodes2.get_mut("b").expect("node")).await;
+        render_tick(nodes2.get_mut("b").expect("node"));
         assert_eq!(nodes2["b"].speaker_history.len(), 960);
     })
     .await;

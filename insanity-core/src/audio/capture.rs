@@ -70,7 +70,7 @@ impl<
         if chunk.format.channel_count == 0 {
             return CaptureOutput::EndOfStream;
         }
-        let chunk = self.transform.transform(chunk).await;
+        let chunk = self.transform.transform(chunk);
         match self.encoder.encode_chunk(chunk) {
             Some(frame) => CaptureOutput::Encoded(frame),
             None => CaptureOutput::Skipped,
@@ -90,7 +90,7 @@ impl<
         if chunk.format.channel_count == 0 {
             return None;
         }
-        Some(self.transform.transform(chunk).await)
+        Some(self.transform.transform(chunk))
     }
 }
 
@@ -254,8 +254,8 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn tracks_format_switches_with_continuous_sequence() {
+    #[test]
+    fn tracks_format_switches_with_continuous_sequence() {
         let mono = AudioFormat::new(1, 48000);
         let stereo = AudioFormat::new(2, 48000);
         let rebuilds = AtomicUsize::new(0);
@@ -278,7 +278,7 @@ mod tests {
         let mut formats = Vec::new();
         let mut sequences = Vec::new();
         while let Some(input) = block_on(chunks.next_chunk()) {
-            let converted = transform.transform(input).await;
+            let converted = transform.transform(input);
             match encoder.encode_chunk(converted) {
                 Some(frame) => {
                     formats.push(frame.format.clone());

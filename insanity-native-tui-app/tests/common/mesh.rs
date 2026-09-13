@@ -4,7 +4,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
-use insanity_core::audio::sample::SampleSource;
+use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::{
     hub::AudioInputHub,
@@ -162,7 +162,7 @@ impl VirtualNode {
         let Some(slot) = self.peer_ids.get(peer_name).copied() else {
             return false;
         };
-        self.mixer.push_to_slot(slot, frame).await
+        self.mixer.push_to_slot(slot, frame)
     }
 }
 
@@ -182,9 +182,9 @@ pub async fn transfer_tick(
     rx.push_frame(tx_name, &frame_bytes).await
 }
 
-pub async fn render_tick(node: &mut VirtualNode) {
+pub fn render_tick(node: &mut VirtualNode) {
     for _ in 0..node.out_samples {
-        let sample = node.mixer.next().await.unwrap_or(0.0);
+        let sample = node.mixer.next_sync().unwrap_or(0.0);
         node.speaker_history.push(sample);
     }
 }
@@ -211,7 +211,7 @@ pub async fn run_mesh_timeout(
             }
             let names: Vec<String> = nodes.keys().cloned().collect();
             for name in names.iter() {
-                render_tick(nodes.get_mut(name).expect("test node")).await;
+                render_tick(nodes.get_mut(name).expect("test node"));
             }
         }
     })
