@@ -12,9 +12,14 @@ use super::config::get_input_config;
 pub struct CpalStreamReceiver {
     _stream: send_safe::SendWrapperThread<Option<Stream>>,
     receiver: tokio::sync::mpsc::UnboundedReceiver<f32>,
+    format: AudioFormat,
 }
 
 impl SampleSource for CpalStreamReceiver {
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         self.receiver.recv().await
     }
@@ -23,7 +28,7 @@ impl SampleSource for CpalStreamReceiver {
 pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
-) -> Result<(CpalStreamReceiver, AudioFormat), anyhow::Error> {
+) -> Result<CpalStreamReceiver, anyhow::Error> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
         return Err(anyhow!(
@@ -51,13 +56,11 @@ pub fn make_single_input(
             "Failed to start input stream, falling back to silence"
         ));
     }
-    Ok((
-        CpalStreamReceiver {
-            _stream: wrapper,
-            receiver: rx,
-        },
+    Ok(CpalStreamReceiver {
+        _stream: wrapper,
+        receiver: rx,
         format,
-    ))
+    })
 }
 
 fn setup_input_stream(

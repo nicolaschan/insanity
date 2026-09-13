@@ -55,15 +55,9 @@ impl<
     F: FnMut(&AudioFormat) -> Option<E>,
 > Capture<R, T, E, F>
 {
-    pub fn new(
-        resampled: R,
-        stream_format: AudioFormat,
-        frames: usize,
-        transform: T,
-        rebuild: F,
-    ) -> Self {
+    pub fn new(resampled: R, frames: usize, transform: T, rebuild: F) -> Self {
         Capture {
-            chunker: SampleChunker::new(resampled, frames, stream_format),
+            chunker: SampleChunker::new(resampled, frames),
             transform,
             encoder: ChunkEncoder::new(rebuild, frames),
         }
@@ -97,11 +91,15 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct Scripted(VecDeque<f32>);
+    struct Scripted(VecDeque<f32>, AudioFormat);
 
     impl SampleSource for Scripted {
         async fn next(&mut self) -> Option<f32> {
             self.0.pop_front()
+        }
+
+        fn format(&self) -> &AudioFormat {
+            &self.1
         }
     }
 
@@ -132,7 +130,6 @@ mod tests {
 
     fn capture<T, F>(
         source: Scripted,
-        format: AudioFormat,
         transform: T,
         rebuild: F,
     ) -> Capture<Scripted, T, TagEncoder, F>
@@ -140,13 +137,13 @@ mod tests {
         T: ChunkTransform,
         F: FnMut(&AudioFormat) -> Option<TagEncoder>,
     {
-        Capture::new(source, format, 2, transform, rebuild)
+        Capture::new(source, 2, transform, rebuild)
     }
 
     #[test]
     fn encodes_and_advances_sequence() {
         let format = AudioFormat::new(2, 48000);
-        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 8])), format, (), |_| {
+        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 8]), format), (), |_| {
             Some(TagEncoder)
         });
         for seq in 0..2 {
@@ -162,7 +159,7 @@ mod tests {
     fn muted_chunks_skip_but_consume_sequence() {
         let format = AudioFormat::new(2, 48000);
         let (mute, control) = Mute::shared(false);
-        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 8])), format, mute, |_| {
+        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 8]), format), mute, |_| {
             Some(TagEncoder)
         });
         control.set(true);
@@ -183,8 +180,7 @@ mod tests {
         let format = AudioFormat::new(2, 48000);
         let rebuilds = AtomicUsize::new(0);
         let mut cap = capture(
-            Scripted(VecDeque::from(vec![0.0; 8])),
-            format,
+            Scripted(VecDeque::from(vec![0.0; 8]), format),
             (),
             |_: &AudioFormat| {
                 rebuilds.fetch_add(1, Ordering::Relaxed);
@@ -205,7 +201,7 @@ mod tests {
     #[test]
     fn failed_rebuild_skips_chunk() {
         let format = AudioFormat::new(2, 48000);
-        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 4])), format, (), |_| {
+        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 4]), format), (), |_| {
             None::<TagEncoder>
         });
         assert!(matches!(
@@ -217,7 +213,7 @@ mod tests {
     #[test]
     fn exhausted_source_ends_stream() {
         let format = AudioFormat::new(2, 48000);
-        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 4])), format, (), |_| {
+        let mut cap = capture(Scripted(VecDeque::from(vec![0.0; 4]), format), (), |_| {
             Some(TagEncoder)
         });
         assert!(matches!(
@@ -233,8 +229,7 @@ mod tests {
     #[test]
     fn zero_channel_stream_ends_instead_of_spinning() {
         let mut cap = capture(
-            Scripted(VecDeque::from(vec![0.0; 4])),
-            AudioFormat::new(0, 48000),
+            Scripted(VecDeque::from(vec![0.0; 4]), AudioFormat::new(0, 48000)),
             (),
             |_| Some(TagEncoder),
         );

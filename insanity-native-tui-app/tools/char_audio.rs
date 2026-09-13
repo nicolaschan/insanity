@@ -28,7 +28,7 @@ fn goertzel_energy(samples: &[f32], freq: f32, sr: f32) -> f64 {
 
 struct ChirpSource {
     n: u64,
-    sr: u32,
+    format: AudioFormat,
     amp: f32,
     total: u64,
     phase: f64,
@@ -38,7 +38,7 @@ impl ChirpSource {
     fn new(sr: u32, amp: f32, total: u64) -> Self {
         Self {
             n: 0,
-            sr,
+            format: AudioFormat::new(2, sr),
             amp,
             total,
             phase: 0.0,
@@ -47,13 +47,17 @@ impl ChirpSource {
     fn step(&mut self) -> f32 {
         let t = self.n as f64 / self.total.max(1) as f64;
         let freq = 200.0 + 1800.0 * t;
-        self.phase += freq / self.sr as f64;
+        self.phase += freq / self.format.sample_rate as f64;
         self.n += 1;
         ((self.phase * 2.0 * std::f64::consts::PI).sin() as f32) * self.amp
     }
 }
 
 impl SampleSource for ChirpSource {
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -67,7 +71,7 @@ impl SyncSampleSource for ChirpSource {
 
 struct AmSpeechSource {
     n: u64,
-    sr: u32,
+    format: AudioFormat,
     amp: f32,
     phase_a: f64,
     phase_b: f64,
@@ -77,16 +81,17 @@ impl AmSpeechSource {
     fn new(sr: u32, amp: f32) -> Self {
         Self {
             n: 0,
-            sr,
+            format: AudioFormat::new(2, sr),
             amp,
             phase_a: 0.0,
             phase_b: 0.0,
         }
     }
     fn step(&mut self) -> f32 {
-        let t = self.n as f64 / self.sr as f64;
-        self.phase_a += 440.0 / self.sr as f64;
-        self.phase_b += 880.0 / self.sr as f64;
+        let sr = self.format.sample_rate as f64;
+        let t = self.n as f64 / sr;
+        self.phase_a += 440.0 / sr;
+        self.phase_b += 880.0 / sr;
         self.n += 1;
         let am = 0.6 + 0.4 * (2.0 * std::f64::consts::PI * 4.0 * t).sin();
         let tick = (self.n / 960) % 50;
@@ -98,6 +103,10 @@ impl AmSpeechSource {
 }
 
 impl SampleSource for AmSpeechSource {
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -110,13 +119,18 @@ impl SyncSampleSource for AmSpeechSource {
 }
 
 struct NoiseSource {
+    format: AudioFormat,
     state: u64,
     amp: f32,
 }
 
 impl NoiseSource {
     fn new(amp: f32, seed: u64) -> Self {
-        Self { state: seed, amp }
+        Self {
+            format: AudioFormat::new(2, 48000),
+            state: seed,
+            amp,
+        }
     }
     fn step(&mut self) -> f32 {
         self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -126,6 +140,10 @@ impl NoiseSource {
 }
 
 impl SampleSource for NoiseSource {
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -137,9 +155,13 @@ impl SyncSampleSource for NoiseSource {
     }
 }
 
-struct SilenceSource;
+struct SilenceSource(AudioFormat);
 
 impl SampleSource for SilenceSource {
+    fn format(&self) -> &AudioFormat {
+        &self.0
+    }
+
     async fn next(&mut self) -> Option<f32> {
         Some(0.0)
     }
@@ -183,20 +205,10 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
         "sine440_05" => VirtualNode::new("a", 440.0),
         "sine880_05" => VirtualNode::new("a", 880.0),
         "sine440_025" => VirtualNode::with_amp("a", 440.0, 0.25),
-        "chirp" => VirtualNode::with_source(
-            "a",
-            ChirpSource::new(48000, 0.4, 40 * 960),
-            AudioFormat::new(2, 48000),
-        ),
-        "amspeech" => VirtualNode::with_source(
-            "a",
-            AmSpeechSource::new(48000, 0.5),
-            AudioFormat::new(2, 48000),
-        ),
-        "noise" => {
-            VirtualNode::with_source("a", NoiseSource::new(0.4, seed), AudioFormat::new(2, 48000))
-        }
-        "silence" => VirtualNode::with_source("a", SilenceSource, AudioFormat::new(2, 48000)),
+        "chirp" => VirtualNode::with_source("a", ChirpSource::new(48000, 0.4, 40 * 960)),
+        "amspeech" => VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5)),
+        "noise" => VirtualNode::with_source("a", NoiseSource::new(0.4, seed)),
+        "silence" => VirtualNode::with_source("a", SilenceSource(AudioFormat::new(2, 48000))),
         _ => VirtualNode::with_amp("a", 440.0, 0.5),
     }
 }
@@ -204,7 +216,7 @@ fn make_sender(signal: &str, seed: u64) -> VirtualNode {
 fn make_pair(signal: &str, seed: u64) -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
     let mut a = make_sender(signal, seed);
-    let mut b = VirtualNode::with_source("b", SilenceSource, AudioFormat::new(2, 48000));
+    let mut b = VirtualNode::with_source("b", SilenceSource(AudioFormat::new(2, 48000)));
     a.add_outbound("b");
     b.add_inbound("a");
     nodes.insert("a".to_string(), a);

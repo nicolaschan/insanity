@@ -14,6 +14,7 @@ pub struct RubatoResampler<R: SampleSource> {
     original_samples_buffer: VecDeque<f32>,
     delegate: R,
     source_format: AudioFormat,
+    out_format: AudioFormat,
     target_rate: u32,
     chunk_size: usize,
 }
@@ -29,12 +30,9 @@ fn sinc_params() -> rubato::InterpolationParameters {
 }
 
 impl<R: SampleSource + Send> RubatoResampler<R> {
-    pub fn new(
-        delegate: R,
-        source_format: AudioFormat,
-        target_rate: u32,
-        chunk_size: usize,
-    ) -> RubatoResampler<R> {
+    pub fn new(delegate: R, target_rate: u32, chunk_size: usize) -> RubatoResampler<R> {
+        let source_format = delegate.format().clone();
+        let out_format = AudioFormat::new(source_format.channel_count, target_rate);
         let resampler = build_sinc(
             source_format.sample_rate,
             source_format.channel_count as usize,
@@ -47,6 +45,7 @@ impl<R: SampleSource + Send> RubatoResampler<R> {
             original_samples_buffer: VecDeque::new(),
             delegate,
             source_format,
+            out_format,
             target_rate,
             chunk_size,
         }
@@ -114,6 +113,10 @@ impl<R: SampleSource> RubatoResampler<R> {
 }
 
 impl<R: SampleSource + Send> SampleSource for RubatoResampler<R> {
+    fn format(&self) -> &AudioFormat {
+        &self.out_format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         if self.is_passthrough() {
             return self.delegate.next().await;
@@ -290,14 +293,18 @@ mod tests {
     use insanity_core::audio::sample::{Resampler, SampleSource};
 
     struct Sine {
-        sample_rate: u32,
+        format: AudioFormat,
         freq: f32,
         index: u64,
     }
 
     impl SampleSource for Sine {
+        fn format(&self) -> &AudioFormat {
+            &self.format
+        }
+
         async fn next(&mut self) -> Option<f32> {
-            let t = self.index as f32 / self.sample_rate as f32;
+            let t = self.index as f32 / self.format.sample_rate as f32;
             self.index += 1;
             Some((2.0 * std::f32::consts::PI * self.freq * t).sin())
         }
@@ -305,19 +312,17 @@ mod tests {
 
     #[tokio::test]
     async fn resampled_device_path_yields_exact_opus_frames() {
-        let source_format = AudioFormat::new(2, 44100);
         let resampled = RubatoResampler::new(
             Sine {
-                sample_rate: 44100,
+                format: AudioFormat::new(2, 44100),
                 freq: 440.0,
                 index: 0,
             },
-            source_format,
             48000,
             480,
         );
         let target = AudioFormat::new(2, 48000);
-        let mut chunker = SampleChunker::new(resampled, 480, target.clone());
+        let mut chunker = SampleChunker::new(resampled, 480);
         let mut total = 0usize;
         for _ in 0..20 {
             let chunk = chunker

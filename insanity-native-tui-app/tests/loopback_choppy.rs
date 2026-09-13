@@ -33,7 +33,7 @@ use unit_mixer::{
 
 struct ChirpSource {
     n: u64,
-    sr: u32,
+    format: AudioFormat,
     amp: f32,
     total: u64,
     phase: f64,
@@ -43,7 +43,7 @@ impl ChirpSource {
     fn new(sr: u32, amp: f32, total: u64) -> Self {
         Self {
             n: 0,
-            sr,
+            format: AudioFormat::new(2, sr),
             amp,
             total,
             phase: 0.0,
@@ -53,13 +53,17 @@ impl ChirpSource {
     fn step(&mut self) -> f32 {
         let t = self.n as f64 / self.total.max(1) as f64;
         let freq = 200.0 + 1800.0 * t;
-        self.phase += freq / self.sr as f64;
+        self.phase += freq / self.format.sample_rate as f64;
         self.n += 1;
         ((self.phase * 2.0 * std::f64::consts::PI).sin() as f32) * self.amp
     }
 }
 
 impl SampleSource for ChirpSource {
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -73,7 +77,7 @@ impl SyncSampleSource for ChirpSource {
 
 struct AmSpeechSource {
     n: u64,
-    sr: u32,
+    format: AudioFormat,
     amp: f32,
     phase_a: f64,
     phase_b: f64,
@@ -83,7 +87,7 @@ impl AmSpeechSource {
     fn new(sr: u32, amp: f32) -> Self {
         Self {
             n: 0,
-            sr,
+            format: AudioFormat::new(2, sr),
             amp,
             phase_a: 0.0,
             phase_b: 0.0,
@@ -91,9 +95,10 @@ impl AmSpeechSource {
     }
 
     fn step(&mut self) -> f32 {
-        let t = self.n as f64 / self.sr as f64;
-        self.phase_a += 440.0 / self.sr as f64;
-        self.phase_b += 880.0 / self.sr as f64;
+        let sr = self.format.sample_rate as f64;
+        let t = self.n as f64 / sr;
+        self.phase_a += 440.0 / sr;
+        self.phase_b += 880.0 / sr;
         self.n += 1;
         let am = 0.6 + 0.4 * (2.0 * std::f64::consts::PI * 4.0 * t).sin();
         let v = (self.phase_a * 2.0 * std::f64::consts::PI).sin() * 0.7
@@ -103,6 +108,10 @@ impl AmSpeechSource {
 }
 
 impl SampleSource for AmSpeechSource {
+    fn format(&self) -> &AudioFormat {
+        &self.format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         Some(self.step())
     }
@@ -116,16 +125,8 @@ impl SyncSampleSource for AmSpeechSource {
 
 fn music_pair() -> HashMap<String, VirtualNode> {
     let mut nodes = HashMap::new();
-    let mut a = VirtualNode::with_source(
-        "a",
-        AmSpeechSource::new(48000, 0.5),
-        AudioFormat::new(2, 48000),
-    );
-    let mut b = VirtualNode::with_source(
-        "b",
-        ChirpSource::new(48000, 0.0, 1),
-        AudioFormat::new(2, 48000),
-    );
+    let mut a = VirtualNode::with_source("a", AmSpeechSource::new(48000, 0.5));
+    let mut b = VirtualNode::with_source("b", ChirpSource::new(48000, 0.0, 1));
     a.add_outbound("b");
     b.add_inbound("a");
     nodes.insert("a".to_string(), a);
@@ -171,16 +172,8 @@ async fn non48k_input_resample_loopback() {
     let timeout = Duration::from_secs(60);
     let res = tokio::time::timeout(timeout, async {
         let mut nodes = HashMap::new();
-        let mut a = VirtualNode::with_source(
-            "a",
-            SineSource::new_amp(44100, 440.0, 0.5),
-            AudioFormat::new(2, 44100),
-        );
-        let mut b = VirtualNode::with_source(
-            "b",
-            SineSource::new_amp(48000, 880.0, 0.0),
-            AudioFormat::new(2, 48000),
-        );
+        let mut a = VirtualNode::with_source("a", SineSource::new_amp(44100, 440.0, 0.5));
+        let mut b = VirtualNode::with_source("b", SineSource::new_amp(48000, 880.0, 0.0));
         a.add_outbound("b");
         b.add_inbound("a");
         nodes.insert("a".to_string(), a);
@@ -261,10 +254,7 @@ fn resampled_output_fill_budget() {
 #[tokio::test]
 async fn broadcast_lag_records_gap() {
     let res = tokio::time::timeout(Duration::from_secs(15), async {
-        let hub = Arc::new(hub_from_source(
-            SineSource::new_amp(48000, 440.0, 0.5),
-            AudioFormat::new(2, 48000),
-        ));
+        let hub = Arc::new(hub_from_source(SineSource::new_amp(48000, 440.0, 0.5)));
         let mut lagging = hub.subscribe();
         tokio::time::sleep(Duration::from_millis(600)).await;
         let first = tokio::time::timeout(Duration::from_secs(2), lagging.recv())

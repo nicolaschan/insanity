@@ -355,6 +355,10 @@ where
     M: ChunkTransform,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
+    fn format(&self) -> &AudioFormat {
+        &self.out_format
+    }
+
     async fn next(&mut self) -> Option<f32> {
         self.next_sync()
     }

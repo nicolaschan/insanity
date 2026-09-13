@@ -27,16 +27,14 @@ pub trait ChunkSource {
 pub struct SampleChunker<S: SampleSource + Send> {
     source: S,
     frames: usize,
-    format: AudioFormat,
     next_sequence: u128,
 }
 
 impl<S: SampleSource + Send> SampleChunker<S> {
-    pub fn new(source: S, frames: usize, format: AudioFormat) -> Self {
+    pub fn new(source: S, frames: usize) -> Self {
         SampleChunker {
             source,
             frames,
-            format,
             next_sequence: 0,
         }
     }
@@ -44,7 +42,7 @@ impl<S: SampleSource + Send> SampleChunker<S> {
 
 impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        let len = self.frames * self.format.channel_count as usize;
+        let len = self.frames * self.source.format().channel_count as usize;
         let mut audio_data = Vec::with_capacity(len);
         for _ in 0..len {
             audio_data.push(self.source.next().await?);
@@ -53,7 +51,7 @@ impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
         self.next_sequence += 1;
         Some(AudioChunk::new(
             sequence_number,
-            self.format.clone(),
+            self.source.format().clone(),
             audio_data,
         ))
     }
@@ -79,6 +77,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) struct Counting {
+        format: AudioFormat,
         next: f32,
     }
 
@@ -88,11 +87,21 @@ pub(crate) mod tests {
             self.next += 1.0;
             Some(value)
         }
+
+        fn format(&self) -> &AudioFormat {
+            &self.format
+        }
     }
 
     #[test]
     fn sample_chunker_frames_and_counts_sequence() {
-        let mut chunker = SampleChunker::new(Counting { next: 0.0 }, 3, AudioFormat::new(2, 44100));
+        let mut chunker = SampleChunker::new(
+            Counting {
+                next: 0.0,
+                format: AudioFormat::new(2, 44100),
+            },
+            3,
+        );
         let first = block_on(chunker.next_chunk()).expect("chunk");
         assert_eq!(first.sequence_number, 0);
         assert_eq!(first.format, AudioFormat::new(2, 44100));

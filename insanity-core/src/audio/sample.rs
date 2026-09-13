@@ -1,4 +1,8 @@
+use crate::audio::AudioFormat;
+
 pub trait SampleSource {
+    fn format(&self) -> &AudioFormat;
+
     fn next(&mut self) -> impl Future<Output = Option<f32>> + Send;
 }
 
