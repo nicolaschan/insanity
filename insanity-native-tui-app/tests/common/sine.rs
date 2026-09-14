@@ -6,7 +6,7 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::Gain;
-use insanity_native_tui_app::audio::hub::AudioInputHub;
+use insanity_native_tui_app::audio::hub::{AudioInputHub, rebuild_opus_encoder};
 use insanity_native_tui_app::audio::mixer::{AppMixer, MAX_VOLUME};
 use opus::{Channels, Decoder};
 use rubato_audio_source::RubatoResampler;
@@ -67,7 +67,7 @@ where
     let audio_config = AudioPipelineConfig::default();
     let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
     let chunked = SampleChunker::new(resampled, audio_config.frames());
-    AudioInputHub::from_chunk_source(chunked, audio_config)
+    AudioInputHub::from_chunk_source(chunked, audio_config, rebuild_opus_encoder)
 }
 
 pub fn new_no_device_mixer() -> AppMixer {
