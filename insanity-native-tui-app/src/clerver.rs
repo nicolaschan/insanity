@@ -7,11 +7,12 @@ use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
 
-use crate::{audio::hub::AudioInputHub, protocol::ProtocolMessage};
+use crate::audio::hub::AudioInputHub;
+use crate::protocol::ProtocolMessage;
 
 // A clerver is a CLient + sERVER.
 
-async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub>) {
+async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub<EncodedChunk>>) {
     let mut rx = hub.subscribe();
 
     loop {
@@ -83,7 +84,7 @@ async fn run_receiver<P, F>(
 pub async fn run_clerver<P, F>(
     conn: VeqSessionAlias,
     app_event_sender: Option<mpsc::UnboundedSender<AppEvent>>,
-    hub: Arc<AudioInputHub>,
+    hub: Arc<AudioInputHub<EncodedChunk>>,
     push: P,
     loudness: Arc<MetricsState>,
     peer_id: String,

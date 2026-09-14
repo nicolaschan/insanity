@@ -8,8 +8,9 @@ use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
+use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::{
-    hub::AudioInputHub,
+    codec::rebuild_opus_encoder,
     mixer::{PeerControls, chain_from_controls, output_resampler},
 };
 use opus::Decoder;
@@ -274,6 +275,7 @@ async fn hub_rebuilds_encoder_on_format_change() {
                 next_sequence: 0,
             },
             AudioPipelineConfig::default(),
+            rebuild_opus_encoder,
         );
         let mut rx = hub.subscribe();
         let mut channels = Vec::new();

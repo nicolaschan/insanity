@@ -1,11 +1,11 @@
 #![allow(dead_code)]
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
-use insanity_core::audio::codec::{AudioCodec, AudioDecoder, AudioEncoder, EncodedChunk};
+use insanity_core::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
-use insanity_core::audio::transform::{Gain, GainControl};
+use insanity_core::audio::transform::{ChunkTransform, Gain, GainControl};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
     MAX_VOLUME, PeerChain, PeerControls, chain_from_controls, output_resampler,
@@ -15,8 +15,10 @@ use std::sync::Arc;
 
 pub struct PassthroughEncoder;
 
-impl AudioEncoder for PassthroughEncoder {
-    fn encode(&mut self, chunk: &AudioChunk) -> Option<EncodedChunk> {
+impl ChunkTransform for PassthroughEncoder {
+    type OutputT = Option<EncodedChunk>;
+
+    fn transform(&mut self, chunk: AudioChunk) -> Option<EncodedChunk> {
         let mut payload = Vec::with_capacity(chunk.audio_data.len() * 4);
         payload.extend(
             chunk
@@ -28,7 +30,7 @@ impl AudioEncoder for PassthroughEncoder {
             sequence_number: chunk.sequence_number,
             codec: AudioCodec::Raw,
             payload,
-            format: chunk.format.clone(),
+            format: chunk.format,
         })
     }
 }
@@ -102,7 +104,7 @@ pub fn add_unit_peer(mixer: &mut UnitMixer, volume: usize, denoise: DenoiseSelec
 
 pub fn push_chunk(mixer: &mut UnitMixer, slot: SlotId, chunk: AudioChunk) {
     let mut encoder = PassthroughEncoder;
-    let frame = encoder.encode(&chunk).expect("encode");
+    let frame = encoder.transform(chunk).expect("encode");
     mixer.push_to_slot(slot, frame);
 }
 

@@ -3,8 +3,10 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
+use crate::audio::hub::AudioInputHub;
 use bon::bon;
 use insanity_core::audio::AudioFormat;
+use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
@@ -15,7 +17,6 @@ use veq::veq::VeqSocket;
 
 use crate::{
     audio::{
-        hub::AudioInputHub,
         lock,
         mixer::{
             MixerClient, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder,
@@ -63,7 +64,7 @@ pub struct ManagedPeer {
     task: Arc<Mutex<PeerTask>>,
     out_format: AudioFormat,
     audio_config: AudioPipelineConfig,
-    hub: Arc<AudioInputHub>,
+    hub: Arc<AudioInputHub<EncodedChunk>>,
     client: MixerClient,
 }
 
@@ -85,7 +86,7 @@ impl ManagedPeer {
         volume: usize,
         out_format: AudioFormat,
         audio_config: AudioPipelineConfig,
-        hub: Arc<AudioInputHub>,
+        hub: Arc<AudioInputHub<EncodedChunk>>,
         client: MixerClient,
     ) -> ManagedPeer {
         let (shutdown_tx, _shutdown_rx) = broadcast::channel(10);
