@@ -45,6 +45,10 @@ impl ChunkTransform for OpusEncoder {
     }
 }
 
+pub fn rebuild_opus_encoder(format: &AudioFormat) -> Option<OpusEncoder> {
+    OpusEncoder::new(format.sample_rate, format.channel_count)
+}
+
 pub struct OpusDecoder {
     inner: Decoder,
     format: AudioFormat,

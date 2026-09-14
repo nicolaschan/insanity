@@ -5,7 +5,6 @@ pub mod config;
 pub mod cpal_registry;
 pub mod cpal_stream_receiver;
 pub mod denoise;
-pub mod hub;
 pub mod mixer;
 pub mod output;
 

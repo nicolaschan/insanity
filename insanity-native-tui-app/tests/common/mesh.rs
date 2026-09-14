@@ -3,12 +3,12 @@ use crate::sine::{decode_frame_to_chunk, hub_from_source, new_no_device_mixer, o
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::hub::AudioInputHub;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::{
-    hub::AudioInputHub,
-    mixer::{AppMixer, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder},
+use insanity_native_tui_app::audio::mixer::{
+    AppMixer, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder,
 };
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use opus::Decoder;
@@ -32,7 +32,7 @@ pub fn mesh_timeout(ticks: usize, edges: usize) -> Duration {
 }
 
 pub struct VirtualNode {
-    hub: Arc<AudioInputHub>,
+    hub: Arc<AudioInputHub<EncodedChunk>>,
     mixer: AppMixer,
     peer_ids: HashMap<String, SlotId>,
     peer_controls: HashMap<String, PeerControls>,

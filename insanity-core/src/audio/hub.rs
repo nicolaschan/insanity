@@ -1,15 +1,11 @@
 use std::sync::Arc;
 
-use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{ChunkSource, SampleChunker};
-use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
-use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::sample::SampleSource;
-use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
+use crate::audio::AudioFormat;
+use crate::audio::chunk::ChunkSource;
+use crate::audio::codec::ChunkEncoder;
+use crate::audio::config::AudioPipelineConfig;
+use crate::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 use tokio::sync::broadcast;
-
-use super::codec::OpusEncoder;
-use rubato_audio_source::RubatoResampler;
 
 struct Pacer {
     period: tokio::time::Duration,
@@ -40,25 +36,12 @@ impl Pacer {
 }
 
 /// Broadcasts encoded chunks; muted chunks are sent as silence.
-pub struct AudioInputHub<OutputT = EncodedChunk> {
+pub struct AudioInputHub<OutputT> {
     tx: broadcast::Sender<OutputT>,
     mute_control: Arc<MuteControl>,
 }
 
 impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
-    pub fn new<T, E, F>(source: T, audio_config: AudioPipelineConfig, rebuild: F) -> Self
-    where
-        T: SampleSource + Send + 'static,
-        E: ChunkTransform<OutputT = Option<OutputT>> + 'static,
-        F: FnMut(&AudioFormat) -> Option<E> + Send + 'static,
-    {
-        let resampled =
-            RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-        let transform = ChannelMap::capped(audio_config.channels());
-        let source = SampleChunker::new(resampled, audio_config.frames()).transform(transform);
-        Self::from_chunk_source(source, audio_config, rebuild)
-    }
-
     pub fn from_chunk_source<R, E, F>(
         mut source: R,
         audio_config: AudioPipelineConfig,
@@ -98,8 +81,4 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
     pub fn set_muted(&self, muted: bool) {
         self.mute_control.set(muted);
     }
-}
-
-pub fn rebuild_opus_encoder(format: &AudioFormat) -> Option<OpusEncoder> {
-    OpusEncoder::new(format.sample_rate, format.channel_count)
 }
