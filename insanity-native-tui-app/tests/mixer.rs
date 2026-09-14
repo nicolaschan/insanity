@@ -6,9 +6,9 @@ mod unit_mixer;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::hub::AudioInputHub;
 use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
+use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::{
     codec::rebuild_opus_encoder,
     mixer::{PeerControls, chain_from_controls, output_resampler},

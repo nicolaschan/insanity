@@ -7,9 +7,9 @@ use audio_math::count_dips;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::hub::AudioInputHub;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::codec::rebuild_opus_encoder;
+use insanity_native_tui_app::audio::hub::AudioInputHub;
 use std::time::Duration;
 use unit_mixer::{add_unit_peer, assert_all_finite, push_value, render, unit_mixer};
 

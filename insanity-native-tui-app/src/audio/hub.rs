@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use crate::audio::AudioFormat;
-use crate::audio::chunk::ChunkSource;
-use crate::audio::codec::ChunkEncoder;
-use crate::audio::config::AudioPipelineConfig;
-use crate::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::ChunkSource;
+use insanity_core::audio::codec::ChunkEncoder;
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 use tokio::sync::broadcast;
 
 struct Pacer {

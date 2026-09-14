@@ -3,11 +3,11 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
+use crate::audio::hub::AudioInputHub;
 use bon::bon;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::hub::AudioInputHub;
 use insanity_core::audio::mixer::SlotId;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_tui_adapter::{AppEvent, Peer, PeerState};

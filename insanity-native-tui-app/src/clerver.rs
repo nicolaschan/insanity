@@ -7,8 +7,8 @@ use insanity_tui_adapter::AppEvent;
 use tokio::sync::{broadcast, mpsc};
 use veq::veq::VeqSessionAlias;
 
+use crate::audio::hub::AudioInputHub;
 use crate::protocol::ProtocolMessage;
-use insanity_core::audio::hub::AudioInputHub;
 
 // A clerver is a CLient + sERVER.
 
