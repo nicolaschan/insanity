@@ -20,7 +20,7 @@ use crate::{
     audio::{
         config::AUDIO_CALLBACK_FRAMES,
         cpal_stream_receiver::CpalStreamReceiver,
-        hub::AudioInputHub,
+        hub::{AudioInputHub, rebuild_opus_encoder},
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, start_output},
     },
@@ -286,7 +286,11 @@ fn manage_peers(
     let audio_config = AudioPipelineConfig::default();
     let source = CpalStreamReceiver::default(audio_config).unwrap();
     let source_name = source.name().to_owned();
-    let hub = Arc::new(AudioInputHub::new(source, audio_config));
+    let hub = Arc::new(AudioInputHub::new(
+        source,
+        audio_config,
+        rebuild_opus_encoder,
+    ));
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
             .send(AppEvent::SetInputDeviceName(source_name))

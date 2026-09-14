@@ -8,7 +8,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::hub::AudioInputHub;
+use insanity_native_tui_app::audio::hub::{AudioInputHub, rebuild_opus_encoder};
 use std::time::Duration;
 use unit_mixer::{add_unit_peer, assert_all_finite, push_value, render, unit_mixer};
 
@@ -104,6 +104,7 @@ async fn bursty_source_is_paced_to_10ms() {
     let hub = AudioInputHub::from_chunk_source(
         BurstySource { seq: 0, phase: 0.0 },
         AudioPipelineConfig::default(),
+        rebuild_opus_encoder,
     );
     let mut rx = hub.subscribe();
     let mut times = Vec::new();

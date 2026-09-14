@@ -10,11 +10,11 @@ mod unit_mixer;
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
-use insanity_core::audio::codec::AudioEncoder;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
+use insanity_core::audio::transform::ChunkTransform;
 use insanity_core::audio::transform::Gain;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::codec::OpusEncoder;
@@ -349,7 +349,7 @@ fn opus_stereo_frame_roundtrip_shape() {
             })
             .collect();
         let frame = enc
-            .encode(&AudioChunk::new(
+            .transform(AudioChunk::new(
                 seq,
                 AudioFormat::new(2, 48000),
                 chunk.clone(),
