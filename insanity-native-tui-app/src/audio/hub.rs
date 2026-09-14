@@ -1,15 +1,11 @@
 use std::sync::Arc;
 
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{ChunkSource, SampleChunker};
-use insanity_core::audio::codec::{ChunkEncoder, EncodedChunk};
+use insanity_core::audio::chunk::ChunkSource;
+use insanity_core::audio::codec::ChunkEncoder;
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::sample::SampleSource;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 use tokio::sync::broadcast;
-
-use super::codec::OpusEncoder;
-use rubato_audio_source::RubatoResampler;
 
 struct Pacer {
     period: tokio::time::Duration,
@@ -40,50 +36,26 @@ impl Pacer {
 }
 
 /// Broadcasts encoded chunks; muted chunks are sent as silence.
-pub struct AudioInputHub<OutputT = EncodedChunk> {
+pub struct AudioInputHub<OutputT> {
     tx: broadcast::Sender<OutputT>,
     mute_control: Arc<MuteControl>,
 }
 
-impl AudioInputHub {
-    pub fn new<T: SampleSource + Send + 'static>(
-        source: T,
-        audio_config: AudioPipelineConfig,
-    ) -> Self {
-        let resampled =
-            RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-        let transform = ChannelMap::capped(audio_config.channels());
-        let source = SampleChunker::new(resampled, audio_config.frames()).transform(transform);
-        Self::from_chunk_source(source, audio_config)
-    }
-
-    pub fn from_chunk_source<R>(source: R, audio_config: AudioPipelineConfig) -> Self
-    where
-        R: ChunkSource + Send + 'static,
-    {
-        let encoder = ChunkEncoder::new(Self::rebuild_opus, audio_config.frames());
-        Self::spawn_chunk_source(source, audio_config, encoder)
-    }
-
-    fn rebuild_opus(format: &AudioFormat) -> Option<OpusEncoder> {
-        OpusEncoder::new(format.sample_rate, format.channel_count)
-    }
-}
-
 impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
-    pub fn spawn_chunk_source<R, S>(
+    pub fn from_chunk_source<R, E, F>(
         mut source: R,
         audio_config: AudioPipelineConfig,
-        sink: S,
+        rebuild: F,
     ) -> Self
     where
         R: ChunkSource + Send + 'static,
-        S: ChunkTransform<OutputT = Option<OutputT>> + 'static,
+        E: ChunkTransform<OutputT = Option<OutputT>> + 'static,
+        F: FnMut(&AudioFormat) -> Option<E> + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
         let mut transform = mute
             .chain(ChannelMap::capped(audio_config.channels()))
-            .chain(sink);
+            .chain(ChunkEncoder::new(rebuild, audio_config.frames()));
         let (tx, _) = broadcast::channel(32);
         let hub = Self {
             tx: tx.clone(),

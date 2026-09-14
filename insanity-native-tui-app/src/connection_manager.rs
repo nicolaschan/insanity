@@ -16,17 +16,21 @@ use std::str::FromStr;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::audio::hub::AudioInputHub;
 use crate::{
     audio::{
+        codec::rebuild_opus_encoder,
         config::AUDIO_CALLBACK_FRAMES,
         cpal_stream_receiver::CpalStreamReceiver,
-        hub::AudioInputHub,
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, start_output},
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
+use insanity_core::audio::chunk::SampleChunker;
+use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
+use rubato_audio_source::RubatoResampler;
 use veq::snow_types::SnowPublicKey;
 
 const AUDIO_METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
@@ -55,7 +59,7 @@ pub struct ConnectionManager {
 
 #[derive(Clone)]
 struct SharedAudio {
-    hub: Arc<AudioInputHub>,
+    hub: Arc<AudioInputHub<EncodedChunk>>,
     handle: OutputHandle,
     audio_config: AudioPipelineConfig,
 }
@@ -286,7 +290,13 @@ fn manage_peers(
     let audio_config = AudioPipelineConfig::default();
     let source = CpalStreamReceiver::default(audio_config).unwrap();
     let source_name = source.name().to_owned();
-    let hub = Arc::new(AudioInputHub::new(source, audio_config));
+    let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
+    let chunked = SampleChunker::new(resampled, audio_config.frames());
+    let hub = Arc::new(AudioInputHub::from_chunk_source(
+        chunked,
+        audio_config,
+        rebuild_opus_encoder,
+    ));
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
             .send(AppEvent::SetInputDeviceName(source_name))
@@ -444,7 +454,7 @@ fn update_peer_info(
 
 async fn handle_user_action(
     user_action: UserInputEvent,
-    hub: Arc<AudioInputHub>,
+    hub: Arc<AudioInputHub<EncodedChunk>>,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {

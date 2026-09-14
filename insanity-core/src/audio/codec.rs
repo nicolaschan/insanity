@@ -18,10 +18,6 @@ pub struct EncodedChunk {
     pub format: AudioFormat,
 }
 
-pub trait AudioEncoder: Send {
-    fn encode(&mut self, chunk: &AudioChunk) -> Option<EncodedChunk>;
-}
-
 pub trait AudioDecoder: Send {
     fn decode(&mut self, frame: &EncodedChunk) -> Option<AudioChunk>;
 }
@@ -62,12 +58,12 @@ impl<C, F: FnMut(&AudioFormat) -> Option<C>> FormatCache<C, F> {
     }
 }
 
-pub struct ChunkEncoder<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E>> {
+pub struct ChunkEncoder<E, F: FnMut(&AudioFormat) -> Option<E>> {
     encoder_cache: FormatCache<E, F>,
     frames: usize,
 }
 
-impl<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E>> ChunkEncoder<E, F> {
+impl<E, F: FnMut(&AudioFormat) -> Option<E>> ChunkEncoder<E, F> {
     pub fn new(rebuild: F, frames: usize) -> Self {
         ChunkEncoder {
             encoder_cache: FormatCache::new(rebuild),
@@ -76,28 +72,29 @@ impl<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E>> ChunkEncoder<E, F> {
     }
 }
 
-impl<E: AudioEncoder, F: FnMut(&AudioFormat) -> Option<E> + Send> ChunkTransform
-    for ChunkEncoder<E, F>
+impl<O, E, F> ChunkTransform for ChunkEncoder<E, F>
+where
+    E: ChunkTransform<OutputT = Option<O>>,
+    F: FnMut(&AudioFormat) -> Option<E> + Send,
 {
-    type OutputT = Option<EncodedChunk>;
+    type OutputT = Option<O>;
 
-    fn transform(&mut self, chunk: AudioChunk) -> Option<EncodedChunk> {
+    fn transform(&mut self, chunk: AudioChunk) -> Option<O> {
         if chunk.format.channel_count == 0 {
             return None;
         }
-        let encoder = self.encoder_cache.ensure_current(&chunk.format)?;
-        let frame = encoder.encode(&chunk)?;
         debug_assert_eq!(
             chunk.audio_data.len(),
             self.frames * chunk.format.channel_count as usize
         );
-        Some(frame)
+        let encoder = self.encoder_cache.ensure_current(&chunk.format)?;
+        encoder.transform(chunk)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioCodec, AudioEncoder, ChunkEncoder, EncodedChunk};
+    use super::{AudioCodec, ChunkEncoder, EncodedChunk};
     use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
     use crate::audio::transform::{ChannelMap, ChunkTransform};
@@ -105,13 +102,15 @@ mod tests {
 
     struct TagEncoder;
 
-    impl AudioEncoder for TagEncoder {
-        fn encode(&mut self, chunk: &AudioChunk) -> Option<EncodedChunk> {
+    impl ChunkTransform for TagEncoder {
+        type OutputT = Option<EncodedChunk>;
+
+        fn transform(&mut self, chunk: AudioChunk) -> Option<EncodedChunk> {
             Some(EncodedChunk {
                 sequence_number: chunk.sequence_number,
                 codec: AudioCodec::Raw,
                 payload: Vec::new(),
-                format: chunk.format.clone(),
+                format: chunk.format,
             })
         }
     }
