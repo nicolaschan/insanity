@@ -32,7 +32,7 @@ fn main() {
         .collect();
     let format = AudioFormat::new(2, 48000);
     let mut seq: u128 = 0;
-    for _ in 0..10 {
+    for _ in 0..3 {
         push_chunk(
             &mut mixer,
             id1,

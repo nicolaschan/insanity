@@ -81,7 +81,6 @@ zip = "2.2.0"
 base64 = "0.22.1"
 toml = "0.8.19"
 url = "2.5.4"
-console-subscriber = { version = "0.4", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
@@ -89,4 +88,3 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [features]
 pipewire = ["cpal/pipewire"]
-console = ["console-subscriber"]

@@ -84,7 +84,6 @@
                 hyperfine
                 heaptrack
                 valgrind
-                tokio-console
                 perf
                 linuxPackages.cpupower
               ]
