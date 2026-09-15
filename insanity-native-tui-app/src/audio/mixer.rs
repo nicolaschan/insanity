@@ -10,6 +10,7 @@ use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{
     ChunkTransform, Denoise, DenoiseControl, Gain, GainControl, Link, MetricsReader, MetricsState,
+    PassthroughOnQuiet,
 };
 use insanity_core::user_input_event::DenoiseSelection;
 use rtrb::Producer;
@@ -21,8 +22,10 @@ use super::denoise::NnnoiselessDenoiser;
 use super::output::{OutputStats, RING_CAPACITY_BLOCKS};
 
 pub const MAX_VOLUME: usize = 500;
+pub const QUIET_PEAK_THRESHOLD: f32 = 0.02;
 
-pub type PeerChain = Link<Denoise<NnnoiselessDenoiser>, Link<Gain, MetricsReader>>;
+pub type PeerChain =
+    Link<PassthroughOnQuiet<Denoise<NnnoiselessDenoiser>>, Link<Gain, MetricsReader>>;
 pub(crate) type OpusRebuild = fn(&AudioFormat) -> Option<OpusDecoder>;
 pub type AppMixer = Mixer<OpusDecoder, PeerChain, StreamResampler, Gain, OpusRebuild>;
 
@@ -47,7 +50,7 @@ impl PeerControls {
 }
 
 pub fn chain_from_controls(controls: &PeerControls) -> PeerChain {
-    Denoise::new(controls.denoise.clone()).chain(
+    PassthroughOnQuiet::new(Denoise::new(controls.denoise.clone()), QUIET_PEAK_THRESHOLD).chain(
         Gain::new(controls.gain.clone()).chain(MetricsReader::new(controls.loudness.clone())),
     )
 }

@@ -244,6 +244,30 @@ impl<D: Denoiser> ChunkTransform for Denoise<D> {
     }
 }
 
+pub struct PassthroughOnQuiet<T> {
+    inner: T,
+    threshold: f32,
+}
+
+impl<T> PassthroughOnQuiet<T> {
+    pub fn new(inner: T, threshold: f32) -> Self {
+        PassthroughOnQuiet { inner, threshold }
+    }
+}
+
+impl<T: ChunkTransform<OutputT = AudioChunk>> ChunkTransform for PassthroughOnQuiet<T> {
+    type OutputT = AudioChunk;
+
+    fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+        let quiet = chunk.audio_data.iter().all(|s| s.abs() < self.threshold);
+        if quiet {
+            chunk
+        } else {
+            self.inner.transform(chunk)
+        }
+    }
+}
+
 pub struct MetricsState {
     loudness_bits: AtomicU64,
 }
@@ -377,7 +401,7 @@ impl ChunkTransform for ChannelMap {
 mod tests {
     use super::{
         ChannelMap, ChunkTransform, Clip, Denoise, DenoiseSelection, Gain, GainControl, Link,
-        MetricsReader, Mute, volume_multiplier,
+        MetricsReader, Mute, PassthroughOnQuiet, volume_multiplier,
     };
     use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
@@ -525,5 +549,79 @@ mod tests {
         let mut chain = ().chain(gain);
         let out = chain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.0; 4]);
+    }
+
+    struct Counting {
+        calls: usize,
+    }
+
+    impl ChunkTransform for Counting {
+        type OutputT = AudioChunk;
+
+        fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
+            self.calls += 1;
+            chunk
+        }
+    }
+
+    #[test]
+    fn quiet_passthrough_skips_inner() {
+        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let out = gate.transform(chunk(vec![0.005; 8]));
+        assert_eq!(out.sequence_number, 7);
+        assert_eq!(out.audio_data, vec![0.005; 8]);
+        assert_eq!(gate.inner.calls, 0);
+    }
+
+    #[test]
+    fn loud_delegates_to_inner() {
+        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let out = gate.transform(chunk(vec![0.4; 8]));
+        assert_eq!(out.audio_data, vec![0.4; 8]);
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn threshold_boundary_runs_inner() {
+        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let mut data = vec![0.019; 8];
+        data[3] = 0.02;
+        let out = gate.transform(chunk(data.clone()));
+        assert_eq!(out.audio_data, data);
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn below_threshold_passes_through() {
+        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let out = gate.transform(chunk(vec![0.019; 8]));
+        assert_eq!(out.audio_data, vec![0.019; 8]);
+        assert_eq!(gate.inner.calls, 0);
+    }
+
+    #[test]
+    fn empty_chunk_passes_through() {
+        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let out = gate.transform(chunk(Vec::new()));
+        assert!(out.audio_data.is_empty());
+        assert_eq!(gate.inner.calls, 0);
+    }
+
+    #[test]
+    fn nan_runs_inner() {
+        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let out = gate.transform(chunk(vec![0.0, f32::NAN, 0.0, 0.0]));
+        assert_eq!(gate.inner.calls, 1);
+        assert!(out.audio_data[1].is_nan());
+    }
+
+    #[test]
+    fn gate_nests_in_chain() {
+        let mut chain =
+            PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02).chain(Mute::shared(false).0);
+        let out = chain.transform(chunk(vec![0.005; 4]));
+        assert_eq!(out.audio_data, vec![0.005; 4]);
+        let out = chain.transform(chunk(vec![0.5; 4]));
+        assert_eq!(out.audio_data, vec![0.5; 4]);
     }
 }
