@@ -25,6 +25,20 @@ path = "tools/buffer_sweep.rs"
 name = "log_audio_check"
 path = "tools/log_audio_check.rs"
 
+[[example]]
+name = "profile_mix"
+path = "tools/profile_mix.rs"
+
+[[bench]]
+name = "mixer_2peer"
+harness = false
+path = "benches/mixer_2peer.rs"
+
+[[bench]]
+name = "opus_e2e"
+harness = false
+path = "benches/opus_e2e.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -67,9 +81,12 @@ zip = "2.2.0"
 base64 = "0.22.1"
 toml = "0.8.19"
 url = "2.5.4"
+console-subscriber = { version = "0.4", optional = true }
 
 [dev-dependencies]
 approx = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [features]
 pipewire = ["cpal/pipewire"]
+console = ["console-subscriber"]

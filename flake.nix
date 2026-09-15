@@ -43,7 +43,7 @@
               pkgs.libopus
             ]
             ++ (
-              if pkgs.stdenv.isDarwin
+              if pkgs.stdenv.hostPlatform.isDarwin
               then [
                 # SDK automatically includes audio libs
               ]
@@ -69,7 +69,7 @@
               nodejs_22
             ]
             ++ (
-              if stdenv.isDarwin
+              if stdenv.hostPlatform.isDarwin
               then [
                 # SDK automatically includes audio libs
               ]
@@ -79,6 +79,14 @@
                 pipewire
                 rustPlatform.bindgenHook
                 gcc
+                # profiling (Linux-only)
+                samply
+                hyperfine
+                heaptrack
+                valgrind
+                tokio-console
+                perf
+                linuxPackages.cpupower
               ]
             );
         };
