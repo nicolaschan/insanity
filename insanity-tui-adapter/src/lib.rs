@@ -1,16 +1,16 @@
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
+use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
 use std::collections::BTreeMap;
-use std::{error::Error, io, io::Stdout};
+use std::{error::Error, io};
 use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     task::JoinHandle,
 };
-use tui::{Terminal, backend::Backend, backend::CrosstermBackend};
 
 mod components;
 mod editor;
@@ -406,16 +406,16 @@ impl App {
             .unwrap();
     }
 
-    pub fn render<B: Backend>(&self, terminal: &mut Terminal<B>) -> io::Result<bool> {
+    pub fn render(&self, terminal: &mut DefaultTerminal) -> io::Result<bool> {
         terminal.draw(|f| render::ui(f, self)).unwrap();
         Ok(self.killed)
     }
 }
 
-pub async fn get_sender<B: Backend + Send + 'static>(
+pub async fn get_sender(
     mut app: App,
-    mut terminal: Terminal<B>,
-) -> (UnboundedSender<AppEvent>, JoinHandle<Terminal<B>>) {
+    mut terminal: DefaultTerminal,
+) -> (UnboundedSender<AppEvent>, JoinHandle<DefaultTerminal>) {
     let (sender, mut receiver): (UnboundedSender<AppEvent>, UnboundedReceiver<AppEvent>) =
         unbounded_channel();
     let handle = tokio::spawn(async move {
@@ -436,6 +436,9 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
         loop {
             match event::read().unwrap() {
                 Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
                         match key.code {
                             KeyCode::Char(c) => {
@@ -512,7 +515,7 @@ pub async fn start_tui() -> Result<
     (
         UnboundedSender<AppEvent>,
         UnboundedReceiver<UserInputEvent>,
-        JoinHandle<Terminal<CrosstermBackend<Stdout>>>,
+        JoinHandle<DefaultTerminal>,
     ),
     Box<dyn Error>,
 > {
@@ -531,9 +534,7 @@ pub async fn start_tui() -> Result<
     Ok((app_event_sender, app_user_action_receiver, handle))
 }
 
-pub async fn stop_tui(
-    handle: JoinHandle<Terminal<CrosstermBackend<Stdout>>>,
-) -> Result<(), Box<dyn Error>> {
+pub async fn stop_tui(handle: JoinHandle<DefaultTerminal>) -> Result<(), Box<dyn Error>> {
     let mut terminal = handle.await.unwrap();
     disable_raw_mode().unwrap();
     execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();

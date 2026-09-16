@@ -1,10 +1,9 @@
-use tui::{
+use ratatui::{
     Frame,
-    backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::DOT,
-    text::{Span, Spans},
+    text::{Line, Span},
     widgets::{Block, Cell, Paragraph, Row, Table, Tabs, Widget},
 };
 
@@ -15,11 +14,11 @@ use crate::{
     style::{BG_GRAY, CHAT_COLORS, COLOR_RED, CONNECTED, NUM_CHAT_COLORS, SELECTED},
 };
 
-pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
+pub fn ui(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
-        .split(f.size());
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(f.area());
     f.render_widget(tab_list(app), chunks[0]);
     match app.tab_index {
         TAB_IDX_PEERS => render_peer_list(f, app, chunks[1]),
@@ -30,7 +29,7 @@ pub fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
 }
 
 fn tab_list(app: &App) -> impl Widget + use<> {
-    let titles = app
+    let titles: Vec<Line> = app
         .tabs
         .iter()
         .cloned()
@@ -43,7 +42,7 @@ fn tab_list(app: &App) -> impl Widget + use<> {
             } else {
                 Style::default()
             };
-            Spans::from(Span::styled(tab_name, style))
+            Line::from(Span::styled(tab_name, style))
         })
         .collect();
 
@@ -67,7 +66,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         insanity_core::user_input_event::DenoiseSelection::Nnnoiseless => "🤫",
     };
 
-    let attributes = Cell::from(Spans::from(vec![Span::styled(
+    let attributes = Cell::from(Line::from(vec![Span::styled(
         format!("{}", peer.volume),
         Style::default().fg(match peer.state {
             crate::PeerState::Connected(_) => Color::White,
@@ -92,7 +91,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
             Row::new(vec![
                 Cell::from(denoise_symbol),
                 attributes,
-                Cell::from(Spans::from(vec![
+                Cell::from(Line::from(vec![
                     Span::styled(display_name_with_loudness_bg, style.fg(Color::Yellow)),
                     Span::styled(display_name_normal_bg, style.fg(CONNECTED)),
                     Span::styled(" <-> ", style.fg(Color::DarkGray)),
@@ -119,7 +118,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         crate::PeerState::Connecting(ref address) => Row::new(vec![
             Cell::from(denoise_symbol),
             attributes,
-            Cell::from(Spans::from(vec![
+            Cell::from(Line::from(vec![
                 Span::styled(display_name, style.fg(Color::DarkGray)),
                 Span::styled(" --> ", style.fg(Color::DarkGray)),
                 Span::styled(address.clone(), style.fg(Color::DarkGray)),
@@ -141,10 +140,10 @@ fn peer_command_help_entry(key: char, help_str: &'static str) -> String {
     format!("[{}] {}     ", char_to_readable(key), help_str)
 }
 
-fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+fn render_peer_list(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(area);
 
     let muted = if app.mute_self { "🔇" } else { "🔊" };
@@ -165,7 +164,7 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         Some(display_name) => vec![Row::new(vec![
             Cell::from(""),
             Cell::from(muted),
-            Cell::from(Spans::from(vec![
+            Cell::from(Line::from(vec![
                 Span::styled(display_name, name_style),
                 Span::styled(you_text, Style::default().fg(Color::DarkGray)),
             ])),
@@ -179,15 +178,17 @@ fn render_peer_list<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
         .map(|(i, peer)| peer_row(peer, i == app.peer_index))
         .collect();
     let rows = self_row.into_iter().chain(rows).collect::<Vec<_>>();
-    let peer_list = Table::new(rows)
-        .style(Style::default().fg(Color::White))
-        .widths(&[
+    let peer_list = Table::new(
+        rows,
+        [
             Constraint::Min(2),
             Constraint::Length(3),
             Constraint::Percentage(100),
-        ])
-        .column_spacing(1)
-        .block(default_block());
+        ],
+    )
+    .style(Style::default().fg(Color::White))
+    .column_spacing(1)
+    .block(default_block());
     f.render_widget(peer_list, chunks[0]);
 
     // Command help list
@@ -234,7 +235,7 @@ fn render_editor<'a>(editor: &'a Editor, area: &'a Rect) -> Paragraph<'a> {
         .skip(editor.cursor + 1)
         .take(remaining_width)
         .collect();
-    let text = vec![Spans::from(vec![
+    let text = vec![Line::from(vec![
         Span::raw(before_cursor),
         Span::styled(
             at_cursor,
@@ -263,7 +264,7 @@ fn render_chat_history<'a>(
 ) -> Paragraph<'a> {
     let max_text_width = area.width.saturating_sub(2) as usize;
     let max_num_lines = area.height.saturating_sub(2) as usize;
-    let mut text: Vec<Vec<tui::text::Spans>> = vec![];
+    let mut text: Vec<Vec<Line>> = vec![];
     let mut total_line_count = 0;
     for (address, message_text) in chat_history.iter().rev().skip(chat_offset) {
         let name_color = CHAT_COLORS[(hash(address) % (NUM_CHAT_COLORS as u64)) as usize];
@@ -298,21 +299,21 @@ fn render_chat_history<'a>(
             .get(display_name_num_wraps)
             .unwrap()
             .split_at(display_name.len() - name_count);
-        let split_line = vec![Spans::from(vec![
+        let split_line = vec![Line::from(vec![
             Span::styled(name_part.to_string(), name_style),
             Span::raw(text_part.to_string()),
         ])];
 
-        let lines: Vec<Spans> = lines
+        let lines: Vec<Line> = lines
             .iter()
             .take(display_name_num_wraps)
-            .map(|s| Spans::from(vec![Span::styled(s.to_string(), name_style)]))
+            .map(|s| Line::from(vec![Span::styled(s.to_string(), name_style)]))
             .chain(split_line)
             .chain(
                 lines
                     .iter()
                     .skip(display_name_num_wraps + 1)
-                    .map(|s| Spans::from(vec![Span::raw(s.to_string())])),
+                    .map(|s| Line::from(vec![Span::raw(s.to_string())])),
             )
             .rev()
             .take(max_num_lines - total_line_count)
@@ -325,14 +326,14 @@ fn render_chat_history<'a>(
         }
     }
     text.reverse();
-    let text: Vec<Spans> = text.into_iter().flatten().collect();
+    let text: Vec<Line> = text.into_iter().flatten().collect();
     Paragraph::new(text)
 }
 
-fn render_chat<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+fn render_chat(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
         .split(area);
     let chat_history_widget = render_chat_history(
         &app.chat_history,

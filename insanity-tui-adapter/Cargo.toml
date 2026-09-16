@@ -15,15 +15,15 @@ path = "src/main.rs"
 
 [dependencies]
 insanity-core = { path = "../insanity-core" }
-crossterm = "0.23"
+crossterm = "0.29"
 tokio = { version = "1.16.1", features = [
     "sync",
     "rt",
     "rt-multi-thread",
     "macros",
 ] }
-tui = "0.17.0"
-textwrap = "0.15.0"
+ratatui = "0.30.2"
+textwrap = "0.16"
 
 [build-dependencies]
 built = { version = "0.7.4", features = ["chrono", "git2"] }
