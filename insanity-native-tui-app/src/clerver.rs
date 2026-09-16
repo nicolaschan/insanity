@@ -10,6 +10,9 @@ use veq::veq::VeqSessionAlias;
 use crate::audio::hub::AudioInputHub;
 use crate::protocol::ProtocolMessage;
 
+// Send an app event updating the loudness every so many chunks processed by receiver.
+const LOUDNESS_SEND_PERIOD_CHUNKS: u64 = 10;
+
 // A clerver is a CLient + sERVER.
 
 async fn run_audio_sender(mut conn: VeqSessionAlias, hub: Arc<AudioInputHub<EncodedChunk>>) {
@@ -57,6 +60,7 @@ async fn run_receiver<P, F>(
     P: FnMut(EncodedChunk) -> F,
     F: Future<Output = bool> + Send,
 {
+    let mut pushed: u64 = 0;
     while let Ok(packet) = conn.recv().await {
         if let Ok(message) = ProtocolMessage::read_from_stream(&mut &packet[..]).await {
             match message {
@@ -64,8 +68,11 @@ async fn run_receiver<P, F>(
                     if push(frame).await
                         && let Some(sender) = &app_event_sender
                     {
-                        let level = loudness.loudness();
-                        let _ = sender.send(AppEvent::Loudness(peer_id.clone(), level));
+                        pushed += 1;
+                        if pushed.is_multiple_of(LOUDNESS_SEND_PERIOD_CHUNKS) {
+                            let level = loudness.loudness();
+                            let _ = sender.send(AppEvent::Loudness(peer_id.clone(), level));
+                        }
                     }
                 }
                 ProtocolMessage::IdentityDeclaration(_) => {}
