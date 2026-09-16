@@ -1,4 +1,4 @@
-use tui::{
+use ratatui::{
     style::Style,
     widgets::{Block, BorderType, Borders},
 };

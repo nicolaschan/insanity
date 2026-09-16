@@ -1,4 +1,4 @@
-use tui::style::Color;
+use ratatui::style::Color;
 
 pub const BG_GRAY: Color = Color::Rgb(50, 50, 50);
 pub const SELECTED: Color = Color::Rgb(80, 80, 80);

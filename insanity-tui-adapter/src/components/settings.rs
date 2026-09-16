@@ -1,31 +1,27 @@
 use insanity_core::built_info;
-use tui::{
+use ratatui::{
     Frame,
-    backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::{Span, Spans},
+    text::{Line, Span},
     widgets::Paragraph,
 };
 
 use crate::{App, components::block::default_block};
 
-pub fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
+pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Length(6),
-                Constraint::Length(4),
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ]
-            .as_ref(),
-        )
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
         .split(area);
 
     let server_widget = Paragraph::new(vec![
-        Spans::from(vec![
+        Line::from(vec![
             Span::styled("Bridge servers: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 app.servers.join(", "),
@@ -33,34 +29,34 @@ pub fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
             ),
         ]),
         match app.room.as_ref() {
-            Some(room) => Spans::from(vec![
+            Some(room) => Line::from(vec![
                 Span::styled("Room: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(room.to_string(), Style::default().fg(Color::LightBlue)),
             ]),
-            None => Spans::from(vec![Span::styled(
+            None => Line::from(vec![Span::styled(
                 "Room: no room specified...".to_string(),
                 Style::default().fg(Color::DarkGray),
             )]),
         },
         match app.room_fingerprint.as_ref() {
-            Some(room_fingerprint) => Spans::from(vec![
+            Some(room_fingerprint) => Line::from(vec![
                 Span::styled("Room fingerprint: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     room_fingerprint.to_string(),
                     Style::default().fg(Color::LightBlue),
                 ),
             ]),
-            None => Spans::from(vec![Span::styled(
+            None => Line::from(vec![Span::styled(
                 "Room fingerprint: no room fingerprint...".to_string(),
                 Style::default().fg(Color::DarkGray),
             )]),
         },
         match app.own_public_key.as_ref() {
-            Some(key) => Spans::from(vec![
+            Some(key) => Line::from(vec![
                 Span::styled("Your public key: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(key.to_string(), Style::default().fg(Color::LightBlue)),
             ]),
-            None => Spans::from(vec![Span::styled(
+            None => Line::from(vec![Span::styled(
                 "Your public key: waiting to connect to server...".to_string(),
                 Style::default().fg(Color::DarkGray),
             )]),
@@ -71,14 +67,14 @@ pub fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
     f.render_widget(server_widget, chunks[0]);
 
     let version_widget = Paragraph::new(vec![
-        Spans::from(vec![
+        Line::from(vec![
             Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 built_info::GIT_VERSION.unwrap_or("unknown"),
                 Style::default().fg(Color::LightBlue),
             ),
         ]),
-        Spans::from(vec![
+        Line::from(vec![
             Span::styled("Target: ", Style::default().fg(Color::DarkGray)),
             Span::styled(built_info::TARGET, Style::default().fg(Color::LightBlue)),
         ]),
@@ -92,7 +88,7 @@ pub fn render_settings<B: Backend>(f: &mut Frame<B>, app: &App, area: Rect) {
 }
 
 fn audio_widget<'a>(input_device_name: String) -> Paragraph<'a> {
-    Paragraph::new(vec![Spans::from(vec![
+    Paragraph::new(vec![Line::from(vec![
         Span::styled(
             "Current input device: ",
             Style::default().fg(Color::DarkGray),
