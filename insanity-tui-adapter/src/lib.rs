@@ -122,6 +122,7 @@ pub enum AppEvent {
     MuteSelf(bool),
     Loudness(String, f64),
     SetInputDeviceName(String),
+    SetOutputDeviceName(String),
 }
 
 pub struct App {
@@ -142,6 +143,7 @@ pub struct App {
     pub chat_offset: usize, // Offset from bottom of chat in full messages.
     pub mute_self: bool,
     pub input_device_name: String,
+    pub output_device_name: String,
 }
 
 impl App {
@@ -164,6 +166,7 @@ impl App {
             chat_offset: 0,
             mute_self: false,
             input_device_name: "".into(),
+            output_device_name: "".into(),
         }
     }
 
@@ -321,6 +324,9 @@ impl App {
             }
             AppEvent::SetInputDeviceName(input_device_name) => {
                 self.input_device_name = input_device_name
+            }
+            AppEvent::SetOutputDeviceName(output_device_name) => {
+                self.output_device_name = output_device_name
             }
         }
     }

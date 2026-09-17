@@ -304,6 +304,11 @@ fn manage_peers(
     }
 
     let output = start_output(audio_config);
+    if let Some(app_event_tx) = &app_event_tx {
+        app_event_tx
+            .send(AppEvent::SetOutputDeviceName(output.handle.name.clone()))
+            .expect("could not set output device name");
+    }
     let audio = SharedAudio {
         hub: hub.clone(),
         handle: output.handle.clone(),

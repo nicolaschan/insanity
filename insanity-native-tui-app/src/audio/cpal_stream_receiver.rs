@@ -1,13 +1,14 @@
 use anyhow::anyhow;
 use cpal::{
     Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
-    traits::{DeviceTrait, HostTrait, StreamTrait},
+    traits::{DeviceTrait, StreamTrait},
 };
+use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
-use insanity_core::audio::{AudioFormat, device::UNKNOWN_DEVICE_NAME};
 
 use super::config::get_input_config;
+use super::cpal_registry::{default_real_input, device_name};
 
 pub struct CpalStreamReceiver {
     _stream: send_safe::SendWrapperThread<Option<Stream>>,
@@ -18,11 +19,10 @@ pub struct CpalStreamReceiver {
 
 impl CpalStreamReceiver {
     pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
-        let device = cpal::default_host().default_input_device();
-        match device {
-            Some(device) => make_single_input(device, audio_config),
-            None => Err(anyhow!("No default device available")),
-        }
+        let Some(device) = default_real_input().map(|d| d.0) else {
+            return Err(anyhow!("No default device available"));
+        };
+        make_single_input(device, audio_config)
     }
 
     pub fn name(&self) -> &str {
@@ -78,13 +78,6 @@ pub fn make_single_input(
         format,
         name,
     })
-}
-
-fn device_name(device: &Device) -> String {
-    device
-        .description()
-        .map(|d| d.name().to_owned())
-        .unwrap_or(UNKNOWN_DEVICE_NAME.into())
 }
 
 fn setup_input_stream(

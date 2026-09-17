@@ -44,7 +44,7 @@ path = "benches/opus_e2e.rs"
 [dependencies]
 bincode = "1.3.3"
 clap = { version = "^4.5.3", features = ["derive"] }
-cpal = { version = "0.18.2", features = ["pulseaudio"] }
+cpal = { version = "0.18.2" }
 nnnoiseless = "=0.3.0"
 serde = { version = "1.0.197", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
@@ -87,4 +87,5 @@ approx = "0.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [features]
-pipewire = ["cpal/pipewire"]
+default = ["cpal/pipewire"]
+pulseaudio = ["cpal/pulseaudio"]

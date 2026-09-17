@@ -3,16 +3,18 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::transform::Gain;
 use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use super::config::get_output_config;
+use super::cpal_registry::{default_real_output, device_name};
 use super::mixer::{MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, run_mixer_owner};
 
 // Output mixer
@@ -95,6 +97,7 @@ pub(crate) struct OutputHandle {
     pub(crate) timing: Arc<FillStats>,
     pub(crate) format: AudioFormat,
     pub(crate) stats: Arc<OutputStats>,
+    pub(crate) name: String,
 }
 
 pub(crate) struct OutputGuard {
@@ -107,23 +110,20 @@ pub(crate) struct AudioOutput {
 }
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
-    let host = cpal::default_host();
-    let output = host.default_output_device().and_then(|device| {
-        match get_output_config(&device, audio_config) {
-            Ok((sample_format, config)) => Some((device, sample_format, config)),
-            Err(e) => {
-                log::warn!("Failed to get output config, falling back to dummy: {e}");
-                None
-            }
-        }
+    let output = default_real_output().map(|d| d.0).and_then(|device| {
+        get_output_config(&device, audio_config)
+            .inspect_err(|e| log::warn!("Failed to get output config, falling back to dummy: {e}"))
+            .ok()
+            .map(|(sample_format, config)| (device, sample_format, config))
     });
-    let format = output
-        .as_ref()
-        .map(|(_, _, config)| AudioFormat::new(config.channels, config.sample_rate))
-        .unwrap_or(AudioFormat::new(
-            audio_config.channels(),
-            audio_config.sample_rate(),
-        ));
+    let name = output.as_ref().map_or_else(
+        || UNKNOWN_DEVICE_NAME.into(),
+        |(device, _, _)| device_name(device),
+    );
+    let format = output.as_ref().map_or_else(
+        || AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
+        |(_, _, config)| AudioFormat::new(config.channels, config.sample_rate),
+    );
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
     let mixer = Mixer::new(format.clone(), audio_config, bus);
     let timing = Arc::new(FillStats::new());
@@ -191,6 +191,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
             timing,
             format,
             stats,
+            name,
         },
         _guard: OutputGuard { _stream: stream },
     }
