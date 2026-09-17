@@ -19,11 +19,10 @@ pub struct CpalStreamReceiver {
 
 impl CpalStreamReceiver {
     pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
-        let device = default_real_input().map(|d| d.0);
-        match device {
-            Some(device) => make_single_input(device, audio_config),
-            None => Err(anyhow!("No default device available")),
-        }
+        let Some(device) = default_real_input().map(|d| d.0) else {
+            return Err(anyhow!("No default device available"));
+        };
+        make_single_input(device, audio_config)
     }
 
     pub fn name(&self) -> &str {

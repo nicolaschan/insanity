@@ -40,16 +40,7 @@ pub(crate) fn is_monitor_name(name: &str) -> bool {
 }
 
 pub(crate) fn keep_device(name: &str, supports_direction: bool) -> bool {
-    if !supports_direction {
-        return false;
-    }
-    if is_synthetic_name(name) {
-        return false;
-    }
-    if is_monitor_name(name) {
-        return false;
-    }
-    true
+    supports_direction && !is_synthetic_name(name) && !is_monitor_name(name)
 }
 
 fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> {
@@ -94,20 +85,23 @@ fn host_default_usable(
     Some(CpalAudioDevice(device))
 }
 
-pub fn default_real_input() -> Option<CpalAudioDevice> {
-    let host = cpal::default_host();
-    if let Some(device) = host_default_usable(host.default_input_device(), |d| d.supports_input()) {
-        return Some(device);
-    }
-    let devices = list_inputs();
+fn fallback_first(devices: Vec<CpalAudioDevice>, kind: &str) -> Option<CpalAudioDevice> {
     log::info!(
-        "Available input devices: {:?}",
+        "Available {kind} devices: {:?}",
         devices
             .iter()
             .filter_map(|d| d.try_name())
             .collect::<Vec<_>>()
     );
     devices.into_iter().next()
+}
+
+pub fn default_real_input() -> Option<CpalAudioDevice> {
+    let host = cpal::default_host();
+    if let Some(device) = host_default_usable(host.default_input_device(), |d| d.supports_input()) {
+        return Some(device);
+    }
+    fallback_first(list_inputs(), "input")
 }
 
 pub fn default_real_output() -> Option<CpalAudioDevice> {
@@ -116,32 +110,14 @@ pub fn default_real_output() -> Option<CpalAudioDevice> {
     {
         return Some(device);
     }
-    let devices = list_outputs();
-    log::info!(
-        "Available output devices: {:?}",
-        devices
-            .iter()
-            .filter_map(|d| d.try_name())
-            .collect::<Vec<_>>()
-    );
-    devices.into_iter().next()
+    fallback_first(list_outputs(), "output")
 }
 
 pub struct CpalRegistry;
 
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        let mut seen = HashSet::new();
-        list_inputs()
-            .into_iter()
-            .chain(list_outputs())
-            .filter(|device| {
-                device
-                    .try_name()
-                    .map(|name| seen.insert(name))
-                    .unwrap_or(false)
-            })
-            .collect()
+        filtered_devices(|device| device.supports_input() || device.supports_output())
     }
 
     fn default_device() -> Option<CpalAudioDevice> {

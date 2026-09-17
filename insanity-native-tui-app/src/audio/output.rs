@@ -111,25 +111,19 @@ pub(crate) struct AudioOutput {
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let output = default_real_output().map(|d| d.0).and_then(|device| {
-        match get_output_config(&device, audio_config) {
-            Ok((sample_format, config)) => Some((device, sample_format, config)),
-            Err(e) => {
-                log::warn!("Failed to get output config, falling back to dummy: {e}");
-                None
-            }
-        }
+        get_output_config(&device, audio_config)
+            .inspect_err(|e| log::warn!("Failed to get output config, falling back to dummy: {e}"))
+            .ok()
+            .map(|(sample_format, config)| (device, sample_format, config))
     });
-    let name = output
-        .as_ref()
-        .map(|(device, _, _)| device_name(device))
-        .unwrap_or_else(|| UNKNOWN_DEVICE_NAME.into());
-    let format = output
-        .as_ref()
-        .map(|(_, _, config)| AudioFormat::new(config.channels, config.sample_rate))
-        .unwrap_or(AudioFormat::new(
-            audio_config.channels(),
-            audio_config.sample_rate(),
-        ));
+    let name = output.as_ref().map_or_else(
+        || UNKNOWN_DEVICE_NAME.into(),
+        |(device, _, _)| device_name(device),
+    );
+    let format = output.as_ref().map_or_else(
+        || AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
+        |(_, _, config)| AudioFormat::new(config.channels, config.sample_rate),
+    );
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
     let mixer = Mixer::new(format.clone(), audio_config, bus);
     let timing = Arc::new(FillStats::new());
