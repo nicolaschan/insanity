@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev pkg-config libclang-dev
       - name: Test
         run: cargo test --verbose
   linux-gnu:
@@ -25,9 +25,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libpipewire-0.3-dev pkg-config libclang-dev
       - name: Build
         run: cargo build --release --verbose
+      - name: Check pulseaudio fallback feature
+        run: cargo check --features pulseaudio --verbose
       - name: Test
         run: cargo test --verbose
       - name: Upload a Build Artifact

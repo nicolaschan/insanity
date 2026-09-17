@@ -26,7 +26,7 @@
         packageMetadata = builtins.fromTOML (builtins.readFile ./insanity-native-tui-app/Cargo.toml);
         pname = packageMetadata.package.name;
         version = packageMetadata.package.version;
-        rustPackageOptions = pkgs: {
+        rustPackageOptions = pkgs: extraFlags: noPipewire: {
           inherit pname version;
           src = ./.;
           cargoLock = {
@@ -36,8 +36,9 @@
           cargoBuildFlags = [
             "--bin"
             "insanity"
-          ];
-          nativeBuildInputs = [pkgs.pkg-config pkgs.perl pkgs.cmake];
+          ] ++ extraFlags;
+          cargoTestFlags = extraFlags;
+          nativeBuildInputs = [pkgs.pkg-config pkgs.perl pkgs.cmake pkgs.rustPlatform.bindgenHook];
           buildInputs =
             [
               pkgs.libopus
@@ -47,9 +48,15 @@
               then [
                 # SDK automatically includes audio libs
               ]
-              else [
-                pkgs.alsa-lib
-              ]
+              else
+                [pkgs.alsa-lib]
+                ++ (
+                  if noPipewire then [
+                    # static musl: ALSA-only (`--no-default-features`)
+                  ] else [
+                    pkgs.pipewire
+                  ]
+                )
             );
         };
       in {
@@ -75,7 +82,7 @@
               ]
               else [
                 alsa-lib
-                # for `cargo build --features pipewire`
+                # default pipewire backend (pulseaudio fallback is pure Rust)
                 pipewire
                 rustPlatform.bindgenHook
                 gcc
@@ -90,8 +97,10 @@
             );
         };
 
-        packages.default = pkgs.rustPlatform.buildRustPackage (rustPackageOptions pkgs);
-        packages.static = pkgs.pkgsStatic.rustPlatform.buildRustPackage (rustPackageOptions pkgs.pkgsStatic);
+        packages.default = pkgs.rustPlatform.buildRustPackage (rustPackageOptions pkgs [] false);
+        packages.static =
+          pkgs.pkgsStatic.rustPlatform.buildRustPackage
+            (rustPackageOptions pkgs.pkgsStatic ["--no-default-features"] true);
 
         packages.docker = pkgs.dockerTools.buildLayeredImage {
           name = pname;
