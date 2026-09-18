@@ -93,6 +93,8 @@
                 valgrind
                 perf
                 linuxPackages.cpupower
+                # fast linker for perf builds (RUSTFLAGS="-C link-arg=-fuse-ld=mold")
+                mold
               ]
             );
         };
