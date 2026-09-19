@@ -7,6 +7,11 @@ pub struct NnnoiselessDenoiser {
     scaled_out: Vec<f32>,
 }
 
+impl NnnoiselessDenoiser {
+    // Account for measured 6db loss through denoiser
+    const MAKEUP_GAIN: f32 = 2.0;
+}
+
 impl Denoiser for NnnoiselessDenoiser {
     const FRAME_SIZE: usize = DenoiseState::FRAME_SIZE;
 
@@ -30,7 +35,7 @@ impl Denoiser for NnnoiselessDenoiser {
         self.inner
             .process_frame(&mut self.scaled_out, &self.scaled_in);
         for (o, s) in output.iter_mut().zip(self.scaled_out.iter()) {
-            *o = *s / magic;
+            *o = *s / magic * Self::MAKEUP_GAIN;
         }
     }
 }
