@@ -2,7 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::AudioDecoder;
-use insanity_core::audio::transform::{ChunkTransform, SilenceGate};
+use insanity_core::audio::transform::{ChunkTransform, Hysteresis, RmsDetector, SilenceGate};
 use insanity_native_tui_app::audio::codec::{OpusDecoder, OpusEncoder};
 use std::hint::black_box;
 
@@ -48,7 +48,10 @@ fn bench_opus(c: &mut Criterion) {
     });
 
     group.bench_function("silence_gate_skips_silence", |b| {
-        let mut gate = SilenceGate::new(OpusEncoder::new(48000, 2).expect("encoder"), 0.02, 30);
+        let mut gate = SilenceGate::new(
+            OpusEncoder::new(48000, 2).expect("encoder"),
+            Hysteresis::new(RmsDetector::new(0.01), 30),
+        );
         for _ in 0..40 {
             let _ = gate.transform(silence.clone());
         }
