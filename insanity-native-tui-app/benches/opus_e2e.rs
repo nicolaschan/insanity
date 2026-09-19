@@ -2,7 +2,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::AudioDecoder;
-use insanity_core::audio::transform::ChunkTransform;
+use insanity_core::audio::transform::{ChunkTransform, Hysteresis, RmsDetector, SilenceGate};
 use insanity_native_tui_app::audio::codec::{OpusDecoder, OpusEncoder};
 use std::hint::black_box;
 
@@ -34,6 +34,29 @@ fn bench_opus(c: &mut Criterion) {
     group.bench_function("encoder_new", |b| {
         b.iter(|| {
             black_box(OpusEncoder::new(48000, 2).expect("encoder"));
+        });
+    });
+
+    let silence = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.0; 960]);
+
+    group.bench_function("encode_960_silence", |b| {
+        let mut encoder = OpusEncoder::new(48000, 2).expect("encoder");
+        b.iter(|| {
+            let frame = encoder.transform(silence.clone()).expect("encode");
+            black_box(frame);
+        });
+    });
+
+    group.bench_function("silence_gate_skips_silence", |b| {
+        let mut gate = SilenceGate::new(
+            OpusEncoder::new(48000, 2).expect("encoder"),
+            Hysteresis::new(RmsDetector::new(0.01), 30),
+        );
+        for _ in 0..40 {
+            let _ = gate.transform(silence.clone());
+        }
+        b.iter(|| {
+            black_box(gate.transform(silence.clone()));
         });
     });
 

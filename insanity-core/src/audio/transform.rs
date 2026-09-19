@@ -244,26 +244,131 @@ impl<D: Denoiser> ChunkTransform for Denoise<D> {
     }
 }
 
-pub struct PassthroughOnQuiet<T> {
-    inner: T,
+pub trait Detector: Send {
+    fn detect(&mut self, samples: &[f32]) -> bool;
+}
+
+pub struct PeakDetector {
     threshold: f32,
 }
 
-impl<T> PassthroughOnQuiet<T> {
-    pub fn new(inner: T, threshold: f32) -> Self {
-        PassthroughOnQuiet { inner, threshold }
+impl PeakDetector {
+    pub fn new(threshold: f32) -> Self {
+        PeakDetector { threshold }
     }
 }
 
-impl<T: ChunkTransform<OutputT = AudioChunk>> ChunkTransform for PassthroughOnQuiet<T> {
+impl Detector for PeakDetector {
+    fn detect(&mut self, samples: &[f32]) -> bool {
+        !samples.iter().all(|s| s.abs() < self.threshold)
+    }
+}
+
+pub struct RmsDetector {
+    threshold: f32,
+}
+
+impl RmsDetector {
+    pub fn new(threshold: f32) -> Self {
+        RmsDetector { threshold }
+    }
+}
+
+impl Detector for RmsDetector {
+    fn detect(&mut self, samples: &[f32]) -> bool {
+        if samples.is_empty() {
+            return false;
+        }
+        let mean_square = samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32;
+        let rms = mean_square.sqrt();
+        rms.is_nan() || rms >= self.threshold
+    }
+}
+
+pub struct Hysteresis<D> {
+    inner: D,
+    chunks: usize,
+    left: usize,
+}
+
+impl<D> Hysteresis<D> {
+    pub fn new(inner: D, chunks: usize) -> Self {
+        Hysteresis {
+            inner,
+            chunks,
+            left: 0,
+        }
+    }
+}
+
+impl<D: Detector> Detector for Hysteresis<D> {
+    fn detect(&mut self, samples: &[f32]) -> bool {
+        if self.inner.detect(samples) {
+            self.left = self.chunks;
+            return true;
+        }
+        let active = self.left > 0;
+        self.left = self.left.saturating_sub(1);
+        active
+    }
+}
+
+pub struct PassthroughGate<T, D> {
+    inner: T,
+    detector: D,
+}
+
+impl<T, D> PassthroughGate<T, D> {
+    pub fn new(inner: T, detector: D) -> Self {
+        PassthroughGate { inner, detector }
+    }
+}
+
+impl<T, D> ChunkTransform for PassthroughGate<T, D>
+where
+    T: ChunkTransform<OutputT = AudioChunk>,
+    D: Detector,
+{
     type OutputT = AudioChunk;
 
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
-        let quiet = chunk.audio_data.iter().all(|s| s.abs() < self.threshold);
-        if quiet {
-            chunk
-        } else {
+        if self.detector.detect(&chunk.audio_data) {
             self.inner.transform(chunk)
+        } else {
+            chunk
+        }
+    }
+}
+
+pub struct SilenceGate<E, O, D> {
+    inner: E,
+    detector: D,
+    marker: std::marker::PhantomData<O>,
+}
+
+impl<E, O, D> SilenceGate<E, O, D> {
+    pub fn new(inner: E, detector: D) -> Self {
+        SilenceGate {
+            inner,
+            detector,
+            marker: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<E, O, D> ChunkTransform for SilenceGate<E, O, D>
+where
+    E: ChunkTransform<OutputT = Option<O>>,
+    O: Send,
+    D: Detector,
+{
+    type OutputT = Option<O>;
+
+    fn transform(&mut self, chunk: AudioChunk) -> Option<O> {
+        if self.detector.detect(&chunk.audio_data) {
+            self.inner.transform(chunk)
+        } else {
+            None
         }
     }
 }
@@ -400,12 +505,14 @@ impl ChunkTransform for ChannelMap {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChannelMap, ChunkTransform, Clip, Denoise, DenoiseSelection, Gain, GainControl, Link,
-        MetricsReader, Mute, PassthroughOnQuiet, volume_multiplier,
+        ChannelMap, ChunkTransform, Clip, Denoise, DenoiseSelection, Detector, Gain, GainControl,
+        Hysteresis, Link, MetricsReader, Mute, PassthroughGate, PeakDetector, RmsDetector,
+        SilenceGate, volume_multiplier,
     };
     use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
     use crate::audio::denoiser::Denoiser;
+    use std::collections::VecDeque;
 
     struct DoubleDenoiser;
 
@@ -566,7 +673,7 @@ mod tests {
 
     #[test]
     fn quiet_passthrough_skips_inner() {
-        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let mut gate = PassthroughGate::new(Counting { calls: 0 }, PeakDetector::new(0.02));
         let out = gate.transform(chunk(vec![0.005; 8]));
         assert_eq!(out.sequence_number, 7);
         assert_eq!(out.audio_data, vec![0.005; 8]);
@@ -575,7 +682,7 @@ mod tests {
 
     #[test]
     fn loud_delegates_to_inner() {
-        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let mut gate = PassthroughGate::new(Counting { calls: 0 }, PeakDetector::new(0.02));
         let out = gate.transform(chunk(vec![0.4; 8]));
         assert_eq!(out.audio_data, vec![0.4; 8]);
         assert_eq!(gate.inner.calls, 1);
@@ -583,7 +690,7 @@ mod tests {
 
     #[test]
     fn threshold_boundary_runs_inner() {
-        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let mut gate = PassthroughGate::new(Counting { calls: 0 }, PeakDetector::new(0.02));
         let mut data = vec![0.019; 8];
         data[3] = 0.02;
         let out = gate.transform(chunk(data.clone()));
@@ -593,7 +700,7 @@ mod tests {
 
     #[test]
     fn below_threshold_passes_through() {
-        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let mut gate = PassthroughGate::new(Counting { calls: 0 }, PeakDetector::new(0.02));
         let out = gate.transform(chunk(vec![0.019; 8]));
         assert_eq!(out.audio_data, vec![0.019; 8]);
         assert_eq!(gate.inner.calls, 0);
@@ -601,7 +708,7 @@ mod tests {
 
     #[test]
     fn empty_chunk_passes_through() {
-        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let mut gate = PassthroughGate::new(Counting { calls: 0 }, PeakDetector::new(0.02));
         let out = gate.transform(chunk(Vec::new()));
         assert!(out.audio_data.is_empty());
         assert_eq!(gate.inner.calls, 0);
@@ -609,7 +716,7 @@ mod tests {
 
     #[test]
     fn nan_runs_inner() {
-        let mut gate = PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02);
+        let mut gate = PassthroughGate::new(Counting { calls: 0 }, PeakDetector::new(0.02));
         let out = gate.transform(chunk(vec![0.0, f32::NAN, 0.0, 0.0]));
         assert_eq!(gate.inner.calls, 1);
         assert!(out.audio_data[1].is_nan());
@@ -617,11 +724,219 @@ mod tests {
 
     #[test]
     fn gate_nests_in_chain() {
-        let mut chain =
-            PassthroughOnQuiet::new(Counting { calls: 0 }, 0.02).chain(Mute::shared(false).0);
+        let mut chain = PassthroughGate::new(Counting { calls: 0 }, PeakDetector::new(0.02))
+            .chain(Mute::shared(false).0);
         let out = chain.transform(chunk(vec![0.005; 4]));
         assert_eq!(out.audio_data, vec![0.005; 4]);
         let out = chain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.5; 4]);
+    }
+
+    #[test]
+    fn passthrough_hangover_runs_inner_after_speech() {
+        let mut gate = PassthroughGate::new(
+            Counting { calls: 0 },
+            Hysteresis::new(PeakDetector::new(0.02), 2),
+        );
+        gate.transform(chunk(vec![0.4; 8]));
+        for _ in 0..2 {
+            gate.transform(chunk(vec![0.0; 8]));
+        }
+        assert_eq!(gate.inner.calls, 3);
+        gate.transform(chunk(vec![0.0; 8]));
+        assert_eq!(gate.inner.calls, 3);
+    }
+
+    struct ScriptedDetector {
+        script: VecDeque<bool>,
+    }
+
+    impl Detector for ScriptedDetector {
+        fn detect(&mut self, _samples: &[f32]) -> bool {
+            self.script.pop_front().unwrap_or(false)
+        }
+    }
+
+    #[test]
+    fn hangover_counts_down_silence() {
+        let mut hangover = Hysteresis::new(PeakDetector::new(0.02), 2);
+        assert!(hangover.detect(&[0.4; 8]));
+        assert!(hangover.detect(&[0.0; 8]));
+        assert!(hangover.detect(&[0.0; 8]));
+        assert!(!hangover.detect(&[0.0; 8]));
+    }
+
+    #[test]
+    fn hangover_loud_resets_countdown() {
+        let mut hangover = Hysteresis::new(PeakDetector::new(0.02), 2);
+        assert!(hangover.detect(&[0.4; 8]));
+        assert!(hangover.detect(&[0.0; 8]));
+        assert!(hangover.detect(&[0.4; 8]));
+        assert!(hangover.detect(&[0.0; 8]));
+        assert!(hangover.detect(&[0.0; 8]));
+        assert!(!hangover.detect(&[0.0; 8]));
+    }
+
+    #[test]
+    fn hangover_composes_over_stub_detector() {
+        let stub = ScriptedDetector {
+            script: VecDeque::from([true, false, false, false]),
+        };
+        let mut hangover = Hysteresis::new(stub, 2);
+        assert!(hangover.detect(&[0.0; 4]));
+        assert!(hangover.detect(&[0.0; 4]));
+        assert!(hangover.detect(&[0.0; 4]));
+        assert!(!hangover.detect(&[0.0; 4]));
+    }
+
+    #[test]
+    fn rms_gate_detects_energy_not_peaks() {
+        let mut gate = RmsDetector::new(0.01);
+        assert!(!gate.detect(&[0.0; 960]));
+        assert!(gate.detect(&[0.4; 960]));
+        assert!(!gate.detect(&[]));
+    }
+
+    #[test]
+    fn rms_gate_sine_boundary() {
+        let sine: Vec<f32> = (0..960)
+            .map(|i| (440.0 * i as f32 / 48000.0 * std::f32::consts::TAU).sin() * 0.02)
+            .collect();
+        let mut gate = RmsDetector::new(0.01);
+        assert!(gate.detect(&sine));
+        let mut strict = RmsDetector::new(0.02);
+        assert!(!strict.detect(&sine));
+    }
+
+    #[test]
+    fn rms_gate_nan_detects() {
+        let mut gate = RmsDetector::new(0.01);
+        assert!(gate.detect(&[0.0, f32::NAN, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn rms_gate_ignores_single_spike() {
+        let mut data = vec![0.0; 960];
+        data[100] = 0.5;
+        let mut rms = RmsDetector::new(0.05);
+        assert!(!rms.detect(&data));
+        let mut peak = PeakDetector::new(0.02);
+        assert!(peak.detect(&data));
+    }
+
+    struct MaybeEncode {
+        calls: usize,
+        fail: bool,
+    }
+
+    impl ChunkTransform for MaybeEncode {
+        type OutputT = Option<AudioChunk>;
+
+        fn transform(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+            self.calls += 1;
+            if self.fail { None } else { Some(chunk) }
+        }
+    }
+
+    fn silence_gate() -> SilenceGate<MaybeEncode, AudioChunk, Hysteresis<PeakDetector>> {
+        SilenceGate::new(
+            MaybeEncode {
+                calls: 0,
+                fail: false,
+            },
+            Hysteresis::new(PeakDetector::new(0.02), 2),
+        )
+    }
+
+    #[test]
+    fn silence_gate_sends_loud_chunks() {
+        let mut gate = silence_gate();
+        let out = gate.transform(chunk(vec![0.4; 8]));
+        assert_eq!(out.map(|c| c.sequence_number), Some(7));
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn silence_gate_skips_after_hangover() {
+        let mut gate = silence_gate();
+        gate.transform(chunk(vec![0.4; 8]));
+        for _ in 0..2 {
+            assert!(gate.transform(chunk(vec![0.0; 8])).is_some());
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        assert_eq!(gate.inner.calls, 3);
+    }
+
+    #[test]
+    fn silence_gate_skips_leading_silence() {
+        let mut gate = silence_gate();
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        assert_eq!(gate.inner.calls, 0);
+    }
+
+    #[test]
+    fn silence_gate_speech_resets_hangover() {
+        let mut gate = silence_gate();
+        gate.transform(chunk(vec![0.4; 8]));
+        gate.transform(chunk(vec![0.0; 8]));
+        gate.transform(chunk(vec![0.4; 8]));
+        for _ in 0..2 {
+            assert!(gate.transform(chunk(vec![0.0; 8])).is_some());
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+    }
+
+    #[test]
+    fn silence_gate_nan_encodes() {
+        let mut gate = silence_gate();
+        let out = gate.transform(chunk(vec![0.0, f32::NAN, 0.0, 0.0]));
+        assert!(out.is_some());
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn silence_gate_propagates_inner_failure() {
+        let mut gate = SilenceGate::new(
+            MaybeEncode {
+                calls: 0,
+                fail: true,
+            },
+            Hysteresis::new(PeakDetector::new(0.02), 2),
+        );
+        assert!(gate.transform(chunk(vec![0.4; 8])).is_none());
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn silence_gate_follows_stub_detector() {
+        let mut gate = SilenceGate::new(
+            MaybeEncode {
+                calls: 0,
+                fail: false,
+            },
+            ScriptedDetector {
+                script: VecDeque::from([true, false]),
+            },
+        );
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_some());
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn silence_gate_reopens_after_close() {
+        let mut gate = silence_gate();
+        gate.transform(chunk(vec![0.4; 8]));
+        for _ in 0..5 {
+            gate.transform(chunk(vec![0.0; 8]));
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        let out = gate.transform(chunk(vec![0.4; 8]));
+        assert_eq!(out.map(|c| c.sequence_number), Some(7));
+        for _ in 0..2 {
+            assert!(gate.transform(chunk(vec![0.0; 8])).is_some());
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
     }
 }
