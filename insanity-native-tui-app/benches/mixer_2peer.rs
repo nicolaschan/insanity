@@ -2,9 +2,11 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_core::audio::sample::Resampler;
 use insanity_core::audio::transform::{ChunkTransform, Gain};
 use insanity_core::user_input_event::DenoiseSelection;
+use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
 use insanity_native_tui_app::audio::mixer as app_mixer;
 use insanity_native_tui_app::audio::mixer::{MAX_VOLUME, PeerControls, chain_from_controls};
 use rubato_audio_source::StreamResampler;
@@ -162,6 +164,25 @@ fn bench_stream_resampler_push_pop(c: &mut Criterion) {
     });
 }
 
+fn bench_denoise_only(c: &mut Criterion) {
+    let mut group = c.benchmark_group("denoise_only");
+    group.bench_function("stereo_960_loud", |b| {
+        let mut denoiser = MultiChannelDenoiser::<NnnoiselessDenoiser>::new();
+        let chunk = AudioChunk::new(0, AudioFormat::new(2, 48000), sine_block(440.0));
+        b.iter(|| {
+            black_box(denoiser.denoise_chunk(chunk.clone()));
+        });
+    });
+    group.bench_function("stereo_1000_tail", |b| {
+        let mut denoiser = MultiChannelDenoiser::<NnnoiselessDenoiser>::new();
+        let chunk = AudioChunk::new(0, AudioFormat::new(2, 48000), vec![0.1f32; 1000]);
+        b.iter(|| {
+            black_box(denoiser.denoise_chunk(chunk.clone()));
+        });
+    });
+    group.finish();
+}
+
 fn bench_peerchain_transform(c: &mut Criterion) {
     let mut group = c.benchmark_group("peerchain_transform");
     for (denoise, volume) in [
@@ -188,6 +209,7 @@ fn bench_peerchain_transform(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_denoise_only,
     bench_mixer,
     bench_mixer_idle,
     bench_real_chain_construction,

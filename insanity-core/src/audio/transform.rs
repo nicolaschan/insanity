@@ -239,7 +239,7 @@ impl<D: Denoiser> ChunkTransform for Denoise<D> {
     fn transform(&mut self, chunk: AudioChunk) -> AudioChunk {
         match self.control.get() {
             DenoiseSelection::None => chunk,
-            DenoiseSelection::Nnnoiseless => self.inner.denoise_chunk(&chunk),
+            DenoiseSelection::Nnnoiseless => self.inner.denoise_chunk(chunk),
         }
     }
 }
