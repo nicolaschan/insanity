@@ -4,8 +4,12 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::ChunkSource;
 use insanity_core::audio::codec::ChunkEncoder;
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
+use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl, SilenceGate};
 use tokio::sync::broadcast;
+
+use super::mixer::QUIET_PEAK_THRESHOLD;
+
+const SILENCE_HANGOVER_CHUNKS: usize = 30;
 
 struct Pacer {
     period: tokio::time::Duration,
@@ -35,7 +39,7 @@ impl Pacer {
     }
 }
 
-/// Broadcasts encoded chunks; muted chunks are sent as silence.
+/// Broadcasts chunks
 pub struct AudioInputHub<OutputT> {
     tx: broadcast::Sender<OutputT>,
     mute_control: Arc<MuteControl>,
@@ -55,7 +59,11 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
         let (mute, mute_control) = Mute::shared(false);
         let mut transform = mute
             .chain(ChannelMap::capped(audio_config.channels()))
-            .chain(ChunkEncoder::new(rebuild, audio_config.frames()));
+            .chain(SilenceGate::new(
+                ChunkEncoder::new(rebuild, audio_config.frames()),
+                QUIET_PEAK_THRESHOLD,
+                SILENCE_HANGOVER_CHUNKS,
+            ));
         let (tx, _) = broadcast::channel(32);
         let hub = Self {
             tx: tx.clone(),

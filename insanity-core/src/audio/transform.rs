@@ -268,6 +268,56 @@ impl<T: ChunkTransform<OutputT = AudioChunk>> ChunkTransform for PassthroughOnQu
     }
 }
 
+// Transform that applies an inner transform if present or recent chunk is loud.
+// Similar to PassthroughOnQuiet but stateful.
+pub struct SilenceGate<E, O> {
+    inner: E,
+    threshold: f32,
+    hangover_chunks: usize,
+    hangover_left: usize,
+    marker: std::marker::PhantomData<O>,
+}
+
+impl<E, O> SilenceGate<E, O> {
+    pub fn new(inner: E, threshold: f32, hangover_chunks: usize) -> Self {
+        SilenceGate {
+            inner,
+            threshold,
+            hangover_chunks,
+            hangover_left: 0,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    fn should_send(&mut self, samples: &[f32]) -> bool {
+        let quiet = samples.iter().all(|s| s.abs() < self.threshold);
+        if !quiet {
+            self.hangover_left = self.hangover_chunks;
+            return true;
+        }
+        let send = self.hangover_left > 0;
+        self.hangover_left = self.hangover_left.saturating_sub(1);
+        send
+    }
+}
+
+impl<E, O> ChunkTransform for SilenceGate<E, O>
+where
+    E: ChunkTransform<OutputT = Option<O>>,
+    O: Send,
+{
+    type OutputT = Option<O>;
+
+    // Returning None forces no further processing and no sending of this chunk
+    fn transform(&mut self, chunk: AudioChunk) -> Option<O> {
+        if self.should_send(&chunk.audio_data) {
+            self.inner.transform(chunk)
+        } else {
+            None
+        }
+    }
+}
+
 pub struct MetricsState {
     loudness_bits: AtomicU64,
 }
@@ -401,7 +451,7 @@ impl ChunkTransform for ChannelMap {
 mod tests {
     use super::{
         ChannelMap, ChunkTransform, Clip, Denoise, DenoiseSelection, Gain, GainControl, Link,
-        MetricsReader, Mute, PassthroughOnQuiet, volume_multiplier,
+        MetricsReader, Mute, PassthroughOnQuiet, SilenceGate, volume_multiplier,
     };
     use crate::audio::AudioFormat;
     use crate::audio::chunk::AudioChunk;
@@ -623,5 +673,107 @@ mod tests {
         assert_eq!(out.audio_data, vec![0.005; 4]);
         let out = chain.transform(chunk(vec![0.5; 4]));
         assert_eq!(out.audio_data, vec![0.5; 4]);
+    }
+
+    struct MaybeEncode {
+        calls: usize,
+        fail: bool,
+    }
+
+    impl ChunkTransform for MaybeEncode {
+        type OutputT = Option<AudioChunk>;
+
+        fn transform(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+            self.calls += 1;
+            if self.fail { None } else { Some(chunk) }
+        }
+    }
+
+    fn silence_gate() -> SilenceGate<MaybeEncode, AudioChunk> {
+        SilenceGate::new(
+            MaybeEncode {
+                calls: 0,
+                fail: false,
+            },
+            0.02,
+            2,
+        )
+    }
+
+    #[test]
+    fn silence_gate_sends_loud_chunks() {
+        let mut gate = silence_gate();
+        let out = gate.transform(chunk(vec![0.4; 8]));
+        assert_eq!(out.map(|c| c.sequence_number), Some(7));
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn silence_gate_skips_after_hangover() {
+        let mut gate = silence_gate();
+        gate.transform(chunk(vec![0.4; 8]));
+        for _ in 0..2 {
+            assert!(gate.transform(chunk(vec![0.0; 8])).is_some());
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        assert_eq!(gate.inner.calls, 3);
+    }
+
+    #[test]
+    fn silence_gate_skips_leading_silence() {
+        let mut gate = silence_gate();
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        assert_eq!(gate.inner.calls, 0);
+    }
+
+    #[test]
+    fn silence_gate_speech_resets_hangover() {
+        let mut gate = silence_gate();
+        gate.transform(chunk(vec![0.4; 8]));
+        gate.transform(chunk(vec![0.0; 8]));
+        gate.transform(chunk(vec![0.4; 8]));
+        for _ in 0..2 {
+            assert!(gate.transform(chunk(vec![0.0; 8])).is_some());
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+    }
+
+    #[test]
+    fn silence_gate_nan_encodes() {
+        let mut gate = silence_gate();
+        let out = gate.transform(chunk(vec![0.0, f32::NAN, 0.0, 0.0]));
+        assert!(out.is_some());
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn silence_gate_propagates_inner_failure() {
+        let mut gate = SilenceGate::new(
+            MaybeEncode {
+                calls: 0,
+                fail: true,
+            },
+            0.02,
+            2,
+        );
+        assert!(gate.transform(chunk(vec![0.4; 8])).is_none());
+        assert_eq!(gate.inner.calls, 1);
+    }
+
+    #[test]
+    fn silence_gate_reopens_after_close() {
+        let mut gate = silence_gate();
+        gate.transform(chunk(vec![0.4; 8]));
+        for _ in 0..5 {
+            gate.transform(chunk(vec![0.0; 8]));
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
+        let out = gate.transform(chunk(vec![0.4; 8]));
+        assert_eq!(out.map(|c| c.sequence_number), Some(7));
+        for _ in 0..2 {
+            assert!(gate.transform(chunk(vec![0.0; 8])).is_some());
+        }
+        assert!(gate.transform(chunk(vec![0.0; 8])).is_none());
     }
 }

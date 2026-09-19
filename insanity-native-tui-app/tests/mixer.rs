@@ -53,7 +53,7 @@ async fn hub_fanout_same_chunk() {
 }
 
 #[tokio::test]
-async fn hub_mute_sends_silence() {
+async fn hub_mute_suppresses_silence() {
     let res = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         let src = SineSource::new(48000, 440.0);
         let hub = hub_from_source(src);
@@ -67,13 +67,11 @@ async fn hub_mute_sends_silence() {
                 .iter()
                 .fold(0.0f32, |acc, s| acc.max(s.abs()))
         };
-        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-            .await
-            .expect("muted hub should still send")
-            .expect("hub open");
+        let suppressed =
+            tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
         assert!(
-            peak(&mut decoder, frame) < 1e-3,
-            "muted frame must be silent"
+            suppressed.is_err(),
+            "muted hub should suppress silent chunks"
         );
         hub.set_muted(false);
         let mut loudest = 0.0f32;
@@ -90,7 +88,7 @@ async fn hub_mute_sends_silence() {
         );
     })
     .await;
-    assert!(res.is_ok(), "hub_mute_sends_silence timed out");
+    assert!(res.is_ok(), "hub_mute_suppresses_silence timed out");
 }
 
 #[test]
