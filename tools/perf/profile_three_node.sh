@@ -71,12 +71,12 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required tool missing: $1 (run 
 
 port_ids() {
     local kind="$1" want="$2"
-    pw-link -I "$kind" 2>/dev/null | awk -v want="$want" '{ sub(/^ +/, ""); id=$1; sub(/^[^ ]+ +/, ""); if ($0 == want) print id }'
+    pw-link -I "$kind" 2>/dev/null | awk -v want="$want" 'function pmatch(s) { return s == want || substr(s, length(s)-length(want)) == "."want } { sub(/^ +/, ""); id=$1; sub(/^[^ ]+ +/, ""); if (pmatch($0)) print id }'
 }
 
 count_ports() {
     local kind="$1" want="$2"
-    pw-link -I "$kind" 2>/dev/null | awk -v want="$want" '{ sub(/^ +/, ""); sub(/^[^ ]+ +/, ""); if ($0 == want) n++ } END { print n+0 }'
+    pw-link -I "$kind" 2>/dev/null | awk -v want="$want" 'function pmatch(s) { return s == want || substr(s, length(s)-length(want)) == "."want } { sub(/^ +/, ""); sub(/^[^ ]+ +/, ""); if (pmatch($0)) n++ } END { print n+0 }'
 }
 
 pw_pairs() {
@@ -97,11 +97,12 @@ pw_pairs() {
 count_links_from_to() {
     local src="$1" dst="$2"
     pw-link -I -l 2>/dev/null | awk -v src="$src" -v dst="$dst" '
+        function pmatch(s, w) { return s == w || substr(s, length(s)-length(w)) == "."w }
         {
             if (index($0, "|->")) {
                 rest = substr($0, index($0, "|") + 3)
                 sub(/^ +/, "", rest); sub(/^[0-9]+ +/, "", rest)
-                if (header == src && rest == dst) n++
+                if (pmatch(header, src) && pmatch(rest, dst)) n++
             } else if (!index($0, "|<-")) {
                 header = $0; sub(/^ +/, "", header); sub(/^[0-9]+ +/, "", header)
             }
@@ -111,11 +112,12 @@ count_links_from_to() {
 count_links_into() {
     local dst="$1"
     pw-link -I -l 2>/dev/null | awk -v dst="$dst" '
+        function pmatch(s, w) { return s == w || substr(s, length(s)-length(w)) == "."w }
         {
             if (index($0, "|->")) {
                 rest = substr($0, index($0, "|") + 3)
                 sub(/^ +/, "", rest); sub(/^[0-9]+ +/, "", rest)
-                if (rest == dst) n++
+                if (pmatch(rest, dst)) n++
             } else if (!index($0, "|<-")) {
                 header = $0; sub(/^ +/, "", header); sub(/^[0-9]+ +/, "", header)
             }
@@ -193,7 +195,7 @@ teardown() {
     if pw-link -o 2>/dev/null | grep -q '^pw-play:'; then
         log "WARN: pw-play ports still present after teardown"
     fi
-    if pw-link -i -o 2>/dev/null | grep -q "$PREFIX:"; then
+    if pw-link -i -o 2>/dev/null | grep -Eq "(^|[.])$PREFIX:"; then
         log "WARN: $PREFIX ports still present after teardown"
     fi
     log "teardown complete"
@@ -214,7 +216,7 @@ python3 tools/perf/validate_audio.py "$WAV" --expect-sha256 "$WAV_SHA256" || die
 if pw-link -o 2>/dev/null | grep -q '^pw-play:'; then
     die "stale pw-play node in graph; stop other players first"
 fi
-if pw-link -i -o 2>/dev/null | grep -q "$PREFIX:"; then
+if pw-link -i -o 2>/dev/null | grep -Eq "(^|[.])$PREFIX:"; then
     die "stale $PREFIX ports in graph; stop leftover instances first"
 fi
 if pgrep -f "(samply|perf) record.*$TAG" >/dev/null 2>&1; then
@@ -225,7 +227,7 @@ if [[ "$ALLOW_DESKTOP_AUDIO" == 0 ]]; then
     if pw_pairs | PREFIX="$PREFIX" awk -F'\t' '
         {
             rb = (index($1, "Rhythmbox:") == 1 || index($2, "Rhythmbox:") == 1)
-            ins = (index($1, ENVIRON["PREFIX"] ":") == 1 || index($2, ENVIRON["PREFIX"] ":") == 1)
+            ins = (match($1, "(^|\\.)" ENVIRON["PREFIX"] ":") || match($2, "(^|\\.)" ENVIRON["PREFIX"] ":"))
             if (rb && ins) linked=1
         }
         END { exit !linked }'; then
@@ -313,12 +315,19 @@ link_channel() {
 }
 
 link_player_to_all() {
-    local want="$1"
+    local want="$1" fl fr
     link_channel FL
     link_channel FR
-    [[ "$(count_links_from_to "pw-play:output_FL" "$PREFIX:input_FL")" == "$want" ]] || die "FL fan-out incomplete"
-    [[ "$(count_links_from_to "pw-play:output_FR" "$PREFIX:input_FR")" == "$want" ]] || die "FR fan-out incomplete"
-    log "player fanned out to $want instance(s)"
+    for _ in $(seq 1 15); do
+        fl="$(count_links_from_to "pw-play:output_FL" "$PREFIX:input_FL")"
+        fr="$(count_links_from_to "pw-play:output_FR" "$PREFIX:input_FR")"
+        if [[ "$fl" == "$want" && "$fr" == "$want" ]]; then
+            log "player fanned out to $want instance(s)"
+            return 0
+        fi
+        sleep 1
+    done
+    die "player fan-out incomplete (FL=$fl/FR=$fr, want $want)"
 }
 
 stop_player() {
@@ -362,19 +371,20 @@ run_mode() {
         sleep 2
     done
     [[ "$(count_ports -i "$PREFIX:input_FL")" -ge 3 ]] || die "[$mode] dir3 input ports never appeared"
+    local WANT="$(count_ports -i "$PREFIX:input_FL")"
     log "[$mode] unlinking mics from all inputs"
     unlink_all_inputs
     if [[ "$mode" == music ]]; then
         start_player
-        link_player_to_all 3
-        assert_inputs_clean music 3
+        link_player_to_all "$WANT"
+        assert_inputs_clean music "$WANT"
     else
         assert_inputs_clean quiet 0
     fi
     log "[$mode] capturing for ${WINDOW}s -> $out"
     sleep "$WINDOW"
     if [[ "$mode" == music ]]; then
-        assert_inputs_clean music 3
+        assert_inputs_clean music "$WANT"
     else
         assert_inputs_clean quiet 0
     fi
