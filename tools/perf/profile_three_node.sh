@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # profile_three_node.sh: automated 3-node insanity profiling (TUI, real conditions).
-# Builds --profile profiling with mold/x86-64-v3, runs dir1/dir2 peers plus a
+# Builds --profile profiling with x86-64-v3, runs dir1/dir2 peers plus a
 # profiled dir3 in ghostty windows on room test, and captures perf (default)
 # or samply profiles. Music mode injects recording audio via a silent
 # (unlinked-from-Modi) pw-play fan-out into every insanity input, replicating
@@ -237,10 +237,9 @@ if [[ "$ALLOW_DESKTOP_AUDIO" == 0 ]]; then
 fi
 
 if [[ "$SKIP_BUILD" == 0 ]]; then
-    need mold
     need cargo
-    log "building profile=profiling with x86-64-v3 + mold"
-    RUSTFLAGS="-C target-cpu=x86-64-v3 -C link-arg=-fuse-ld=mold" \
+    log "building profile=profiling with x86-64-v3"
+    RUSTFLAGS="-C target-cpu=x86-64-v3" \
         cargo build --profile profiling --bin insanity
     cp target/profiling/insanity "$BINARY"
     chmod +x "$BINARY"

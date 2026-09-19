@@ -33,10 +33,12 @@
             lockFile = ./Cargo.lock;
             allowBuiltinFetchGit = true;
           };
-          cargoBuildFlags = [
-            "--bin"
-            "insanity"
-          ] ++ extraFlags;
+          cargoBuildFlags =
+            [
+              "--bin"
+              "insanity"
+            ]
+            ++ extraFlags;
           cargoTestFlags = extraFlags;
           nativeBuildInputs = [pkgs.pkg-config pkgs.perl pkgs.cmake pkgs.rustPlatform.bindgenHook];
           buildInputs =
@@ -51,9 +53,11 @@
               else
                 [pkgs.alsa-lib]
                 ++ (
-                  if noPipewire then [
+                  if noPipewire
+                  then [
                     # static musl: ALSA-only (`--no-default-features`)
-                  ] else [
+                  ]
+                  else [
                     pkgs.pipewire
                   ]
                 )
@@ -93,8 +97,6 @@
                 valgrind
                 perf
                 linuxPackages.cpupower
-                # fast linker for perf builds (RUSTFLAGS="-C link-arg=-fuse-ld=mold")
-                mold
               ]
             );
         };
@@ -102,7 +104,7 @@
         packages.default = pkgs.rustPlatform.buildRustPackage (rustPackageOptions pkgs [] false);
         packages.static =
           pkgs.pkgsStatic.rustPlatform.buildRustPackage
-            (rustPackageOptions pkgs.pkgsStatic ["--no-default-features"] true);
+          (rustPackageOptions pkgs.pkgsStatic ["--no-default-features"] true);
 
         packages.docker = pkgs.dockerTools.buildLayeredImage {
           name = pname;
