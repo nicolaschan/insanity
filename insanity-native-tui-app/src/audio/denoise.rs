@@ -1,7 +1,11 @@
 use insanity_core::audio::denoiser::Denoiser;
 use nnnoiseless::DenoiseState;
 
-pub struct NnnoiselessDenoiser(Box<DenoiseState<'static>>);
+pub struct NnnoiselessDenoiser {
+    inner: Box<DenoiseState<'static>>,
+    scaled_in: Vec<f32>,
+    scaled_out: Vec<f32>,
+}
 
 impl Denoiser for NnnoiselessDenoiser {
     const FRAME_SIZE: usize = DenoiseState::FRAME_SIZE;
@@ -9,17 +13,24 @@ impl Denoiser for NnnoiselessDenoiser {
     fn init() -> Self {
         let model = nnnoiseless::RnnModel::default();
         let denoise_state = DenoiseState::from_model(model);
-        NnnoiselessDenoiser(denoise_state)
+        NnnoiselessDenoiser {
+            inner: denoise_state,
+            scaled_in: Vec::with_capacity(DenoiseState::FRAME_SIZE),
+            scaled_out: Vec::with_capacity(DenoiseState::FRAME_SIZE),
+        }
     }
 
     fn process_frame(&mut self, output: &mut [f32], input: &[f32]) {
         let magic = 32767.0;
-        let input: Vec<f32> = input.iter().map(|s| s * magic).collect();
+        self.scaled_in.clear();
+        self.scaled_in.extend(input.iter().map(|s| s * magic));
 
-        let mut scaled_output = vec![0.0; output.len()];
-        self.0.process_frame(&mut scaled_output, &input);
-        for (i, scaled_value) in scaled_output.iter().enumerate() {
-            output[i] = *scaled_value / magic;
+        self.scaled_out.clear();
+        self.scaled_out.resize(output.len(), 0.0);
+        self.inner
+            .process_frame(&mut self.scaled_out, &self.scaled_in);
+        for (o, s) in output.iter_mut().zip(self.scaled_out.iter()) {
+            *o = *s / magic;
         }
     }
 }

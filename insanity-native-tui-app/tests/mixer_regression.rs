@@ -241,7 +241,7 @@ fn denoise_remainder_no_loss() {
     // 1000 stereo samples is not a multiple of 2*480=960.
     let data = vec![0.1f32; 1000];
     let chunk = AudioChunk::new(0, AudioFormat::new(2, 48000), data);
-    let out = denoiser.denoise_chunk(&chunk);
+    let out = denoiser.denoise_chunk(chunk);
     assert_eq!(out.sequence_number, 0);
     assert_eq!(
         out.audio_data.len(),

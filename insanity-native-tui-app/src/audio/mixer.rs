@@ -69,17 +69,16 @@ pub fn output_resampler(out: AudioFormat, audio_config: AudioPipelineConfig) -> 
 
 pub(crate) const MIXER_OPS_BOUND: usize = 64;
 
+pub(crate) struct SubscribeRequest {
+    pub(crate) transform: PeerChain,
+    pub(crate) decoder: OpusRebuild,
+    pub(crate) resampler: StreamResampler,
+    pub(crate) reply: oneshot::Sender<SlotId>,
+}
+
 pub(crate) enum MixerOp {
-    Push {
-        slot: SlotId,
-        chunk: EncodedChunk,
-    },
-    Subscribe {
-        transform: PeerChain,
-        decoder: OpusRebuild,
-        resampler: StreamResampler,
-        reply: oneshot::Sender<SlotId>,
-    },
+    Push { slot: SlotId, chunk: EncodedChunk },
+    Subscribe(Box<SubscribeRequest>),
     Unsubscribe(SlotId),
     Snapshot(oneshot::Sender<(MixerMetrics, usize)>),
 }
@@ -111,12 +110,12 @@ impl MixerClient {
     ) -> Option<SlotId> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
-            .send(MixerOp::Subscribe {
+            .send(MixerOp::Subscribe(Box::new(SubscribeRequest {
                 transform,
                 decoder,
                 resampler,
                 reply: reply_tx,
-            })
+            })))
             .await
             .ok()?;
         reply_rx.await.ok()
@@ -191,12 +190,13 @@ pub(crate) async fn run_mixer_owner(
                 MixerOp::Push { slot, chunk } => {
                     mixer.push_to_slot(slot, chunk);
                 }
-                MixerOp::Subscribe {
-                    transform,
-                    decoder,
-                    resampler,
-                    reply,
-                } => {
+                MixerOp::Subscribe(request) => {
+                    let SubscribeRequest {
+                        transform,
+                        decoder,
+                        resampler,
+                        reply,
+                    } = *request;
                     let slot = mixer.subscribe(transform, decoder, resampler);
                     slot_replies.push((reply, slot));
                 }

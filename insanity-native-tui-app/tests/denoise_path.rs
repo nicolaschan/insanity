@@ -69,7 +69,7 @@ fn noise_substantially_quieter_when_denoise_on() {
             let mut outs = Vec::new();
             for seq in 0..6u128 {
                 let chunk = noise_chunk(seed ^ (seq as u64 + 1), amp);
-                let denoised = denoiser.denoise_chunk(&AudioChunk::new(
+                let denoised = denoiser.denoise_chunk(AudioChunk::new(
                     seq,
                     AudioFormat::new(2, 48000),
                     chunk.clone(),

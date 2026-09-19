@@ -1,7 +1,4 @@
-use crate::audio::{
-    chunk::AudioChunk,
-    sample_ops::{interleave_channels, split_channels},
-};
+use crate::audio::chunk::AudioChunk;
 
 pub trait Denoiser: Send {
     const FRAME_SIZE: usize;
@@ -12,6 +9,8 @@ pub trait Denoiser: Send {
 pub struct MultiChannelDenoiser<T: Denoiser> {
     channels: u16,
     denoisers: Vec<T>,
+    scratch_in: Vec<Vec<f32>>,
+    scratch_out: Vec<Vec<f32>>,
 }
 
 impl<T: Denoiser> Default for MultiChannelDenoiser<T> {
@@ -25,6 +24,8 @@ impl<T: Denoiser> MultiChannelDenoiser<T> {
         MultiChannelDenoiser {
             channels: 0,
             denoisers: Vec::new(),
+            scratch_in: Vec::new(),
+            scratch_out: Vec::new(),
         }
     }
 
@@ -34,42 +35,38 @@ impl<T: Denoiser> MultiChannelDenoiser<T> {
             for _ in 0..channels {
                 self.denoisers.push(T::init());
             }
+            self.scratch_in = (0..channels).map(|_| vec![0.0; T::FRAME_SIZE]).collect();
+            self.scratch_out = (0..channels).map(|_| vec![0.0; T::FRAME_SIZE]).collect();
             self.channels = channels;
         }
     }
 
-    pub fn denoise_chunk(&mut self, chunk: &AudioChunk) -> AudioChunk {
+    pub fn denoise_chunk(&mut self, mut chunk: AudioChunk) -> AudioChunk {
         let channels = chunk.format.channel_count;
-        let mut denoised_audio: Vec<f32> = Vec::new();
 
         if channels == 0 || chunk.audio_data.is_empty() {
-            return chunk.clone();
+            return chunk;
         }
         self.setup_denoisers(channels);
 
-        let frame_samples = (channels as usize) * T::FRAME_SIZE;
+        let ch = channels as usize;
+        let frame_samples = ch * T::FRAME_SIZE;
         let full_len = (chunk.audio_data.len() / frame_samples) * frame_samples;
-        for audio_chunk in chunk.audio_data[..full_len].chunks_exact(frame_samples) {
-            let raw_audio = split_channels(audio_chunk, channels as usize);
-
-            // Denoise each channel independently
-            let mut denoised_channels = Vec::new();
-            for i in 0..channels {
-                let mut denoiser = self.denoisers.swap_remove(i as usize);
-                let mut denoised_audio_buffer = vec![0.0; T::FRAME_SIZE];
-                denoiser.process_frame(&mut denoised_audio_buffer, &raw_audio[i as usize]);
-                self.denoisers.insert(i as usize, denoiser);
-                denoised_channels.push(denoised_audio_buffer);
+        for start in (0..full_len).step_by(frame_samples) {
+            for c in 0..ch {
+                for i in 0..T::FRAME_SIZE {
+                    self.scratch_in[c][i] = chunk.audio_data[start + i * ch + c];
+                }
             }
-
-            for sample in interleave_channels(&denoised_channels) {
-                denoised_audio.push(sample);
+            for c in 0..ch {
+                self.denoisers[c].process_frame(&mut self.scratch_out[c], &self.scratch_in[c]);
+            }
+            for i in 0..T::FRAME_SIZE {
+                for c in 0..ch {
+                    chunk.audio_data[start + i * ch + c] = self.scratch_out[c][i];
+                }
             }
         }
-        // Tail that doesn't fill a full denoiser frame can't be processed;
-        // pass it through unchanged so no samples are lost.
-        denoised_audio.extend_from_slice(&chunk.audio_data[full_len..]);
-
-        AudioChunk::new(chunk.sequence_number, chunk.format.clone(), denoised_audio)
+        chunk
     }
 }
