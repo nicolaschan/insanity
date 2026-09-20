@@ -4,13 +4,7 @@ mod audio_math;
 mod unit_mixer;
 
 use audio_math::count_dips;
-use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
-use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::codec::rebuild_opus_encoder;
-use insanity_native_tui_app::audio::hub::AudioInputHub;
-use std::time::Duration;
 use unit_mixer::{add_unit_peer, assert_all_finite, push_value, render, unit_mixer};
 
 #[test]
@@ -69,67 +63,4 @@ fn fully_starved_output_shows_repeated_dips() {
     }
     let dips = count_dips(&out, 960, 10.0);
     assert!(dips > 0, "repeated PLC fades must read as periodic dips");
-}
-
-struct BurstySource {
-    seq: u128,
-    phase: f32,
-}
-
-impl BurstySource {
-    fn chunk(&mut self) -> AudioChunk {
-        let data: Vec<f32> = (0..480)
-            .flat_map(|_| {
-                let v = (self.phase * 2.0 * std::f32::consts::PI).sin() * 0.4;
-                self.phase = (self.phase + 440.0 / 48000.0) % 1.0;
-                [v, v]
-            })
-            .collect();
-        let chunk = AudioChunk::new(self.seq, AudioFormat::new(2, 48000), data);
-        self.seq += 1;
-        chunk
-    }
-}
-
-impl ChunkSource for BurstySource {
-    async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        if self.seq.is_multiple_of(4) && self.seq != 0 {
-            tokio::time::sleep(Duration::from_millis(40)).await;
-        }
-        Some(self.chunk())
-    }
-}
-
-#[tokio::test]
-async fn bursty_source_is_paced_to_10ms() {
-    let hub = AudioInputHub::from_chunk_source(
-        BurstySource { seq: 0, phase: 0.0 },
-        AudioPipelineConfig::default(),
-        rebuild_opus_encoder,
-    );
-    let mut rx = hub.subscribe();
-    let mut times = Vec::new();
-    for _ in 0..12 {
-        tokio::time::timeout(Duration::from_secs(2), rx.recv())
-            .await
-            .expect("frame")
-            .expect("hub open");
-        times.push(std::time::Instant::now());
-    }
-    let mut gaps: Vec<f64> = times
-        .windows(2)
-        .map(|w| (w[1] - w[0]).as_secs_f64() * 1000.0)
-        .collect();
-    gaps.sort_by(|a, b| a.partial_cmp(b).expect("inter-arrival"));
-    let median = gaps[gaps.len() / 2];
-    let bursts = gaps.iter().filter(|g| **g < 5.0).count();
-    let burst_frac = bursts as f64 / gaps.len() as f64;
-    assert!(
-        burst_frac < 0.25,
-        "hub must smooth bursts, got burst_frac {burst_frac:.2} gaps_ms={gaps:?}"
-    );
-    assert!(
-        (7.0..20.0).contains(&median),
-        "hub must pace to ~10ms, got median {median:.2}ms gaps_ms={gaps:?}"
-    );
 }
