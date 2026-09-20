@@ -5,7 +5,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::SlotId;
-use insanity_native_tui_app::audio::mixer::format_audio_interval;
+use insanity_native_tui_app::audio::mixer::{OutputInterval, format_audio_interval};
 use opus::{Application, Channels, Decoder, Encoder};
 use unit_mixer::{
     add_peer, assert_all_finite, feed, fill, mixer_with_capacity, plc_hold, push_chunk, underruns,
@@ -214,8 +214,7 @@ fn starved_predicate_matches_incident_and_healthy_logs() {
         256299,
         1,
         0,
-        0,
-        0,
+        OutputInterval::default(),
     );
     assert!(line.contains("underruns=291264"), "{line}");
     assert!(line.contains("peers=1"), "{line}");
