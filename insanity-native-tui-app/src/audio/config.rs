@@ -4,15 +4,21 @@ use insanity_core::audio::config::AudioPipelineConfig;
 
 pub const AUDIO_CALLBACK_FRAMES: u32 = 480;
 
-fn callback_buffer_size(supported: &cpal::SupportedBufferSize) -> BufferSize {
-    match supported {
-        cpal::SupportedBufferSize::Range { min, max } => {
+const PULSEAUDIO_HOST: &str = "PulseAudio";
+
+fn callback_buffer_size(host: &str, supported: &cpal::SupportedBufferSize) -> BufferSize {
+    match (host, supported) {
+        (PULSEAUDIO_HOST, cpal::SupportedBufferSize::Range { min, max }) => {
             let clamped = AUDIO_CALLBACK_FRAMES.clamp(*min, *max);
             log::debug!("requesting fixed stream buffer of {clamped} frames");
             BufferSize::Fixed(clamped)
         }
-        cpal::SupportedBufferSize::Unknown => BufferSize::Default,
+        _ => BufferSize::Default,
     }
+}
+
+fn host_name() -> &'static str {
+    cpal::default_host().id().name()
 }
 
 // shared config helpers
@@ -82,7 +88,7 @@ pub(crate) fn get_input_config(
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = audio_config.sample_rate().min(max);
-    let buffer_size = callback_buffer_size(cfg_range.buffer_size());
+    let buffer_size = callback_buffer_size(host_name(), cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
         sample_rate,
@@ -108,13 +114,59 @@ pub(crate) fn get_output_config(
     let max = cfg_range.max_sample_rate();
     let channels = cfg_range.channels();
     let sample_rate = audio_config.sample_rate().min(max);
-    let buffer_size = callback_buffer_size(cfg_range.buffer_size());
+    let buffer_size = callback_buffer_size(host_name(), cfg_range.buffer_size());
     let cfg = StreamConfig {
         channels,
         sample_rate,
         buffer_size,
     };
     Ok((cfg_range.sample_format(), cfg))
+}
+
+#[cfg(test)]
+mod buffer_size_tests {
+    use super::{AUDIO_CALLBACK_FRAMES, callback_buffer_size};
+    use cpal::{BufferSize, SupportedBufferSize};
+
+    #[test]
+    fn pulseaudio_requests_callback_frames_within_range() {
+        let wide = SupportedBufferSize::Range {
+            min: 1,
+            max: 1 << 20,
+        };
+        assert_eq!(
+            callback_buffer_size("PulseAudio", &wide),
+            BufferSize::Fixed(AUDIO_CALLBACK_FRAMES)
+        );
+        let narrow = SupportedBufferSize::Range {
+            min: 1024,
+            max: 4096,
+        };
+        assert_eq!(
+            callback_buffer_size("PulseAudio", &narrow),
+            BufferSize::Fixed(1024)
+        );
+    }
+
+    #[test]
+    fn pulseaudio_without_range_uses_default() {
+        assert_eq!(
+            callback_buffer_size("PulseAudio", &SupportedBufferSize::Unknown),
+            BufferSize::Default
+        );
+    }
+
+    #[test]
+    fn other_hosts_use_default_even_with_range() {
+        let range = SupportedBufferSize::Range { min: 480, max: 480 };
+        for host in ["WASAPI", "CoreAudio", "ALSA", "PipeWire", "JACK"] {
+            assert_eq!(
+                callback_buffer_size(host, &range),
+                BufferSize::Default,
+                "{host}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

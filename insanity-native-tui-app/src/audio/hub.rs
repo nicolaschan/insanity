@@ -12,34 +12,6 @@ use tokio::sync::broadcast;
 #[cfg(feature = "encode-silence")]
 use super::mixer::{QUIET_HANGOVER_CHUNKS, QUIET_RMS_THRESHOLD};
 
-struct Pacer {
-    period: tokio::time::Duration,
-    next_deadline: Option<tokio::time::Instant>,
-}
-
-impl Pacer {
-    fn new(period: tokio::time::Duration) -> Self {
-        Self {
-            period,
-            next_deadline: None,
-        }
-    }
-
-    async fn pace(&mut self) {
-        let now = tokio::time::Instant::now();
-        let Some(deadline) = self.next_deadline else {
-            self.next_deadline = Some(now + self.period);
-            return;
-        };
-        if now < deadline {
-            tokio::time::sleep_until(deadline).await;
-            self.next_deadline = Some(deadline + self.period);
-        } else {
-            self.next_deadline = Some(now + self.period);
-        }
-    }
-}
-
 /// Broadcasts chunks
 pub struct AudioInputHub<OutputT> {
     tx: broadcast::Sender<OutputT>,
@@ -75,9 +47,7 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
             mute_control,
         };
         tokio::spawn(async move {
-            let mut pacer = Pacer::new(audio_config.chunk_period());
             while let Some(chunk) = source.next_chunk().await {
-                pacer.pace().await;
                 let Some(frame) = transform.transform(chunk) else {
                     continue;
                 };

@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use insanity_core::audio::AudioFormat;
-use insanity_core::audio::chunk::{AudioChunk, SampleChunker};
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::Mixer;
@@ -61,6 +61,33 @@ impl SyncSampleSource for SineSource {
     }
 }
 
+/// Releases chunks at the pipeline period so instant sources act like a mic.
+pub struct Paced<S> {
+    source: S,
+    period: tokio::time::Duration,
+    next: Option<tokio::time::Instant>,
+}
+
+impl<S> Paced<S> {
+    pub fn new(source: S, period: tokio::time::Duration) -> Self {
+        Self {
+            source,
+            period,
+            next: None,
+        }
+    }
+}
+
+impl<S: ChunkSource + Send> ChunkSource for Paced<S> {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        let chunk = self.source.next_chunk().await?;
+        let deadline = self.next.unwrap_or_else(tokio::time::Instant::now);
+        tokio::time::sleep_until(deadline).await;
+        self.next = Some(deadline + self.period);
+        Some(chunk)
+    }
+}
+
 pub fn hub_from_source<S>(source: S) -> AudioInputHub<EncodedChunk>
 where
     S: SampleSource + Send + Sync + 'static,
@@ -68,7 +95,8 @@ where
     let audio_config = AudioPipelineConfig::default();
     let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
     let chunked = SampleChunker::new(resampled, audio_config.frames());
-    AudioInputHub::from_chunk_source(chunked, audio_config, rebuild_opus_encoder)
+    let paced = Paced::new(chunked, audio_config.chunk_period());
+    AudioInputHub::from_chunk_source(paced, audio_config, rebuild_opus_encoder)
 }
 
 pub fn new_no_device_mixer() -> AppMixer {
