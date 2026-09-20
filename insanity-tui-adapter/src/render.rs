@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub(crate) fn loudness_bucket(display_name: &str, loudness: f64) -> usize {
-    (display_name.len() as f64 * loudness.clamp(0.0, 1.0)) as usize
+    (display_name.chars().count() as f64 * loudness.clamp(0.0, 1.0)) as usize
 }
 
 pub fn ui(f: &mut Frame, app: &App) {
@@ -374,5 +374,11 @@ mod tests {
     fn out_of_range_levels_are_clamped() {
         assert_eq!(loudness_bucket("12345678", -0.5), 0);
         assert_eq!(loudness_bucket("12345678", 2.0), 8);
+    }
+
+    #[test]
+    fn bucket_counts_chars_not_bytes() {
+        assert_eq!(loudness_bucket("a🤫", 1.0), 2);
+        assert_eq!(loudness_bucket("a🤫", 0.5), 1);
     }
 }

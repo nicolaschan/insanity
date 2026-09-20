@@ -104,6 +104,7 @@ pub enum AppEvent {
     AddPeer(Peer),
     RemovePeer(String),
     Backspace,
+    Delete,
     Left,
     Right,
     CursorBeginning,
@@ -196,7 +197,10 @@ impl App {
                 self.move_tabs(-1);
                 true
             }
-            AppEvent::AddPeer(peer) => {
+            AppEvent::AddPeer(mut peer) => {
+                if let Some(existing) = self.peers.get(&peer.id) {
+                    peer.loudness = existing.loudness;
+                }
                 let changed = self.peers.get(&peer.id) != Some(&peer);
                 if changed {
                     self.peers.insert(peer.id.clone(), peer);
@@ -222,23 +226,21 @@ impl App {
                         self.adjust_volume(-1);
                         true
                     }
-                    MOVE_DOWN_PEER_LIST_KEY => {
-                        let old = self.peer_index;
-                        self.move_peer(1);
-                        old != self.peer_index
-                    }
-                    MOVE_UP_PEER_LIST_KEY => {
-                        let old = self.peer_index;
-                        self.move_peer(-1);
-                        old != self.peer_index
-                    }
+                    MOVE_DOWN_PEER_LIST_KEY => self.move_peer(1),
+                    MOVE_UP_PEER_LIST_KEY => self.move_peer(-1),
                     MOVE_TOP_PEER_LIST_KEY => {
+                        let old = self.peer_index;
                         self.peer_index = 0;
-                        true
+                        old != self.peer_index
                     }
                     MOVE_BOTTOM_PEER_LIST_KEY => {
-                        self.peer_index = self.peers.len() - 1;
-                        true
+                        if self.peers.is_empty() {
+                            false
+                        } else {
+                            let old = self.peer_index;
+                            self.peer_index = self.peers.len() - 1;
+                            old != self.peer_index
+                        }
                     }
                     MUTE_KEY => {
                         self.toggle_mute_self();
@@ -267,36 +269,49 @@ impl App {
                 true
             }
             AppEvent::Backspace => {
+                let old = self.editor.cursor;
                 self.editor.backspace();
-                true
+                old != self.editor.cursor
+            }
+            AppEvent::Delete => {
+                let old = self.editor.buffer.clone();
+                self.editor.delete();
+                old != self.editor.buffer
             }
             AppEvent::Left => {
+                let old = self.editor.cursor;
                 self.editor.left();
-                true
+                old != self.editor.cursor
             }
             AppEvent::Right => {
+                let old = self.editor.cursor;
                 self.editor.right();
-                true
+                old != self.editor.cursor
             }
             AppEvent::CursorBeginning => {
+                let old = self.editor.cursor;
                 self.editor.cursor_beginning();
-                true
+                old != self.editor.cursor
             }
             AppEvent::CursorEnd => {
+                let old = self.editor.cursor;
                 self.editor.cursor_end();
-                true
+                old != self.editor.cursor
             }
             AppEvent::PreviousWord => {
+                let old = self.editor.cursor;
                 self.editor.previous_word();
-                true
+                old != self.editor.cursor
             }
             AppEvent::NextWord => {
+                let old = self.editor.cursor;
                 self.editor.next_word();
-                true
+                old != self.editor.cursor
             }
             AppEvent::DeleteWord => {
+                let old = self.editor.cursor;
                 self.editor.delete_word();
-                true
+                old != self.editor.cursor
             }
             AppEvent::SetOwnPublicKey(address) => {
                 self.own_public_key = Some(address);
@@ -320,12 +335,16 @@ impl App {
             }
             AppEvent::Down => match self.tab_index {
                 TAB_IDX_PEERS => {
-                    let old = self.peer_index;
-                    self.peer_index = std::cmp::min(
-                        self.peer_index.checked_add(1).unwrap_or(0),
-                        self.peers.len() - 1,
-                    );
-                    old != self.peer_index
+                    if self.peers.is_empty() {
+                        false
+                    } else {
+                        let old = self.peer_index;
+                        self.peer_index = std::cmp::min(
+                            self.peer_index.checked_add(1).unwrap_or(0),
+                            self.peers.len() - 1,
+                        );
+                        old != self.peer_index
+                    }
                 }
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
@@ -339,9 +358,13 @@ impl App {
             },
             AppEvent::Up => match self.tab_index {
                 TAB_IDX_PEERS => {
-                    let old = self.peer_index;
-                    self.peer_index = self.peer_index.saturating_sub(1);
-                    old != self.peer_index
+                    if self.peers.is_empty() {
+                        false
+                    } else {
+                        let old = self.peer_index;
+                        self.peer_index = self.peer_index.saturating_sub(1);
+                        old != self.peer_index
+                    }
                 }
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
@@ -351,12 +374,20 @@ impl App {
                 _ => false,
             },
             AppEvent::TogglePeer => {
-                self.toggle_peer();
-                true
+                if self.selected_peer().is_none() {
+                    false
+                } else {
+                    self.toggle_peer();
+                    true
+                }
             }
             AppEvent::ToggleDenoise => {
-                self.toggle_denoise();
-                true
+                if self.selected_peer().is_none() {
+                    false
+                } else {
+                    self.toggle_denoise();
+                    true
+                }
             }
             AppEvent::SetPeerDenoise(peer_id, denoised) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
@@ -405,8 +436,14 @@ impl App {
         }
     }
 
-    fn move_peer(&mut self, delta: isize) {
-        self.peer_index = add_in_bounds(self.peer_index, 0, self.peers.len() - 1, delta);
+    fn move_peer(&mut self, delta: isize) -> bool {
+        if self.peers.is_empty() {
+            false
+        } else {
+            let old = self.peer_index;
+            self.peer_index = add_in_bounds(self.peer_index, 0, self.peers.len() - 1, delta);
+            old != self.peer_index
+        }
     }
 
     fn selected_peer(&self) -> Option<&Peer> {
@@ -575,6 +612,9 @@ pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
                             }
                             KeyCode::Backspace => {
                                 sender.send(AppEvent::Backspace).unwrap();
+                            }
+                            KeyCode::Delete => {
+                                sender.send(AppEvent::Delete).unwrap();
                             }
                             KeyCode::Left => {
                                 sender.send(AppEvent::Left).unwrap();
@@ -794,12 +834,29 @@ mod render_scaling_tests {
     }
 
     #[test]
+    fn forward_delete_removes_char_under_cursor() {
+        let (tx, _rx) = unbounded_channel();
+        let mut app = App::new(tx);
+        assert!(app.process_event(AppEvent::NextTab));
+        assert!(app.process_event(AppEvent::Character('h')));
+        assert!(app.process_event(AppEvent::Character('i')));
+        assert!(app.process_event(AppEvent::Left));
+        assert!(app.process_event(AppEvent::Delete));
+        assert_eq!(app.editor.buffer, "h");
+        assert_eq!(app.editor.cursor, 1);
+        assert!(!app.process_event(AppEvent::Delete));
+        assert_eq!(app.editor.buffer, "h");
+        assert!(app.process_event(AppEvent::Backspace));
+        assert_eq!(app.editor.buffer, "");
+    }
+
+    #[test]
     fn hi_pri_applies_pending_before_processing() {
         let (mut app, ids) = test_app_with_peers(2);
         let mut pending: Vec<AppEvent> = Vec::new();
         let mut batch = vec![
+            AppEvent::Loudness(ids[0].clone(), 0.5),
             AppEvent::Loudness(ids[0].clone(), 0.9),
-            AppEvent::Loudness(ids[0].clone(), 0.1),
             AppEvent::Nothing,
         ];
         assert!(drain_batch(&mut app, &mut batch, &mut pending));
@@ -808,7 +865,7 @@ mod render_scaling_tests {
             "sequential rule: pending applied inline before the hi-pri event"
         );
         assert!(
-            (app.peers[&ids[0]].loudness - 0.1).abs() < f64::EPSILON,
+            (app.peers[&ids[0]].loudness - 0.9).abs() < f64::EPSILON,
             "latest queued level wins in arrival order"
         );
         let mut terminal = test_terminal();
@@ -876,6 +933,71 @@ mod render_scaling_tests {
         assert_eq!(draws, 1, "only the first insert draws");
     }
 
+    #[test]
+    fn reannounce_preserves_live_loudness() {
+        let (mut app, ids) = test_app_with_peers(1);
+        assert!(app.process_event(AppEvent::Loudness(ids[0].clone(), 0.9)));
+        let live = Peer::new(
+            ids[0].clone(),
+            Some(ids[0].clone()),
+            PeerState::Connected("addr".to_string()),
+            DenoiseSelection::None,
+            100,
+        );
+        assert!(
+            !app.process_event(AppEvent::AddPeer(live)),
+            "re-announce with identical roster must not draw or clobber"
+        );
+        assert!(
+            (app.peers[&ids[0]].loudness - 0.9).abs() < f64::EPSILON,
+            "live meter level survives the re-announce"
+        );
+    }
+
+    #[test]
+    fn zero_peer_movement_draws_nothing() {
+        let (mut app, _) = test_app_with_peers(0);
+        assert!(!app.process_event(AppEvent::Down));
+        assert!(!app.process_event(AppEvent::Up));
+        assert!(!app.process_event(AppEvent::Character('G')));
+        assert!(!app.process_event(AppEvent::Character('j')));
+    }
+
+    #[test]
+    fn burst_traffic_absorbed_within_tick_budget() {
+        let (mut app, ids) = test_app_with_peers(10);
+        let mut terminal = test_terminal();
+        let mut pending: Vec<AppEvent> = Vec::new();
+        let mut draws = 0;
+        for tick in 0..TICKS {
+            let mut batch = Vec::new();
+            if tick == 50 {
+                for (p, id) in ids.iter().enumerate() {
+                    for _ in 0..10 {
+                        batch.push(AppEvent::Loudness(id.clone(), level_for(tick, p)));
+                    }
+                }
+            }
+            if drain_batch(&mut app, &mut batch, &mut pending) {
+                app.render(&mut terminal).expect("render");
+                draws += 1;
+            }
+            if flush_pending(&mut app, &mut pending) {
+                app.render(&mut terminal).expect("render");
+                draws += 1;
+            }
+        }
+        assert_eq!(
+            pending.len(),
+            0,
+            "coalescing bounds the queue even under burst traffic"
+        );
+        assert!(
+            draws <= 2,
+            "one burst tick draws at most once for flush plus nothing elsewhere, got {draws}"
+        );
+    }
+
     fn expected_low_priority(event: &AppEvent) -> bool {
         match event {
             AppEvent::Loudness(..) | AppEvent::AddPeer(_) => true,
@@ -888,6 +1010,7 @@ mod render_scaling_tests {
             | AppEvent::NewMessage(_, _)
             | AppEvent::RemovePeer(_)
             | AppEvent::Backspace
+            | AppEvent::Delete
             | AppEvent::Left
             | AppEvent::Right
             | AppEvent::CursorBeginning
@@ -932,6 +1055,7 @@ mod render_scaling_tests {
             AppEvent::AddPeer(peer),
             AppEvent::RemovePeer("id".to_string()),
             AppEvent::Backspace,
+            AppEvent::Delete,
             AppEvent::Left,
             AppEvent::Right,
             AppEvent::CursorBeginning,
