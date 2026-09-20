@@ -148,13 +148,8 @@ pub async fn update(dry_run: bool, force: bool) -> anyhow::Result<()> {
     let current_exe = std::env::current_exe()?;
     info!("Current executable: {}", current_exe.display());
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = tokio::fs::metadata(&new_exe_path).await?.permissions();
-        perms.set_mode(perms.mode() | 0o111);
-        tokio::fs::set_permissions(&new_exe_path, perms).await?;
-    }
+    let perms = tokio::fs::metadata(&current_exe).await?.permissions();
+    tokio::fs::set_permissions(&new_exe_path, perms).await?;
 
     if !dry_run {
         info!(
