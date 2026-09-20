@@ -44,6 +44,17 @@ impl Editor {
         }
     }
 
+    pub fn delete(&mut self) {
+        if self.cursor < self.buffer.chars().count() {
+            self.buffer = self
+                .buffer
+                .chars()
+                .take(self.cursor)
+                .chain(self.buffer.chars().skip(self.cursor + 1))
+                .collect();
+        }
+    }
+
     pub fn left(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }

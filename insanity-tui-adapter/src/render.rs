@@ -14,6 +14,10 @@ use crate::{
     style::{BG_GRAY, CHAT_COLORS, COLOR_RED, CONNECTED, NUM_CHAT_COLORS, SELECTED},
 };
 
+pub(crate) fn loudness_bucket(display_name: &str, loudness: f64) -> usize {
+    (display_name.chars().count() as f64 * loudness.clamp(0.0, 1.0)) as usize
+}
+
 pub fn ui(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -54,7 +58,7 @@ fn tab_list(app: &App) -> impl Widget + use<> {
         .divider(Span::styled(DOT, Style::default().fg(BG_GRAY)))
 }
 
-fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
+fn peer_row<'a>(peer: &'a Peer, selected: bool) -> Row<'a> {
     let style = if selected {
         Style::default().bg(SELECTED)
     } else {
@@ -74,11 +78,11 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
         }),
     )]));
 
-    let display_name = peer.display_name.as_ref().unwrap_or(&peer.id).to_string();
+    let display_name: &str = peer.display_name.as_ref().unwrap_or(&peer.id);
 
     match peer.state {
         crate::PeerState::Connected(ref address) => {
-            let loudness_length = (display_name.len() as f64 * peer.loudness) as usize;
+            let loudness_length = loudness_bucket(display_name, peer.loudness);
             let display_name_with_loudness_bg = display_name
                 .chars()
                 .take(loudness_length)
@@ -95,7 +99,7 @@ fn peer_row<'a>(peer: &Peer, selected: bool) -> Row<'a> {
                     Span::styled(display_name_with_loudness_bg, style.fg(Color::Yellow)),
                     Span::styled(display_name_normal_bg, style.fg(CONNECTED)),
                     Span::styled(" <-> ", style.fg(Color::DarkGray)),
-                    Span::styled(address.clone(), style.fg(Color::Cyan)),
+                    Span::styled(address.as_str(), style.fg(Color::Cyan)),
                 ]))
                 .style(style),
             ])
@@ -139,6 +143,20 @@ fn char_to_readable(c: char) -> String {
 fn peer_command_help_entry(key: char, help_str: &'static str) -> String {
     format!("[{}] {}     ", char_to_readable(key), help_str)
 }
+
+static PEER_HELP_TEXT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    [
+        ('\t', "tab"),
+        (TOGGLE_PEER_KEY, "toggle peer"),
+        (TOGGLE_PEER_DENOISE_KEY, "toggle denoise"),
+        (INCREMENT_PEER_VOLUME_KEY, "volume up"),
+        (DECREMENT_PEER_VOLUME_KEY, "volume down"),
+        (MUTE_KEY, "toggle self mute"),
+    ]
+    .iter()
+    .map(|(key, help_str)| peer_command_help_entry(*key, help_str))
+    .fold("   ".to_string(), |acc, x| acc + &x)
+});
 
 fn render_peer_list(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
@@ -192,24 +210,8 @@ fn render_peer_list(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(peer_list, chunks[0]);
 
     // Command help list
-    let commands = [
-        ('\t', "tab"),
-        (TOGGLE_PEER_KEY, "toggle peer"),
-        (TOGGLE_PEER_DENOISE_KEY, "toggle denoise"),
-        (INCREMENT_PEER_VOLUME_KEY, "volume up"),
-        (DECREMENT_PEER_VOLUME_KEY, "volume down"),
-        (MUTE_KEY, "toggle self mute"),
-        // (MOVE_DOWN_PEER_LIST_KEY, "move down"),
-        // (MOVE_UP_PEER_LIST_KEY, "move up"),
-        // (MOVE_TOP_PEER_LIST_KEY, "move to top"),
-        // (MOVE_BOTTOM_PEER_LIST_KEY, "move to bottom"),
-    ];
-    let text: String = commands
-        .iter()
-        .map(|(key, help_str)| peer_command_help_entry(*key, help_str))
-        .fold("   ".to_string(), |acc, x| acc + &x);
-    let commands =
-        Paragraph::new(text).block(Block::default().style(Style::default().fg(Color::DarkGray)));
+    let commands = Paragraph::new(PEER_HELP_TEXT.as_str())
+        .block(Block::default().style(Style::default().fg(Color::DarkGray)));
     f.render_widget(commands, chunks[1]);
 }
 
@@ -347,4 +349,22 @@ fn render_chat(f: &mut Frame, app: &App, area: Rect) {
     let editor_widget = render_editor(&app.editor, &chunks[1]).block(default_block());
     f.render_widget(chat_history_widget, chunks[0]);
     f.render_widget(editor_widget, chunks[1]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loudness_bucket;
+
+    #[test]
+    fn bucket_quantizes_to_integer_span() {
+        assert_eq!(loudness_bucket("0123456789", 0.0), 0);
+        assert_eq!(loudness_bucket("0123456789", 0.5), 5);
+        assert_eq!(loudness_bucket("0123456789", 1.0), 10);
+    }
+
+    #[test]
+    fn bucket_counts_chars_not_bytes() {
+        assert_eq!(loudness_bucket("a🤫", 1.0), 2);
+        assert_eq!(loudness_bucket("a🤫", 0.5), 1);
+    }
 }

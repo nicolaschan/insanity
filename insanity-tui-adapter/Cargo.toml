@@ -21,6 +21,7 @@ tokio = { version = "1.16.1", features = [
     "rt",
     "rt-multi-thread",
     "macros",
+    "time",
 ] }
 ratatui = "0.30.2"
 textwrap = "0.16"
