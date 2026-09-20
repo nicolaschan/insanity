@@ -189,9 +189,9 @@ impl ChunkTransform for Clip {
 }
 
 const POP_FLOOR: f32 = 0.01;
-const POP_SLOPE_RATIO: f32 = 6.0;
-const SLOPE_ALPHA: f32 = 1.0 / 64.0;
+const POP_PEAK_RATIO: f32 = 6.0;
 const RAMP_MS: usize = 5;
+const RELEASE_MS: usize = 10;
 
 #[derive(Clone, Copy, Default)]
 struct DepopChannel {
@@ -199,23 +199,23 @@ struct DepopChannel {
     last_out: f32,
     held: f32,
     remaining: usize,
-    slope: f32,
+    peak: f32,
 }
 
 impl DepopChannel {
-    fn next(&mut self, sample: f32, ramp: usize) -> (f32, bool) {
+    fn next(&mut self, sample: f32, ramp: usize, decay: f32) -> (f32, bool) {
         if !sample.is_finite() {
             return (sample, false);
         }
         let delta = sample - self.last_in;
         self.last_in = sample;
         let magnitude = delta.abs();
-        let popped = magnitude > POP_FLOOR && magnitude > POP_SLOPE_RATIO * self.slope;
+        let popped = magnitude > POP_FLOOR && magnitude > POP_PEAK_RATIO * self.peak;
         if popped {
             self.held = self.last_out;
             self.remaining = ramp;
         }
-        self.slope += (magnitude - self.slope) * SLOPE_ALPHA;
+        self.peak = magnitude.max(self.peak * decay);
         let out = if self.remaining == 0 {
             sample
         } else {
@@ -230,17 +230,20 @@ impl DepopChannel {
 
 pub struct Depop {
     ramp: usize,
+    decay: f32,
     channels: Vec<DepopChannel>,
     next_channel: usize,
     pub pops: usize,
 }
 
 impl Depop {
-    pub fn new(channels: usize, ramp_frames: usize) -> Self {
+    pub fn new(channels: usize, ramp_frames: usize, release_frames: usize) -> Self {
         assert!(channels > 0, "channels must be > 0");
         assert!(ramp_frames > 0, "ramp_frames must be > 0");
+        assert!(release_frames > 0, "release_frames must be > 0");
         Depop {
             ramp: ramp_frames,
+            decay: 1.0 - 1.0 / release_frames as f32,
             channels: vec![DepopChannel::default(); channels],
             next_channel: 0,
             pops: 0,
@@ -248,17 +251,25 @@ impl Depop {
     }
 
     pub fn for_rate(channels: usize, sample_rate: u32) -> Self {
-        Self::new(channels, Self::ramp_frames(sample_rate))
+        Self::new(
+            channels,
+            Self::ramp_frames(sample_rate),
+            Self::release_frames(sample_rate),
+        )
     }
 
     pub fn ramp_frames(sample_rate: u32) -> usize {
         (sample_rate as usize * RAMP_MS / 1000).max(1)
     }
 
+    pub fn release_frames(sample_rate: u32) -> usize {
+        (sample_rate as usize * RELEASE_MS / 1000).max(1)
+    }
+
     pub fn next(&mut self, sample: f32) -> f32 {
         let channel = self.next_channel;
         self.next_channel = (channel + 1) % self.channels.len();
-        let (out, popped) = self.channels[channel].next(sample, self.ramp);
+        let (out, popped) = self.channels[channel].next(sample, self.ramp, self.decay);
         self.pops += usize::from(popped);
         out
     }
@@ -1069,12 +1080,14 @@ mod tests {
         assert_eq!(Depop::ramp_frames(48000), 240);
         assert_eq!(Depop::ramp_frames(8000), 40);
         assert_eq!(Depop::ramp_frames(1), 1);
+        assert_eq!(Depop::release_frames(48000), 480);
+        assert_eq!(Depop::release_frames(1), 1);
     }
 
     #[test]
     fn depop_steady_signal_untouched() {
         let sine = tone(440.0, 0.9, 1920);
-        let mut depop = Depop::new(1, 240);
+        let mut depop = Depop::new(1, 240, 240);
         depop.transform(chunk_with(1, sine[..960].to_vec()));
         let pops = depop.pops;
         let out = depop.transform(chunk_with(1, sine[960..].to_vec()));
@@ -1085,7 +1098,7 @@ mod tests {
 
     #[test]
     fn depop_onset_from_silence_fades_in() {
-        let mut depop = Depop::new(1, 4);
+        let mut depop = Depop::new(1, 4, 4);
         let out = depop.transform(chunk_with(1, vec![0.0, 0.0, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8]));
         assert_close(&out.audio_data, &[0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 0.8]);
         assert_eq!(depop.pops, 1);
@@ -1093,7 +1106,7 @@ mod tests {
 
     #[test]
     fn depop_bridges_step_down_across_chunks() {
-        let mut depop = Depop::new(1, 4);
+        let mut depop = Depop::new(1, 4, 4);
         depop.transform(chunk_with(1, vec![0.8; 8]));
         let out = depop.transform(chunk_with(1, vec![0.0; 6]));
         assert_close(&out.audio_data, &[0.8, 0.6, 0.4, 0.2, 0.0, 0.0]);
@@ -1102,16 +1115,19 @@ mod tests {
 
     #[test]
     fn depop_restart_mid_ramp_holds_current_output() {
-        let mut depop = Depop::new(1, 4);
-        depop.transform(chunk_with(1, vec![0.8; 8]));
+        let mut depop = Depop::new(1, 4, 4);
+        depop.transform(chunk_with(1, vec![0.1; 8]));
         let out = depop.transform(chunk_with(1, vec![0.0, 0.0, 0.8, 0.8, 0.8, 0.8, 0.8]));
-        assert_close(&out.audio_data, &[0.8, 0.6, 0.6, 0.65, 0.7, 0.75, 0.8]);
+        assert_close(
+            &out.audio_data,
+            &[0.1, 0.075, 0.075, 0.25625, 0.4375, 0.61875, 0.8],
+        );
         assert_eq!(depop.pops, 3);
     }
 
     #[test]
     fn depop_channels_are_independent() {
-        let mut depop = Depop::new(2, 2);
+        let mut depop = Depop::new(2, 2, 4);
         let out = depop.transform(chunk(vec![0.0, 0.0, 0.8, 0.0, 0.8, 0.0, 0.8, 0.0]));
         assert_close(&out.audio_data, &[0.0, 0.0, 0.0, 0.0, 0.4, 0.0, 0.8, 0.0]);
         assert_eq!(depop.pops, 1);
@@ -1120,9 +1136,9 @@ mod tests {
     #[test]
     fn depop_per_sample_matches_chunk_transform() {
         let data = vec![0.0, 0.0, 0.8, 0.0, 0.8, 0.0, 0.8, 0.0];
-        let mut by_sample = Depop::new(2, 2);
+        let mut by_sample = Depop::new(2, 2, 4);
         let streamed: Vec<f32> = data.iter().map(|s| by_sample.next(*s)).collect();
-        let mut by_chunk = Depop::new(2, 2);
+        let mut by_chunk = Depop::new(2, 2, 4);
         let out = by_chunk.transform(chunk(data));
         assert_eq!(streamed, out.audio_data);
         assert_eq!(by_sample.pops, by_chunk.pops);
@@ -1130,7 +1146,7 @@ mod tests {
 
     #[test]
     fn depop_steps_below_floor_pass_untouched() {
-        let mut depop = Depop::new(1, 4);
+        let mut depop = Depop::new(1, 4, 4);
         let data = vec![0.0, 0.005, 0.005, 0.0, -0.005, 0.0];
         let out = depop.transform(chunk_with(1, data.clone()));
         assert_eq!(out.audio_data, data);
@@ -1144,7 +1160,7 @@ mod tests {
             .enumerate()
             .map(|(i, s)| s * (i as f32 / 240.0).min(1.0))
             .collect();
-        let mut depop = Depop::new(1, 240);
+        let mut depop = Depop::new(1, 240, 240);
         depop.transform(chunk_with(1, data[..960].to_vec()));
         depop.transform(chunk_with(1, data[960..1920].to_vec()));
         let pops = depop.pops;
@@ -1158,12 +1174,12 @@ mod tests {
     fn depop_output_never_jumps_and_converges() {
         let mut data = Vec::new();
         for level in [0.0, 0.9, -0.7, 0.0, 0.5] {
-            data.extend(std::iter::repeat_n(level, 480));
+            data.extend(std::iter::repeat_n(level, 960));
         }
-        let mut depop = Depop::new(1, 240);
+        let mut depop = Depop::new(1, 240, 240);
         let out = depop.transform(chunk_with(1, data.clone()));
         assert!(max_step(&out.audio_data, 1) < 0.01);
-        assert_close(&out.audio_data[2160..], &data[2160..]);
+        assert_close(&out.audio_data[4080..], &data[4080..]);
         assert_eq!(depop.pops, 4);
     }
 
@@ -1174,14 +1190,14 @@ mod tests {
             data.extend([0.9; 5]);
             data.extend([-0.9; 3]);
         }
-        let mut depop = Depop::new(1, 8);
+        let mut depop = Depop::new(1, 8, 8);
         let out = depop.transform(chunk_with(1, data));
         assert!(out.audio_data.iter().all(|s| s.abs() <= 0.9));
     }
 
     #[test]
     fn depop_non_finite_passes_through_and_recovers() {
-        let mut depop = Depop::new(1, 4);
+        let mut depop = Depop::new(1, 4, 4);
         let out = depop.transform(chunk_with(
             1,
             vec![0.0, f32::NAN, 0.0, 0.8, 0.8, 0.8, 0.8, 0.8],
@@ -1193,8 +1209,20 @@ mod tests {
 
     #[test]
     fn depop_zero_channel_chunk_passes_through() {
-        let mut depop = Depop::new(1, 4);
+        let mut depop = Depop::new(1, 4, 4);
         let out = depop.transform(chunk_with(0, Vec::new()));
         assert!(out.audio_data.is_empty());
+    }
+
+    #[test]
+    fn depop_pulse_train_triggers_only_on_first_pulse() {
+        let mut data = vec![0.0; 480];
+        for pulse in 0..20 {
+            data[pulse * 24] = 0.3;
+            data[pulse * 24 + 1] = -0.2;
+        }
+        let mut depop = Depop::new(1, 4, 48);
+        depop.transform(chunk_with(1, data));
+        assert_eq!(depop.pops, 1);
     }
 }

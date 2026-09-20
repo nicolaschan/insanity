@@ -295,7 +295,7 @@ mod tests {
         for _ in 0..16 {
             producer.push(0.8).expect("ring has room");
         }
-        let mut depop = Depop::new(2, 4);
+        let mut depop = Depop::new(2, 4, 4);
         let stats = OutputStats::new();
         let mut data = [0f32; 16];
         fill_output(&mut data, &mut consumer, &mut depop, &stats);
@@ -324,7 +324,7 @@ mod tests {
         for _ in 0..4 {
             producer.push(0.5).expect("ring has room");
         }
-        let mut depop = Depop::new(1, 1);
+        let mut depop = Depop::new(1, 1, 1);
         let stats = OutputStats::new();
         let mut data = [0i16; 4];
         fill_output(&mut data, &mut consumer, &mut depop, &stats);
