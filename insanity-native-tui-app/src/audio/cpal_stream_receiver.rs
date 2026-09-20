@@ -110,7 +110,7 @@ where
     T: SizedSample,
     f32: FromSample<T>,
 {
-    let err_fn = |err| eprintln!("input stream error: {err}");
+    let err_fn = |err: cpal::Error| super::stream_errors::note_input_error(err.kind());
     device
         .build_input_stream(
             config,
