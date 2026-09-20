@@ -69,10 +69,21 @@ async fn hub_mute_suppresses_silence() {
         };
         let suppressed =
             tokio::time::timeout(std::time::Duration::from_millis(500), rx.recv()).await;
+        #[cfg(feature = "encode-silence")]
         assert!(
             suppressed.is_err(),
             "muted hub should suppress silent chunks"
         );
+        #[cfg(not(feature = "encode-silence"))]
+        {
+            let frame = suppressed
+                .expect("unmuted hub should send within 2s")
+                .expect("hub open");
+            assert!(
+                peak(&mut decoder, frame) < 0.1,
+                "muted hub should send near-silence without encode-silence"
+            );
+        }
         hub.set_muted(false);
         let mut loudest = 0.0f32;
         for _ in 0..10 {
