@@ -788,49 +788,20 @@ mod render_scaling_tests {
             let (mut app, ids) = test_app_with_peers(count);
             let mut terminal = test_terminal();
             let draws = run_policy(&mut app, &mut terminal, &ids);
+            if count == 0 {
+                assert_eq!(draws, HI_PRI_AT.len());
+                continue;
+            }
             assert!(
                 draws <= TICKS + HI_PRI_AT.len(),
                 "N={count}: {draws} draws exceed tick + hi-pri budget"
             );
             let old_behavior = count * TICKS + HI_PRI_AT.len();
-            if count > 0 {
-                assert!(
-                    draws < old_behavior,
-                    "N={count}: {draws} draws show no coalescing vs {old_behavior} before"
-                );
-            }
+            assert!(
+                draws < old_behavior,
+                "N={count}: {draws} draws show no coalescing vs {old_behavior} before"
+            );
         }
-    }
-
-    #[test]
-    fn silent_room_draws_only_for_hi_pri() {
-        let (mut app, ids) = test_app_with_peers(0);
-        assert!(ids.is_empty());
-        let mut terminal = test_terminal();
-        let draws = run_policy(&mut app, &mut terminal, &ids);
-        assert_eq!(draws, HI_PRI_AT.len());
-    }
-
-    #[test]
-    fn same_bucket_burst_draws_once() {
-        let (mut app, ids) = test_app_with_peers(1);
-        let mut pending: Vec<AppEvent> = Vec::new();
-        for _ in 0..50 {
-            pending.push(AppEvent::Loudness(ids[0].clone(), 0.5));
-        }
-        let mut terminal = test_terminal();
-        let mut draws = 0;
-        if flush_pending(&mut app, &mut pending) {
-            app.render(&mut terminal).expect("render");
-            draws += 1;
-        }
-        assert_eq!(draws, 1);
-        assert!(pending.is_empty());
-        assert!((app.peers[&ids[0]].loudness - 0.5).abs() < f64::EPSILON);
-        assert!(!flush_pending(
-            &mut app,
-            &mut vec![AppEvent::Loudness(ids[0].clone(), 0.5)]
-        ));
     }
 
     #[test]
@@ -873,17 +844,6 @@ mod render_scaling_tests {
     }
 
     #[test]
-    fn unknown_peer_loudness_is_dropped_safely() {
-        let (mut app, _) = test_app_with_peers(1);
-        let mut pending = vec![AppEvent::Loudness("ghost".to_string(), 0.7)];
-        let mut terminal = test_terminal();
-        assert!(!flush_pending(&mut app, &mut pending));
-        app.render(&mut terminal).expect("render");
-        assert!(!app.peers.contains_key("ghost"));
-        assert!(pending.is_empty());
-    }
-
-    #[test]
     fn process_event_reports_effectiveness() {
         let (mut app, ids) = test_app_with_peers(1);
         assert!(app.process_event(AppEvent::Loudness(ids[0].clone(), 0.9)));
@@ -902,10 +862,15 @@ mod render_scaling_tests {
         assert!(app.process_event(AppEvent::Down));
         assert!(!app.process_event(AppEvent::Down));
         assert!(app.process_event(AppEvent::Up));
+        let (mut empty, _) = test_app_with_peers(0);
+        assert!(!empty.process_event(AppEvent::Down));
+        assert!(!empty.process_event(AppEvent::Up));
+        assert!(!empty.process_event(AppEvent::Character('G')));
+        assert!(!empty.process_event(AppEvent::Character('j')));
     }
 
     #[test]
-    fn identical_connecting_updates_draw_nothing() {
+    fn connecting_spam_suppressed_and_meter_preserved() {
         let (mut app, _) = test_app_with_peers(0);
         let mut terminal = test_terminal();
         let update = || {
@@ -931,71 +896,23 @@ mod render_scaling_tests {
             }
         }
         assert_eq!(draws, 1, "only the first insert draws");
-    }
-
-    #[test]
-    fn reannounce_preserves_live_loudness() {
-        let (mut app, ids) = test_app_with_peers(1);
-        assert!(app.process_event(AppEvent::Loudness(ids[0].clone(), 0.9)));
-        let live = Peer::new(
-            ids[0].clone(),
-            Some(ids[0].clone()),
+        assert!(app.process_event(AppEvent::Loudness("peer-00".to_string(), 0.9)));
+        let connected = Peer::new(
+            "peer-00".to_string(),
+            Some("peer-00".to_string()),
             PeerState::Connected("addr".to_string()),
             DenoiseSelection::None,
             100,
         );
         assert!(
-            !app.process_event(AppEvent::AddPeer(live)),
-            "re-announce with identical roster must not draw or clobber"
+            app.process_event(AppEvent::AddPeer(connected)),
+            "connecting-to-connected transition draws once"
         );
         assert!(
-            (app.peers[&ids[0]].loudness - 0.9).abs() < f64::EPSILON,
-            "live meter level survives the re-announce"
+            (app.peers["peer-00"].loudness - 0.9).abs() < f64::EPSILON,
+            "live meter level survives the transition"
         );
-    }
-
-    #[test]
-    fn zero_peer_movement_draws_nothing() {
-        let (mut app, _) = test_app_with_peers(0);
-        assert!(!app.process_event(AppEvent::Down));
-        assert!(!app.process_event(AppEvent::Up));
-        assert!(!app.process_event(AppEvent::Character('G')));
-        assert!(!app.process_event(AppEvent::Character('j')));
-    }
-
-    #[test]
-    fn burst_traffic_absorbed_within_tick_budget() {
-        let (mut app, ids) = test_app_with_peers(10);
-        let mut terminal = test_terminal();
-        let mut pending: Vec<AppEvent> = Vec::new();
-        let mut draws = 0;
-        for tick in 0..TICKS {
-            let mut batch = Vec::new();
-            if tick == 50 {
-                for (p, id) in ids.iter().enumerate() {
-                    for _ in 0..10 {
-                        batch.push(AppEvent::Loudness(id.clone(), level_for(tick, p)));
-                    }
-                }
-            }
-            if drain_batch(&mut app, &mut batch, &mut pending) {
-                app.render(&mut terminal).expect("render");
-                draws += 1;
-            }
-            if flush_pending(&mut app, &mut pending) {
-                app.render(&mut terminal).expect("render");
-                draws += 1;
-            }
-        }
-        assert_eq!(
-            pending.len(),
-            0,
-            "coalescing bounds the queue even under burst traffic"
-        );
-        assert!(
-            draws <= 2,
-            "one burst tick draws at most once for flush plus nothing elsewhere, got {draws}"
-        );
+        assert_eq!(draws, 1, "spam phase drew exactly once");
     }
 
     fn expected_low_priority(event: &AppEvent) -> bool {

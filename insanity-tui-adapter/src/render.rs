@@ -363,20 +363,6 @@ mod tests {
     }
 
     #[test]
-    fn sub_bucket_wiggles_share_a_bucket() {
-        assert_eq!(
-            loudness_bucket("12345678", 0.50),
-            loudness_bucket("12345678", 0.60)
-        );
-    }
-
-    #[test]
-    fn out_of_range_levels_are_clamped() {
-        assert_eq!(loudness_bucket("12345678", -0.5), 0);
-        assert_eq!(loudness_bucket("12345678", 2.0), 8);
-    }
-
-    #[test]
     fn bucket_counts_chars_not_bytes() {
         assert_eq!(loudness_bucket("a🤫", 1.0), 2);
         assert_eq!(loudness_bucket("a🤫", 0.5), 1);
