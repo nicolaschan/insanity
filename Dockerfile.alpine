@@ -1,7 +1,4 @@
 # Base image for building ALSA and Opus
-# NOTE: musl/static builds are ALSA-only (`--no-default-features`):
-# pipewire cannot link statically (pkgsStatic.pipewire pulls
-# libpulseaudio, which declares static as a bad platform).
 FROM rust:alpine as build-base
 RUN apk add --no-cache build-base gcc musl-dev openssl-dev perl cmake g++ pkgconf linux-headers wget tar
 
@@ -34,5 +31,5 @@ COPY --from=opus-build /usr/local /usr/local
 RUN apk add --no-cache alsa-lib-dev opus-dev
 WORKDIR /usr/src/insanity
 COPY . .
-RUN cargo install --no-default-features --path insanity-native-tui-app
+RUN cargo install --path insanity-native-tui-app
 ENTRYPOINT ["insanity"]
