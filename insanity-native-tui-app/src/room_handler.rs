@@ -208,8 +208,8 @@ pub async fn start_room_connection(
     tokio::spawn(async move {
         let verifying_key = signing_key.verifying_key();
         tokio::select! {
-            e = retrieve_peers(action, &cipher, &verifying_key, &room_fingerprint, conn_info_tx) => {
-                log::error!("Retrieve peers loop failed: {:?}", e);
+            _ = retrieve_peers(action, &cipher, &verifying_key, &room_fingerprint, conn_info_tx) => {
+                log::error!("Retrieve peers loop exited unexpectedly.");
             },
             _ = cancellation_token.cancelled() => {
                 log::debug!("Baybridge-related tasks shutdown.");
@@ -225,14 +225,20 @@ async fn retrieve_peers(
     verifying_key: &VerifyingKey,
     room_fingerprint: &str,
     conn_info_tx: mpsc::UnboundedSender<AugmentedInfo>,
-) -> anyhow::Result<()> {
+) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(1000));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let me = action.whoami().await;
     loop {
         interval.tick().await;
         log::debug!("Interval tick on retrieve peers.");
-        let nsr = action.namespace(room_fingerprint).await?;
-        let mapping = nsr.mapping;
+        let mapping = match action.namespace(room_fingerprint).await {
+            Ok(nsr) => nsr.mapping,
+            Err(e) => {
+                log::warn!("Failed to retrieve peers, will retry: {e}");
+                continue;
+            }
+        };
         for (person, encrypted_info) in mapping {
             if me == person {
                 continue;
@@ -250,5 +256,39 @@ async fn retrieve_peers(
                 log::debug!("Failed to send received connection info: {:?}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use baybridge::configuration::Configuration;
+    use baybridge::connectors::{connection::Connection, http::HttpConnection};
+    use std::time::Duration;
+
+    async fn unreachable_actions(dir: &std::path::Path) -> Actions {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let url = url::Url::parse(&format!("http://127.0.0.1:{port}")).unwrap();
+        let connection = Connection::Http(HttpConnection::new(url));
+        let config = Configuration::new(dir.to_path_buf(), vec![connection]);
+        config.init().await.unwrap();
+        Actions::new(config)
+    }
+
+    #[tokio::test]
+    async fn retrieve_peers_survives_failed_polls() {
+        let dir = tempfile::tempdir().unwrap();
+        let action = unreachable_actions(dir.path()).await;
+        let cipher = ChaCha20Poly1305::new(&[0u8; 32].into());
+        let verifying_key = SigningKey::from_bytes(&[1u8; 32]).verifying_key();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let result = tokio::time::timeout(
+            Duration::from_millis(2500),
+            retrieve_peers(action, &cipher, &verifying_key, "room", tx),
+        )
+        .await;
+        assert!(result.is_err(), "loop exited: {result:?}");
     }
 }
