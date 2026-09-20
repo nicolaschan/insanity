@@ -8,8 +8,8 @@ use insanity_core::audio::mixer::SlotId;
 use insanity_native_tui_app::audio::mixer::format_audio_interval;
 use opus::{Application, Channels, Decoder, Encoder};
 use unit_mixer::{
-    add_peer, assert_all_finite, feed, fill, mixer_with_capacity, plc_hold, push_chunk, underruns,
-    unit_mixer,
+    add_peer, assert_all_finite, feed, fill, mixer_with_capacity, plc_hold, push_chunk,
+    ramp_samples, underruns, unit_mixer,
 };
 
 struct Cell {
@@ -208,6 +208,7 @@ fn starved_predicate_matches_incident_and_healthy_logs() {
             underrun: 291264,
             plc_hold: 291264,
             clip_hits: 495,
+            pops: 0,
             fills: 234,
             stale_dropped: 0,
         },
@@ -237,7 +238,7 @@ fn recovery_after_jump_costs_capacity_minus_one_fills() {
         let mut recovery_fills = 0usize;
         loop {
             let out = fill(&mut mixer, 960);
-            if (out[0] - 0.9).abs() < 1e-5 {
+            if (out[ramp_samples()] - 0.9).abs() < 1e-5 {
                 break;
             }
             recovery_fills += 1;
@@ -278,7 +279,10 @@ fn summed_peers_count_clips_and_stay_bounded() {
         feed(&mut mixer, *id, 0, 3, 0.6);
     }
     let out = fill(&mut mixer, 960);
-    assert!((out[0] - 1.0).abs() < 1e-5, "0.6+0.6 clamps to 1.0");
+    assert!(
+        (out[ramp_samples()] - 1.0).abs() < 1e-5,
+        "0.6+0.6 clamps to 1.0"
+    );
     assert!(
         mixer.metrics_snapshot().clip_hits > 0,
         "clamping must be counted"
@@ -297,7 +301,7 @@ fn hot_opus_single_peer_clips_only_codec_overshoot() {
     for _ in 0..6 {
         let frame: Vec<f32> = (0..480)
             .flat_map(|i| {
-                let s = (i as f32 * 440.0 / 48000.0 * 2.0 * std::f32::consts::PI).sin() * 0.99;
+                let s = (i as f32 * 500.0 / 48000.0 * 2.0 * std::f32::consts::PI).sin() * 0.99;
                 vec![s, s]
             })
             .collect();
@@ -317,15 +321,17 @@ fn hot_opus_single_peer_clips_only_codec_overshoot() {
             AudioChunk::new(seq, AudioFormat::new(2, 48000), hot.clone()),
         );
     }
-    let mut total = 0usize;
-    for _ in 0..10 {
+    let mut total = fill(&mut mixer, 960).len();
+    let startup = mixer.metrics_snapshot();
+    assert_eq!(startup.pops, 2, "stream start ramps once per channel");
+    for _ in 1..10 {
         total += fill(&mut mixer, 960).len();
     }
     assert_eq!(total, 9600);
-    let clips = mixer.metrics_snapshot().clip_hits;
+    let clips = mixer.metrics_snapshot().clip_hits - startup.clip_hits;
     assert_eq!(
         clips,
-        overshoot * 10,
+        overshoot * 9,
         "unity-gain mixer must clip exactly the samples opus pushed past full scale"
     );
 }

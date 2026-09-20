@@ -147,7 +147,7 @@ pub fn format_audio_interval(
     ring_overruns: usize,
 ) -> String {
     format!(
-        "audio gaps={} late={} overflow={} underruns={} plc={} clips={} fills={} stale={} fill_avg_ns={} peers={} dropped={} ring_underruns={} ring_overruns={}",
+        "audio gaps={} late={} overflow={} underruns={} plc={} clips={} pops={} fills={} stale={} fill_avg_ns={} peers={} dropped={} ring_underruns={} ring_overruns={}",
         current.gap_detected.saturating_sub(prev.gap_detected),
         current.late_dropped.saturating_sub(prev.late_dropped),
         current
@@ -156,6 +156,7 @@ pub fn format_audio_interval(
         current.underrun.saturating_sub(prev.underrun),
         current.plc_hold.saturating_sub(prev.plc_hold),
         current.clip_hits.saturating_sub(prev.clip_hits),
+        current.pops.saturating_sub(prev.pops),
         current.fills.saturating_sub(prev.fills),
         current.stale_dropped.saturating_sub(prev.stale_dropped),
         fill_avg_nanos,

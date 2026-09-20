@@ -23,7 +23,7 @@ use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
 use insanity_native_tui_app::audio::mixer::MAX_VOLUME;
-use unit_mixer::{add_unit_peer, push_chunk, push_value, render, unit_mixer};
+use unit_mixer::{add_unit_peer, push_chunk, push_value, ramp_samples, render, unit_mixer};
 
 #[test]
 fn jitter_target_pins_current_behavior() {
@@ -101,9 +101,9 @@ fn seq_gap_is_time() {
     );
     let out3 = render(&mut mixer, 960);
     assert!(
-        (out3[0] - 0.9).abs() < 1e-5,
+        (out3[ramp_samples()] - 0.9).abs() < 1e-5,
         "seq 2 must play in its slot after 1 concealment, got {}",
-        out3[0]
+        out3[ramp_samples()]
     );
 }
 
@@ -115,7 +115,7 @@ fn plc_fades_not_holds() {
     push_value(&mut mixer, id, 0, 0.8);
     // Drain the real chunk.
     let out = render(&mut mixer, 960);
-    assert!((out[0] - 0.8).abs() < 1e-5);
+    assert!((out[ramp_samples()] - 0.8).abs() < 1e-5);
     // Underrun: must fade to silence, not hold 0.8 forever.
     let out2 = render(&mut mixer, 960);
     assert!(
@@ -181,7 +181,7 @@ fn mono_stereo_matrix() {
         AudioChunk::new(0, AudioFormat::new(1, 48000), vec![0.5; 480]),
     );
     let out = render(&mut mixer, 960);
-    for (i, s) in out.iter().enumerate() {
+    for (i, s) in out.iter().enumerate().skip(ramp_samples()) {
         assert!(
             (*s - 0.5).abs() < 1e-5,
             "sample {i} should be duplicated mono 0.5, got {s}"
@@ -212,9 +212,9 @@ fn reconnect_resets_jitter() {
     push_value(&mut mixer, id, 0, 0.7);
     let out = render(&mut mixer, 960);
     assert!(
-        (out[0] - 0.7).abs() < 1e-5,
+        (out[ramp_samples()] - 0.7).abs() < 1e-5,
         "reconnected stream must play, got {}",
-        out[0]
+        out[ramp_samples()]
     );
 }
 
@@ -231,7 +231,11 @@ fn mixer_cleanup_readd() {
     let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     push_value(&mut mixer, id, 0, 0.4);
     let out = render(&mut mixer, 960);
-    assert!(out.iter().all(|s| (*s - 0.4).abs() < 1e-5));
+    assert!(
+        out[ramp_samples()..]
+            .iter()
+            .all(|s| (*s - 0.4).abs() < 1e-5)
+    );
 }
 
 #[test]

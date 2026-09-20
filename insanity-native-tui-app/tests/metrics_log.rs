@@ -21,6 +21,7 @@ fn snapshot(
         underrun,
         plc_hold,
         clip_hits,
+        pops: 0,
         fills,
         stale_dropped: 0,
     }

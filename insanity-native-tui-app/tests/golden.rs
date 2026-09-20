@@ -37,19 +37,22 @@ fn golden_two_peer_mix_perceptual() {
     let id1 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     let id2 = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     // Interleaved feed/fill: valid for any jitter window >= 1.
+    let tone1 = sine(440.0, 48000, 960 * 10);
+    let tone2 = sine(880.0, 48000, 960 * 10);
     let mut regen = Vec::with_capacity(960 * 10);
     for seq in 0..10 {
-        let chunk: Vec<f32> = sine(440.0, 48000, 960);
+        let range = seq * 960..(seq + 1) * 960;
+        let chunk: Vec<f32> = tone1[range.clone()].to_vec();
         push_chunk(
             &mut mixer,
             id1,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), chunk.clone()),
+            AudioChunk::new(seq as u128, AudioFormat::new(2, 48000), chunk),
         );
-        let chunk2: Vec<f32> = sine(880.0, 48000, 960);
+        let chunk2: Vec<f32> = tone2[range].to_vec();
         push_chunk(
             &mut mixer,
             id2,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), chunk2),
+            AudioChunk::new(seq as u128, AudioFormat::new(2, 48000), chunk2),
         );
         regen.extend_from_slice(&render(&mut mixer, 960));
     }

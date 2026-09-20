@@ -5,7 +5,7 @@ use insanity_core::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
-use insanity_core::audio::transform::{ChunkTransform, Gain, GainControl};
+use insanity_core::audio::transform::{ChunkTransform, Depop, Gain, GainControl};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
     MAX_VOLUME, PeerChain, PeerControls, chain_from_controls, output_resampler,
@@ -155,4 +155,9 @@ pub fn plc_hold(mixer: &UnitMixer) -> usize {
 
 pub fn assert_all_finite(samples: &[f32]) {
     assert!(samples.iter().all(|s| s.is_finite()));
+}
+
+pub fn ramp_samples() -> usize {
+    let audio_config = AudioPipelineConfig::default();
+    Depop::ramp_frames(audio_config.sample_rate()) * audio_config.channels() as usize
 }
