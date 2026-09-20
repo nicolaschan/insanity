@@ -9,9 +9,10 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{
-    ChunkTransform, Denoise, DenoiseControl, Gain, GainControl, Hysteresis, Link, MetricsReader,
-    MetricsState, PassthroughGate, RmsDetector,
+    ChunkTransform, Denoise, DenoiseControl, Gain, GainControl, Link, MetricsReader, MetricsState,
 };
+#[cfg(feature = "denoise-passthrough")]
+use insanity_core::audio::transform::{Hysteresis, PassthroughGate, RmsDetector};
 use insanity_core::user_input_event::DenoiseSelection;
 use rtrb::Producer;
 use rubato_audio_source::StreamResampler;
@@ -22,13 +23,18 @@ use super::denoise::NnnoiselessDenoiser;
 use super::output::{OutputStats, RING_CAPACITY_BLOCKS};
 
 pub const MAX_VOLUME: usize = 500;
+#[cfg(any(feature = "encode-silence", feature = "denoise-passthrough"))]
 pub const QUIET_RMS_THRESHOLD: f32 = 0.0075;
+#[cfg(any(feature = "encode-silence", feature = "denoise-passthrough"))]
 pub const QUIET_HANGOVER_CHUNKS: usize = 30;
 
+#[cfg(feature = "denoise-passthrough")]
 pub type PeerChain = Link<
     PassthroughGate<Denoise<NnnoiselessDenoiser>, Hysteresis<RmsDetector>>,
     Link<Gain, MetricsReader>,
 >;
+#[cfg(not(feature = "denoise-passthrough"))]
+pub type PeerChain = Link<Denoise<NnnoiselessDenoiser>, Link<Gain, MetricsReader>>;
 pub(crate) type OpusRebuild = fn(&AudioFormat) -> Option<OpusDecoder>;
 pub type AppMixer = Mixer<OpusDecoder, PeerChain, StreamResampler, Gain, OpusRebuild>;
 
@@ -52,12 +58,20 @@ impl PeerControls {
     }
 }
 
+#[cfg(feature = "denoise-passthrough")]
 pub fn chain_from_controls(controls: &PeerControls) -> PeerChain {
     PassthroughGate::new(
         Denoise::new(controls.denoise.clone()),
         Hysteresis::new(RmsDetector::new(QUIET_RMS_THRESHOLD), QUIET_HANGOVER_CHUNKS),
     )
     .chain(Gain::new(controls.gain.clone()).chain(MetricsReader::new(controls.loudness.clone())))
+}
+
+#[cfg(not(feature = "denoise-passthrough"))]
+pub fn chain_from_controls(controls: &PeerControls) -> PeerChain {
+    Denoise::new(controls.denoise.clone()).chain(
+        Gain::new(controls.gain.clone()).chain(MetricsReader::new(controls.loudness.clone())),
+    )
 }
 
 pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
