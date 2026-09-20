@@ -4,7 +4,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use insanity_core::user_input_event::{DenoiseSelection, UserInputEvent};
-use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
+use ratatui::{DefaultTerminal, Terminal, backend::Backend, backend::CrosstermBackend};
 use std::collections::BTreeMap;
 use std::{error::Error, io};
 use tokio::{
@@ -40,6 +40,9 @@ pub const MUTE_KEY: char = 'm';
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
 
+const EVENT_BATCH_BOUND: usize = 64;
+const LOUDNESS_RENDER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerState {
     Connected(String),
@@ -48,7 +51,7 @@ pub enum PeerState {
     Connecting(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Peer {
     id: String,
     display_name: Option<String>,
@@ -125,6 +128,12 @@ pub enum AppEvent {
     SetOutputDeviceName(String),
 }
 
+impl AppEvent {
+    fn is_low_priority(&self) -> bool {
+        matches!(self, AppEvent::Loudness(..) | AppEvent::AddPeer(_))
+    }
+}
+
 pub struct App {
     pub user_action_sender: UnboundedSender<UserInputEvent>,
     pub tabs: [&'static str; NUM_TABS],
@@ -170,163 +179,228 @@ impl App {
         }
     }
 
-    fn process_event(&mut self, event: AppEvent) {
+    /// Applies an event
+    /// Returns whether anything visibly changed.
+    fn process_event(&mut self, event: AppEvent) -> bool {
         match event {
             AppEvent::Kill => {
                 self.killed = true;
+                true
             }
-            AppEvent::Nothing => {}
+            AppEvent::Nothing => true,
             AppEvent::NextTab => {
                 self.move_tabs(1);
+                true
             }
             AppEvent::PreviousTab => {
                 self.move_tabs(-1);
+                true
             }
             AppEvent::AddPeer(peer) => {
-                self.peers.insert(peer.id.clone(), peer);
+                let changed = self.peers.get(&peer.id) != Some(&peer);
+                if changed {
+                    self.peers.insert(peer.id.clone(), peer);
+                }
+                changed
             }
-            AppEvent::RemovePeer(id) => {
-                self.peers.remove(&id);
-            }
+            AppEvent::RemovePeer(id) => self.peers.remove(&id).is_some(),
             AppEvent::Character(c) => match self.tab_index {
                 TAB_IDX_PEERS => match c {
                     TOGGLE_PEER_KEY => {
                         self.toggle_peer();
+                        true
                     }
                     TOGGLE_PEER_DENOISE_KEY => {
                         self.toggle_denoise();
+                        true
                     }
                     INCREMENT_PEER_VOLUME_KEY => {
                         self.adjust_volume(1);
+                        true
                     }
                     DECREMENT_PEER_VOLUME_KEY => {
                         self.adjust_volume(-1);
+                        true
                     }
                     MOVE_DOWN_PEER_LIST_KEY => {
+                        let old = self.peer_index;
                         self.move_peer(1);
+                        old != self.peer_index
                     }
                     MOVE_UP_PEER_LIST_KEY => {
+                        let old = self.peer_index;
                         self.move_peer(-1);
+                        old != self.peer_index
                     }
                     MOVE_TOP_PEER_LIST_KEY => {
                         self.peer_index = 0;
+                        true
                     }
                     MOVE_BOTTOM_PEER_LIST_KEY => {
                         self.peer_index = self.peers.len() - 1;
+                        true
                     }
                     MUTE_KEY => {
                         self.toggle_mute_self();
+                        true
                     }
-                    _ => {}
+                    _ => false,
                 },
                 TAB_IDX_CHAT => {
                     self.editor.append(c);
+                    true
                 }
-                _ => {}
+                _ => false,
             },
             AppEvent::Enter => {
-                if self.tab_index == TAB_IDX_CHAT {
+                let effective = self.tab_index == TAB_IDX_CHAT && !self.editor.is_empty();
+                if effective {
                     self.send_message();
                 }
+                effective
             }
             AppEvent::NewMessage(sender_name, message) => {
                 self.add_message((sender_name, message));
                 if self.tab_index != TAB_IDX_CHAT || self.chat_offset > 0 {
                     self.unread_messages = true;
                 }
+                true
             }
             AppEvent::Backspace => {
                 self.editor.backspace();
+                true
             }
             AppEvent::Left => {
                 self.editor.left();
+                true
             }
             AppEvent::Right => {
                 self.editor.right();
+                true
             }
             AppEvent::CursorBeginning => {
                 self.editor.cursor_beginning();
+                true
             }
             AppEvent::CursorEnd => {
                 self.editor.cursor_end();
+                true
             }
             AppEvent::PreviousWord => {
                 self.editor.previous_word();
+                true
             }
             AppEvent::NextWord => {
                 self.editor.next_word();
+                true
             }
             AppEvent::DeleteWord => {
                 self.editor.delete_word();
+                true
             }
             AppEvent::SetOwnPublicKey(address) => {
                 self.own_public_key = Some(address);
+                true
             }
             AppEvent::SetOwnDisplayName(display_name) => {
                 self.own_display_name = Some(display_name);
+                true
             }
             AppEvent::SetServer(server) => {
                 self.servers = server;
+                true
             }
             AppEvent::SetRoom(room) => {
                 self.room = Some(room);
+                true
             }
             AppEvent::SetRoomFingerprint(room_fingerprint) => {
                 self.room_fingerprint = Some(room_fingerprint);
+                true
             }
             AppEvent::Down => match self.tab_index {
                 TAB_IDX_PEERS => {
+                    let old = self.peer_index;
                     self.peer_index = std::cmp::min(
                         self.peer_index.checked_add(1).unwrap_or(0),
                         self.peers.len() - 1,
                     );
+                    old != self.peer_index
                 }
                 TAB_IDX_CHAT => {
+                    let old = self.chat_offset;
                     self.chat_offset = self.chat_offset.saturating_sub(1);
                     if self.chat_offset == 0 {
                         self.unread_messages = false;
                     }
+                    old != self.chat_offset
                 }
-                _ => {}
+                _ => false,
             },
             AppEvent::Up => match self.tab_index {
                 TAB_IDX_PEERS => {
+                    let old = self.peer_index;
                     self.peer_index = self.peer_index.saturating_sub(1);
+                    old != self.peer_index
                 }
                 TAB_IDX_CHAT => {
+                    let old = self.chat_offset;
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
+                    old != self.chat_offset
                 }
-                _ => {}
+                _ => false,
             },
             AppEvent::TogglePeer => {
                 self.toggle_peer();
+                true
             }
             AppEvent::ToggleDenoise => {
                 self.toggle_denoise();
+                true
             }
             AppEvent::SetPeerDenoise(peer_id, denoised) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
+                    let changed = peer.denoised != denoised;
                     peer.denoised = denoised;
+                    changed
+                } else {
+                    false
                 }
             }
             AppEvent::SetPeerVolume(peer_id, volume) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
+                    let changed = peer.volume != volume;
                     peer.volume = volume;
+                    changed
+                } else {
+                    false
                 }
             }
             AppEvent::MuteSelf(is_muted) => {
+                let changed = self.mute_self != is_muted;
                 self.mute_self = is_muted;
-            }
-            AppEvent::Loudness(peer_id, loudness) => {
-                if let Some(peer) = self.peers.get_mut(&peer_id) {
-                    peer.loudness = loudness;
-                }
+                changed
             }
             AppEvent::SetInputDeviceName(input_device_name) => {
-                self.input_device_name = input_device_name
+                self.input_device_name = input_device_name;
+                true
             }
             AppEvent::SetOutputDeviceName(output_device_name) => {
-                self.output_device_name = output_device_name
+                self.output_device_name = output_device_name;
+                true
+            }
+            AppEvent::Loudness(peer_id, level) => {
+                if let Some(peer) = self.peers.get_mut(&peer_id) {
+                    let name = peer.display_name.as_ref().unwrap_or(&peer.id).clone();
+                    let changed = render::loudness_bucket(&name, peer.loudness)
+                        != render::loudness_bucket(&name, level);
+                    if changed {
+                        peer.loudness = level;
+                    }
+                    changed
+                } else {
+                    false
+                }
             }
         }
     }
@@ -412,7 +486,7 @@ impl App {
             .unwrap();
     }
 
-    pub fn render(&self, terminal: &mut DefaultTerminal) -> io::Result<bool> {
+    pub fn render<B: Backend>(&self, terminal: &mut Terminal<B>) -> io::Result<bool> {
         terminal.draw(|f| render::ui(f, self)).unwrap();
         Ok(self.killed)
     }
@@ -425,16 +499,59 @@ pub async fn get_sender(
     let (sender, mut receiver): (UnboundedSender<AppEvent>, UnboundedReceiver<AppEvent>) =
         unbounded_channel();
     let handle = tokio::spawn(async move {
-        while let Some(event) = receiver.recv().await {
-            app.process_event(event);
-            if let Ok(true) = app.render(&mut terminal) {
-                break;
+        let mut batch = Vec::with_capacity(EVENT_BATCH_BOUND);
+        let mut pending: Vec<AppEvent> = Vec::new();
+        let mut ticker = tokio::time::interval(LOUDNESS_RENDER_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await;
+        loop {
+            tokio::select! {
+                biased;
+                count = receiver.recv_many(&mut batch, EVENT_BATCH_BOUND) => {
+                    if count == 0 {
+                        break;
+                    }
+                    if drain_batch(&mut app, &mut batch, &mut pending)
+                        && let Ok(true) = app.render(&mut terminal)
+                    {
+                        break;
+                    }
+                }
+                _ = ticker.tick() => {
+                    if flush_pending(&mut app, &mut pending)
+                        && let Ok(true) = app.render(&mut terminal)
+                    {
+                        break;
+                    }
+                }
             }
         }
         terminal
     });
     sender.send(AppEvent::Nothing).unwrap();
     (sender, handle)
+}
+
+fn drain_batch(app: &mut App, batch: &mut Vec<AppEvent>, pending: &mut Vec<AppEvent>) -> bool {
+    let mut render = false;
+    for event in batch.drain(..) {
+        if event.is_low_priority() {
+            pending.push(event);
+        } else {
+            // Preserve arrival order: deferred events apply first
+            render |= flush_pending(app, pending);
+            render |= app.process_event(event);
+        }
+    }
+    render
+}
+
+fn flush_pending(app: &mut App, pending: &mut Vec<AppEvent>) -> bool {
+    let mut dirty = false;
+    for event in pending.drain(..) {
+        dirty |= app.process_event(event);
+    }
+    dirty
 }
 
 pub async fn handle_input(sender: UnboundedSender<AppEvent>) -> JoinHandle<()> {
@@ -556,5 +673,294 @@ fn add_in_bounds(value: usize, min: usize, max: usize, delta: isize) -> usize {
         max
     } else {
         new_value as usize
+    }
+}
+
+#[cfg(test)]
+mod render_scaling_tests {
+    use super::*;
+    use insanity_core::user_input_event::DenoiseSelection;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    const TICKS: usize = 100;
+    const HI_PRI_AT: [usize; 5] = [10, 30, 50, 70, 90];
+
+    fn test_terminal() -> Terminal<TestBackend> {
+        Terminal::new(TestBackend::new(80, 24)).expect("test terminal")
+    }
+
+    fn test_app_with_peers(count: usize) -> (App, Vec<String>) {
+        let (tx, _rx) = unbounded_channel();
+        let mut app = App::new(tx);
+        let mut ids = Vec::new();
+        for i in 0..count {
+            let id = format!("peer-{i:02}");
+            app.peers.insert(
+                id.clone(),
+                Peer::new(
+                    id.clone(),
+                    Some(format!("peer-{i:02}")),
+                    PeerState::Connected("addr".to_string()),
+                    DenoiseSelection::None,
+                    100,
+                ),
+            );
+            ids.push(id);
+        }
+        (app, ids)
+    }
+
+    fn level_for(tick: usize, peer: usize) -> f64 {
+        0.5 + 0.4 * ((tick as f64 / 10.0) + peer as f64).sin()
+    }
+
+    fn run_policy(
+        app: &mut App,
+        terminal: &mut Terminal<TestBackend>,
+        peer_ids: &[String],
+    ) -> usize {
+        let mut draws = 0;
+        let mut pending: Vec<AppEvent> = Vec::new();
+        let mut batch = Vec::new();
+        for tick in 0..TICKS {
+            batch.clear();
+            for (p, id) in peer_ids.iter().enumerate() {
+                batch.push(AppEvent::Loudness(id.clone(), level_for(tick, p)));
+            }
+            if HI_PRI_AT.contains(&tick) {
+                batch.push(AppEvent::Nothing);
+            }
+            if drain_batch(app, &mut batch, &mut pending) {
+                app.render(terminal).expect("render");
+                draws += 1;
+            }
+            if flush_pending(app, &mut pending) {
+                app.render(terminal).expect("render");
+                draws += 1;
+            }
+        }
+        draws
+    }
+
+    #[test]
+    fn draws_scale_with_ticks_not_peers() {
+        for count in [0, 2, 6, 10] {
+            let (mut app, ids) = test_app_with_peers(count);
+            let mut terminal = test_terminal();
+            let draws = run_policy(&mut app, &mut terminal, &ids);
+            assert!(
+                draws <= TICKS + HI_PRI_AT.len(),
+                "N={count}: {draws} draws exceed tick + hi-pri budget"
+            );
+            let old_behavior = count * TICKS + HI_PRI_AT.len();
+            if count > 0 {
+                assert!(
+                    draws < old_behavior,
+                    "N={count}: {draws} draws show no coalescing vs {old_behavior} before"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn silent_room_draws_only_for_hi_pri() {
+        let (mut app, ids) = test_app_with_peers(0);
+        assert!(ids.is_empty());
+        let mut terminal = test_terminal();
+        let draws = run_policy(&mut app, &mut terminal, &ids);
+        assert_eq!(draws, HI_PRI_AT.len());
+    }
+
+    #[test]
+    fn same_bucket_burst_draws_once() {
+        let (mut app, ids) = test_app_with_peers(1);
+        let mut pending: Vec<AppEvent> = Vec::new();
+        for _ in 0..50 {
+            pending.push(AppEvent::Loudness(ids[0].clone(), 0.5));
+        }
+        let mut terminal = test_terminal();
+        let mut draws = 0;
+        if flush_pending(&mut app, &mut pending) {
+            app.render(&mut terminal).expect("render");
+            draws += 1;
+        }
+        assert_eq!(draws, 1);
+        assert!(pending.is_empty());
+        assert!((app.peers[&ids[0]].loudness - 0.5).abs() < f64::EPSILON);
+        assert!(!flush_pending(
+            &mut app,
+            &mut vec![AppEvent::Loudness(ids[0].clone(), 0.5)]
+        ));
+    }
+
+    #[test]
+    fn hi_pri_applies_pending_before_processing() {
+        let (mut app, ids) = test_app_with_peers(2);
+        let mut pending: Vec<AppEvent> = Vec::new();
+        let mut batch = vec![
+            AppEvent::Loudness(ids[0].clone(), 0.9),
+            AppEvent::Loudness(ids[0].clone(), 0.1),
+            AppEvent::Nothing,
+        ];
+        assert!(drain_batch(&mut app, &mut batch, &mut pending));
+        assert!(
+            pending.is_empty(),
+            "sequential rule: pending applied inline before the hi-pri event"
+        );
+        assert!(
+            (app.peers[&ids[0]].loudness - 0.1).abs() < f64::EPSILON,
+            "latest queued level wins in arrival order"
+        );
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+    }
+
+    #[test]
+    fn unknown_peer_loudness_is_dropped_safely() {
+        let (mut app, _) = test_app_with_peers(1);
+        let mut pending = vec![AppEvent::Loudness("ghost".to_string(), 0.7)];
+        let mut terminal = test_terminal();
+        assert!(!flush_pending(&mut app, &mut pending));
+        app.render(&mut terminal).expect("render");
+        assert!(!app.peers.contains_key("ghost"));
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn process_event_reports_effectiveness() {
+        let (mut app, ids) = test_app_with_peers(1);
+        assert!(app.process_event(AppEvent::Loudness(ids[0].clone(), 0.9)));
+        assert!(!app.process_event(AppEvent::Loudness(ids[0].clone(), 0.9)));
+        assert!(!app.process_event(AppEvent::Loudness("ghost".to_string(), 0.9)));
+        assert!(app.process_event(AppEvent::Nothing));
+        assert!(!app.process_event(AppEvent::RemovePeer("ghost".to_string())));
+        assert!(app.process_event(AppEvent::RemovePeer(ids[0].clone())));
+        assert!(!app.process_event(AppEvent::SetPeerVolume(ids[0].clone(), 100)));
+        assert!(!app.process_event(AppEvent::MuteSelf(false)));
+        assert!(app.process_event(AppEvent::MuteSelf(true)));
+        assert!(!app.process_event(AppEvent::Enter));
+        assert!(!app.process_event(AppEvent::Character('x')));
+        assert!(!app.process_event(AppEvent::Up));
+        let (mut app, _) = test_app_with_peers(2);
+        assert!(app.process_event(AppEvent::Down));
+        assert!(!app.process_event(AppEvent::Down));
+        assert!(app.process_event(AppEvent::Up));
+    }
+
+    #[test]
+    fn identical_connecting_updates_draw_nothing() {
+        let (mut app, _) = test_app_with_peers(0);
+        let mut terminal = test_terminal();
+        let update = || {
+            AppEvent::AddPeer(Peer::new(
+                "peer-00".to_string(),
+                Some("peer-00".to_string()),
+                PeerState::Connecting("addr".to_string()),
+                DenoiseSelection::None,
+                100,
+            ))
+        };
+        let mut draws = 0;
+        let mut pending: Vec<AppEvent> = Vec::new();
+        for _ in 0..20 {
+            let mut batch = vec![update()];
+            if drain_batch(&mut app, &mut batch, &mut pending) {
+                app.render(&mut terminal).expect("render");
+                draws += 1;
+            }
+            if flush_pending(&mut app, &mut pending) {
+                app.render(&mut terminal).expect("render");
+                draws += 1;
+            }
+        }
+        assert_eq!(draws, 1, "only the first insert draws");
+    }
+
+    fn expected_low_priority(event: &AppEvent) -> bool {
+        match event {
+            AppEvent::Loudness(..) | AppEvent::AddPeer(_) => true,
+            AppEvent::Kill
+            | AppEvent::NextTab
+            | AppEvent::PreviousTab
+            | AppEvent::Nothing
+            | AppEvent::Character(_)
+            | AppEvent::Enter
+            | AppEvent::NewMessage(_, _)
+            | AppEvent::RemovePeer(_)
+            | AppEvent::Backspace
+            | AppEvent::Left
+            | AppEvent::Right
+            | AppEvent::CursorBeginning
+            | AppEvent::CursorEnd
+            | AppEvent::PreviousWord
+            | AppEvent::NextWord
+            | AppEvent::DeleteWord
+            | AppEvent::SetOwnPublicKey(_)
+            | AppEvent::SetOwnDisplayName(_)
+            | AppEvent::SetServer(_)
+            | AppEvent::SetRoom(_)
+            | AppEvent::SetRoomFingerprint(_)
+            | AppEvent::Down
+            | AppEvent::Up
+            | AppEvent::TogglePeer
+            | AppEvent::ToggleDenoise
+            | AppEvent::SetPeerDenoise(_, _)
+            | AppEvent::SetPeerVolume(_, _)
+            | AppEvent::MuteSelf(_)
+            | AppEvent::SetInputDeviceName(_)
+            | AppEvent::SetOutputDeviceName(_) => false,
+        }
+    }
+
+    #[test]
+    fn classifier_covers_every_variant() {
+        let peer = Peer::new(
+            "id".to_string(),
+            None,
+            PeerState::Disconnected,
+            DenoiseSelection::None,
+            100,
+        );
+        let events = vec![
+            AppEvent::Kill,
+            AppEvent::NextTab,
+            AppEvent::PreviousTab,
+            AppEvent::Nothing,
+            AppEvent::Character('x'),
+            AppEvent::Enter,
+            AppEvent::NewMessage("a".to_string(), "b".to_string()),
+            AppEvent::AddPeer(peer),
+            AppEvent::RemovePeer("id".to_string()),
+            AppEvent::Backspace,
+            AppEvent::Left,
+            AppEvent::Right,
+            AppEvent::CursorBeginning,
+            AppEvent::CursorEnd,
+            AppEvent::PreviousWord,
+            AppEvent::NextWord,
+            AppEvent::DeleteWord,
+            AppEvent::SetOwnPublicKey("k".to_string()),
+            AppEvent::SetOwnDisplayName("n".to_string()),
+            AppEvent::SetServer(vec![]),
+            AppEvent::SetRoom("r".to_string()),
+            AppEvent::SetRoomFingerprint("f".to_string()),
+            AppEvent::Down,
+            AppEvent::Up,
+            AppEvent::TogglePeer,
+            AppEvent::ToggleDenoise,
+            AppEvent::SetPeerDenoise("id".to_string(), DenoiseSelection::None),
+            AppEvent::SetPeerVolume("id".to_string(), 1),
+            AppEvent::MuteSelf(false),
+            AppEvent::Loudness("id".to_string(), 0.5),
+            AppEvent::SetInputDeviceName("i".to_string()),
+            AppEvent::SetOutputDeviceName("o".to_string()),
+        ];
+        for event in &events {
+            assert_eq!(
+                event.is_low_priority(),
+                expected_low_priority(event),
+                "classifier disagrees on {event:?}"
+            );
+        }
     }
 }
