@@ -4,7 +4,7 @@ use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
 use crate::audio::codec::{AudioDecoder, EncodedChunk, FormatCache};
 use crate::audio::sample::{Resampler, SampleSource, SyncSampleSource};
-use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, Depop, JitterStage};
+use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, JitterStage};
 
 use crate::audio::config::AudioPipelineConfig;
 
@@ -16,7 +16,6 @@ pub struct MixerMetrics {
     pub underrun: usize,
     pub plc_hold: usize,
     pub clip_hits: usize,
-    pub pops: usize,
     pub fills: usize,
     pub stale_dropped: usize,
 }
@@ -202,7 +201,6 @@ where
 {
     slots: HashMap<SlotId, InputSlot<D, T, R, FD>>,
     bus: M,
-    depop: Depop,
     clip: Clip,
     pending: VecDeque<f32>,
     out_format: AudioFormat,
@@ -230,7 +228,6 @@ where
         Mixer {
             slots: HashMap::new(),
             bus,
-            depop: Depop::new(Depop::ramp_frames(out_format.sample_rate)),
             clip: Clip::new(),
             pending: VecDeque::new(),
             out_format,
@@ -296,7 +293,6 @@ where
     pub fn metrics_snapshot(&self) -> MixerMetrics {
         let mut metrics = MixerMetrics {
             clip_hits: self.clip.clip_hits,
-            pops: self.depop.pops,
             fills: self.fills,
             stale_dropped: self.stale_dropped,
             ..MixerMetrics::default()
@@ -335,7 +331,6 @@ where
         }
         let chunk = AudioChunk::new(self.out_sequence, self.out_format.clone(), mixed);
         let chunk = self.bus.transform(chunk);
-        let chunk = self.depop.transform(chunk);
         let output = self.clip.transform(chunk);
         self.fills += 1;
         self.out_sequence += 1;
@@ -387,7 +382,7 @@ mod tests {
     use crate::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
     use crate::audio::config::AudioPipelineConfig;
     use crate::audio::sample::{Resampler, SyncSampleSource};
-    use crate::audio::transform::{ChunkTransform, Depop, Gain, JitterStage, Mute};
+    use crate::audio::transform::{ChunkTransform, Gain, JitterStage};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -561,11 +556,7 @@ mod tests {
         push(&mut mixer, id, frame(5));
         assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
         let out = pull(&mut mixer, 960);
-        assert!(
-            out[ramp_samples()..]
-                .iter()
-                .all(|sample| (*sample - 0.5).abs() < 1e-6)
-        );
+        assert!(out.iter().all(|sample| (*sample - 0.5).abs() < 1e-6));
     }
 
     #[test]
@@ -615,7 +606,7 @@ mod tests {
         push(&mut mixer, first, frame(4));
         push(&mut mixer, second, frame(4));
         let out = pull(&mut mixer, 960);
-        assert!(out[ramp_samples()..].iter().all(|sample| *sample == 0.8));
+        assert!(out.iter().all(|sample| *sample == 0.8));
         mixer.unsubscribe(first);
         mixer.unsubscribe(second);
         let first = mixer.subscribe((), rebuild, script());
@@ -623,8 +614,8 @@ mod tests {
         push(&mut mixer, first, frame(9));
         push(&mut mixer, second, frame(9));
         let out = pull(&mut mixer, 960);
-        assert!(out[ramp_samples()..].iter().all(|sample| *sample == 1.0));
-        assert!(mixer.metrics_snapshot().clip_hits >= 960 - ramp_samples());
+        assert!(out.iter().all(|sample| *sample == 1.0));
+        assert_eq!(mixer.metrics_snapshot().clip_hits, 960);
     }
 
     #[test]
@@ -734,8 +725,8 @@ mod tests {
         let id = mixer.subscribe((), rebuild, script());
         push(&mut mixer, id, frame(9));
         let out = pull(&mut mixer, 960);
-        assert!(out[ramp_samples()..].iter().all(|sample| *sample == 1.0));
-        assert!(mixer.metrics_snapshot().clip_hits >= 960 - ramp_samples());
+        assert!(out.iter().all(|sample| *sample == 1.0));
+        assert_eq!(mixer.metrics_snapshot().clip_hits, 960);
     }
 
     #[test]
@@ -749,7 +740,7 @@ mod tests {
         assert!(mixer.reset_input(id));
         push(&mut mixer, id, frame(0));
         let out = pull(&mut mixer, 960);
-        assert!(out[ramp_samples()..].iter().all(|sample| *sample == 0.0));
+        assert!(out.iter().all(|sample| *sample == 0.0));
         assert!(!mixer.reset_input(SlotId(99)));
     }
 
@@ -765,6 +756,7 @@ mod tests {
 
     #[test]
     fn muted_bus_serves_cached_silence() {
+        use crate::audio::transform::Mute;
         let (mute, control) = Mute::shared(true);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), mute);
         let id = mixer.subscribe((), rebuild, script());
@@ -832,32 +824,5 @@ mod tests {
         push(&mut mixer, id, mono);
         let slot = mixer.input_mut(id).expect("slot");
         assert_eq!(slot.resampler.reconfigures, 2);
-    }
-
-    fn ramp_samples() -> usize {
-        Depop::ramp_frames(48000) * 2
-    }
-
-    #[test]
-    fn mute_toggle_ramps_instead_of_popping() {
-        let (mute, control) = Mute::shared(false);
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), mute);
-        let id = mixer.subscribe((), rebuild, script());
-        push(&mut mixer, id, frame(8));
-        push(&mut mixer, id, frame(9));
-        let out = pull(&mut mixer, 960);
-        assert_eq!(out[0], 0.0);
-        assert!(out.windows(2).all(|pair| pair[1] >= pair[0]));
-        assert!(
-            out[ramp_samples()..]
-                .iter()
-                .all(|sample| (*sample - 0.8).abs() < 1e-6)
-        );
-        control.set(true);
-        let out = pull(&mut mixer, 960);
-        assert!((out[0] - 0.8).abs() < 1e-6);
-        assert!(out.windows(2).all(|pair| pair[1] <= pair[0]));
-        assert!(out[ramp_samples()..].iter().all(|sample| *sample == 0.0));
-        assert_eq!(mixer.metrics_snapshot().pops, 4);
     }
 }

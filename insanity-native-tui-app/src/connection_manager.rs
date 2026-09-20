@@ -22,7 +22,7 @@ use crate::{
         codec::rebuild_opus_encoder,
         config::AUDIO_CALLBACK_FRAMES,
         cpal_stream_receiver::CpalStreamReceiver,
-        mixer::format_audio_interval,
+        mixer::{OutputInterval, format_audio_interval},
         output::{AudioOutput, OutputHandle, start_output},
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
@@ -332,6 +332,7 @@ fn manage_peers(
         let mut prev_dropped = metrics_audio.handle.client.dropped();
         let mut prev_underruns = metrics_audio.handle.stats.underruns();
         let mut prev_overruns = metrics_audio.handle.stats.overruns();
+        let mut prev_pops = metrics_audio.handle.stats.pops();
         let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
@@ -340,20 +341,25 @@ fn manage_peers(
                         let dropped = metrics_audio.handle.client.dropped();
                         let ring_underruns = metrics_audio.handle.stats.underruns();
                         let ring_overruns = metrics_audio.handle.stats.overruns();
+                        let pops = metrics_audio.handle.stats.pops();
                         let line = format_audio_interval(
                             &prev,
                             &current,
                             metrics_audio.handle.timing.avg_nanos(),
                             peers,
                             dropped.saturating_sub(prev_dropped),
-                            ring_underruns.saturating_sub(prev_underruns),
-                            ring_overruns.saturating_sub(prev_overruns),
+                            OutputInterval {
+                                ring_underruns: ring_underruns.saturating_sub(prev_underruns),
+                                ring_overruns: ring_overruns.saturating_sub(prev_overruns),
+                                pops: pops.saturating_sub(prev_pops),
+                            },
                         );
                         log::info!("{line}");
                         prev = current;
                         prev_dropped = dropped;
                         prev_underruns = ring_underruns;
                         prev_overruns = ring_overruns;
+                        prev_pops = pops;
                     }
                 }
                 _ = metrics_token.cancelled() => {

@@ -17,8 +17,7 @@ use opus::Decoder;
 use sine::{SineSource, decode_frame_to_chunk, hub_from_source, opus_channels};
 use std::sync::Arc;
 use unit_mixer::{
-    UnitMixer, add_unit_peer, push_chunk, push_value, ramp_samples, rebuild_passthrough, render,
-    unit_mixer,
+    UnitMixer, add_unit_peer, push_chunk, push_value, rebuild_passthrough, render, unit_mixer,
 };
 
 #[tokio::test]
@@ -100,7 +99,7 @@ fn mixer_sum_and_clip() {
     push_value(&mut mixer, id1, 0, 0.6);
     push_value(&mut mixer, id2, 0, 0.6);
     let out = render(&mut mixer, 960);
-    for s in out[ramp_samples()..].iter() {
+    for s in out.iter() {
         assert!((*s - 1.0).abs() < 1e-5, "clipped {s}");
     }
 }
@@ -110,9 +109,9 @@ fn mixer_per_peer_volume() {
     let (mut mixer, _) = unit_mixer(100);
     let id = add_unit_peer(&mut mixer, 50, DenoiseSelection::None);
     push_value(&mut mixer, id, 0, 1.0);
-    let out = render(&mut mixer, 960);
+    let out = render(&mut mixer, 10);
     let expected = 0.289;
-    for s in out[ramp_samples()..].iter() {
+    for s in out.iter() {
         assert!((s - expected).abs() < 0.05, "vol50 {s}");
     }
 }
@@ -139,9 +138,9 @@ fn mixer_master_volume() {
     let id = add_unit_peer(&mut mixer, 100, DenoiseSelection::None);
     push_value(&mut mixer, id, 0, 1.0);
     bus.set(50);
-    let out = render(&mut mixer, 960);
+    let out = render(&mut mixer, 10);
     let expected = 0.289;
-    for s in out[ramp_samples()..].iter() {
+    for s in out.iter() {
         assert!((s - expected).abs() < 0.06, "master50 {s}");
     }
 }
@@ -190,8 +189,8 @@ fn mixer_volume_extremes() {
     let (mut mixer2, _) = unit_mixer(100);
     let id999 = add_unit_peer(&mut mixer2, 999, DenoiseSelection::None);
     push_value(&mut mixer2, id999, 0, 1.0);
-    let out2 = render(&mut mixer2, 960);
-    for s in out2[ramp_samples()..].iter() {
+    let out2 = render(&mut mixer2, 10);
+    for s in out2.iter() {
         assert!(s.is_finite(), "vol999 not finite {s}");
         assert!((*s - 1.0).abs() < 1e-5, "vol999 clipped {s}");
     }
@@ -209,16 +208,12 @@ fn retained_peer_controls_drive_volume_and_loudness() {
     );
     push_value(&mut mixer, slot, 0, 0.5);
     let out = render(&mut mixer, 960);
-    assert!(
-        out[ramp_samples()..]
-            .iter()
-            .all(|s| (*s - 0.5).abs() < 1e-5)
-    );
+    assert!(out.iter().all(|s| (*s - 0.5).abs() < 1e-5));
     assert!(controls.loudness.loudness() > 0.0);
     controls.gain.set(0);
     push_value(&mut mixer, slot, 1, 0.5);
     let out = render(&mut mixer, 960);
-    assert!(out[ramp_samples()..].iter().all(|s| s.abs() < 1e-5));
+    assert!(out.iter().all(|s| s.abs() < 1e-5));
 }
 
 #[test]

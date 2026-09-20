@@ -9,7 +9,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::Mixer;
-use insanity_core::audio::transform::Gain;
+use insanity_core::audio::transform::{Depop, Gain};
 use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
@@ -58,6 +58,7 @@ pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 pub(crate) struct OutputStats {
     underruns: AtomicUsize,
     overruns: AtomicUsize,
+    pops: AtomicUsize,
 }
 
 impl OutputStats {
@@ -65,6 +66,7 @@ impl OutputStats {
         OutputStats {
             underruns: AtomicUsize::new(0),
             overruns: AtomicUsize::new(0),
+            pops: AtomicUsize::new(0),
         }
     }
 
@@ -82,6 +84,14 @@ impl OutputStats {
 
     pub(crate) fn overruns(&self) -> usize {
         self.overruns.load(Ordering::Relaxed)
+    }
+
+    fn set_pops(&self, pops: usize) {
+        self.pops.store(pops, Ordering::Relaxed);
+    }
+
+    pub(crate) fn pops(&self) -> usize {
+        self.pops.load(Ordering::Relaxed)
     }
 }
 
@@ -233,22 +243,92 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let err_fn = |err| eprintln!("output stream error: {err}");
+    let mut depop = Depop::for_rate(config.channels as usize, config.sample_rate);
     device
         .build_output_stream(
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 let start = std::time::Instant::now();
-                for out in data.iter_mut() {
-                    let sample = consumer.pop().unwrap_or_else(|_| {
-                        stats.note_underrun();
-                        0.0
-                    });
-                    *out = T::from_sample(sample);
-                }
+                fill_output(data, &mut consumer, &mut depop, &stats);
                 timing.record(start.elapsed());
             },
             err_fn,
             None,
         )
         .map_err(|e| anyhow::anyhow!("build output stream: {e}"))
+}
+
+fn fill_output<T>(
+    data: &mut [T],
+    consumer: &mut Consumer<f32>,
+    depop: &mut Depop,
+    stats: &OutputStats,
+) where
+    T: SizedSample + FromSample<f32>,
+{
+    for out in data.iter_mut() {
+        let sample = consumer.pop().unwrap_or_else(|_| {
+            stats.note_underrun();
+            0.0
+        });
+        *out = T::from_sample(depop.next(sample));
+    }
+    stats.set_pops(depop.pops);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OutputStats, fill_output};
+    use insanity_core::audio::transform::Depop;
+    use rtrb::RingBuffer;
+
+    fn assert_close(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+            assert!((a - e).abs() < 1e-6, "sample {i}: {a} vs {e}");
+        }
+    }
+
+    #[test]
+    fn fill_ramps_stream_start_and_underrun_silence() {
+        let (mut producer, mut consumer) = RingBuffer::new(16);
+        for _ in 0..16 {
+            producer.push(0.8).expect("ring has room");
+        }
+        let mut depop = Depop::new(2, 4);
+        let stats = OutputStats::new();
+        let mut data = [0f32; 16];
+        fill_output(&mut data, &mut consumer, &mut depop, &stats);
+        assert_close(
+            &data,
+            &[
+                0.0, 0.0, 0.2, 0.2, 0.4, 0.4, 0.6, 0.6, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8,
+            ],
+        );
+        assert_eq!(stats.underruns(), 0);
+        assert_eq!(stats.pops(), 2);
+        fill_output(&mut data, &mut consumer, &mut depop, &stats);
+        assert_close(
+            &data,
+            &[
+                0.8, 0.8, 0.6, 0.6, 0.4, 0.4, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ],
+        );
+        assert_eq!(stats.underruns(), 16);
+        assert_eq!(stats.pops(), 4);
+    }
+
+    #[test]
+    fn fill_converts_to_device_sample_format() {
+        let (mut producer, mut consumer) = RingBuffer::new(4);
+        for _ in 0..4 {
+            producer.push(0.5).expect("ring has room");
+        }
+        let mut depop = Depop::new(1, 1);
+        let stats = OutputStats::new();
+        let mut data = [0i16; 4];
+        fill_output(&mut data, &mut consumer, &mut depop, &stats);
+        assert_eq!(data[0], 0);
+        assert!(data[1..].iter().all(|s| (*s - 16384).abs() <= 1));
+    }
 }

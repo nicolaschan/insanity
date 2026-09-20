@@ -137,14 +137,20 @@ impl MixerClient {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OutputInterval {
+    pub ring_underruns: usize,
+    pub ring_overruns: usize,
+    pub pops: usize,
+}
+
 pub fn format_audio_interval(
     prev: &MixerMetrics,
     current: &MixerMetrics,
     fill_avg_nanos: u64,
     peer_count: usize,
     dropped: usize,
-    ring_underruns: usize,
-    ring_overruns: usize,
+    output: OutputInterval,
 ) -> String {
     format!(
         "audio gaps={} late={} overflow={} underruns={} plc={} clips={} pops={} fills={} stale={} fill_avg_ns={} peers={} dropped={} ring_underruns={} ring_overruns={}",
@@ -156,14 +162,14 @@ pub fn format_audio_interval(
         current.underrun.saturating_sub(prev.underrun),
         current.plc_hold.saturating_sub(prev.plc_hold),
         current.clip_hits.saturating_sub(prev.clip_hits),
-        current.pops.saturating_sub(prev.pops),
+        output.pops,
         current.fills.saturating_sub(prev.fills),
         current.stale_dropped.saturating_sub(prev.stale_dropped),
         fill_avg_nanos,
         peer_count,
         dropped,
-        ring_underruns,
-        ring_overruns,
+        output.ring_underruns,
+        output.ring_overruns,
     )
 }
 
