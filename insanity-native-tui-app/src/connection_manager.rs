@@ -24,6 +24,7 @@ use crate::{
         cpal_stream_receiver::CpalStreamReceiver,
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, start_output},
+        stream_errors,
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
@@ -332,6 +333,8 @@ fn manage_peers(
         let mut prev_dropped = metrics_audio.handle.client.dropped();
         let mut prev_underruns = metrics_audio.handle.stats.underruns();
         let mut prev_overruns = metrics_audio.handle.stats.overruns();
+        let mut prev_input_errors = stream_errors::input_errors();
+        let mut prev_output_errors = stream_errors::output_errors();
         let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
@@ -355,6 +358,22 @@ fn manage_peers(
                         prev_underruns = ring_underruns;
                         prev_overruns = ring_overruns;
                     }
+                    let input_errors = stream_errors::input_errors();
+                    let output_errors = stream_errors::output_errors();
+                    let new_input = input_errors.since(prev_input_errors);
+                    let new_output = output_errors.since(prev_output_errors);
+                    if !new_input.is_zero() || !new_output.is_zero() {
+                        log::warn!(
+                            "cpal stream errors in last {}s: input xruns={} other={} output xruns={} other={}",
+                            AUDIO_METRICS_INTERVAL.as_secs(),
+                            new_input.xruns,
+                            new_input.other,
+                            new_output.xruns,
+                            new_output.other,
+                        );
+                    }
+                    prev_input_errors = input_errors;
+                    prev_output_errors = output_errors;
                 }
                 _ = metrics_token.cancelled() => {
                     log::debug!("Audio metrics shutdown.");

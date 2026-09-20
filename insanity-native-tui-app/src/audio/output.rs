@@ -232,7 +232,7 @@ fn run_output<T>(
 where
     T: SizedSample + FromSample<f32>,
 {
-    let err_fn = |err| eprintln!("output stream error: {err}");
+    let err_fn = |err: cpal::Error| super::stream_errors::note_output_error(err.kind());
     device
         .build_output_stream(
             config,
