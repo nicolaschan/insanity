@@ -148,45 +148,19 @@ pub async fn update(dry_run: bool, force: bool) -> anyhow::Result<()> {
     let current_exe = std::env::current_exe()?;
     info!("Current executable: {}", current_exe.display());
 
-    // Move the new executable to the current executable's location
+    let perms = tokio::fs::metadata(&current_exe).await?.permissions();
+    tokio::fs::set_permissions(&new_exe_path, perms).await?;
+
     if !dry_run {
         info!(
             "Replacing {} with {}",
             current_exe.display(),
             new_exe_path.display(),
         );
-        match tokio::fs::rename(&new_exe_path, &current_exe).await {
-            Ok(_) => info!(
-                "Replaced {} with {}",
-                current_exe.display(),
-                new_exe_path.display()
-            ),
-            Err(e) => {
-                warn!(
-                    "Failed to replace {} with {}: {}",
-                    current_exe.display(),
-                    new_exe_path.display(),
-                    e
-                );
-                return Err(e.into());
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let current_exe_file = tokio::fs::File::open(&current_exe).await?;
-        let mut perms = current_exe_file.metadata().await?.permissions();
-        perms.set_mode(perms.mode() | 0o111); // Add execute permission
-        match tokio::fs::set_permissions(&current_exe, perms).await {
-            Ok(_) => info!("Set execute permission on {}", current_exe.display()),
-            Err(e) => warn!(
-                "Failed to set execute permission on {}: {}",
-                current_exe.display(),
-                e
-            ),
-        }
+        self_replace::self_replace(&new_exe_path).map_err(|e| {
+            warn!("Failed to replace {}: {}", current_exe.display(), e);
+            e
+        })?;
     }
 
     info!(
