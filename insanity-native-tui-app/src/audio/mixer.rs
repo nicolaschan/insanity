@@ -191,6 +191,7 @@ pub(crate) async fn run_mixer_owner(
     assert!(block_samples > 0, "block_samples must be > 0");
     let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
     let mut ticker = tokio::time::interval(tick_period);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tokio::select! {
             biased;
