@@ -1,23 +1,26 @@
+use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 pub struct SwitchingChunkSource<T> {
     source: Option<T>,
-    swap_tx: Sender<T>,
-    swap_rx: Receiver<T>,
+    swap_tx: UnboundedSender<T>,
+    swap_rx: UnboundedReceiver<T>,
+    next_seq: u128,
 }
 
 impl<T: ChunkSource + Send> SwitchingChunkSource<T> {
     pub fn new(source: T) -> Self {
-        let (swap_tx, swap_rx) = channel(1);
+        let (swap_tx, swap_rx) = unbounded_channel();
         Self {
             source: Some(source),
             swap_tx,
             swap_rx,
+            next_seq: 0,
         }
     }
 
-    pub fn switcher(&self) -> Sender<T> {
+    pub fn switcher(&self) -> UnboundedSender<T> {
         self.swap_tx.clone()
     }
 }
@@ -35,7 +38,12 @@ impl<T: ChunkSource + Send> ChunkSource for SwitchingChunkSource<T> {
                     self.source = swapped;
                 }
                 chunk = source.next_chunk() => match chunk {
-                    Some(c) => return Some(c),
+                    Some(mut c) => {
+                        let seq = self.next_seq;
+                        self.next_seq += 1;
+                        c.sequence_number = seq;
+                        return Some(c);
+                    }
                     None => self.source = None,
                 },
             }
@@ -43,11 +51,36 @@ impl<T: ChunkSource + Send> ChunkSource for SwitchingChunkSource<T> {
     }
 }
 
+pub struct SilenceChunkSource {
+    format: AudioFormat,
+    frames: usize,
+    next_seq: u128,
+}
+
+impl SilenceChunkSource {
+    pub fn new(format: AudioFormat, frames: usize) -> Self {
+        Self {
+            format,
+            frames,
+            next_seq: 0,
+        }
+    }
+}
+
+impl ChunkSource for SilenceChunkSource {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        let samples = vec![0.0; self.frames * usize::from(self.format.channel_count)];
+        Some(AudioChunk::new(seq, self.format.clone(), samples))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::SwitchingChunkSource;
+    use super::{SilenceChunkSource, SwitchingChunkSource};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 
@@ -84,7 +117,7 @@ mod tests {
         let first = source.next_chunk().await.unwrap();
         assert_eq!(first.audio_data, vec![1.0; 4]);
         assert_eq!(first.format.channel_count, 2);
-        switcher.send(Constant::new(1, 2.0, 10)).await.unwrap();
+        switcher.send(Constant::new(1, 2.0, 10)).unwrap();
         let second = source.next_chunk().await.unwrap();
         assert_eq!(second.audio_data, vec![2.0; 4]);
         assert_eq!(second.format.channel_count, 1);
@@ -97,9 +130,43 @@ mod tests {
         assert!(source.next_chunk().await.is_some());
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            switcher.send(Constant::new(2, 3.0, 1)).await.unwrap();
+            switcher.send(Constant::new(2, 3.0, 1)).unwrap();
         });
         let chunk = source.next_chunk().await.unwrap();
         assert_eq!(chunk.audio_data, vec![3.0; 4]);
+    }
+
+    #[tokio::test]
+    async fn sequence_stays_monotonic_across_swap() {
+        let mut source = SwitchingChunkSource::new(Constant::new(2, 1.0, 10));
+        let switcher = source.switcher();
+        let first = source.next_chunk().await.unwrap();
+        let second = source.next_chunk().await.unwrap();
+        assert!(second.sequence_number > first.sequence_number);
+        switcher.send(Constant::new(1, 2.0, 10)).unwrap();
+        let third = source.next_chunk().await.unwrap();
+        assert!(third.sequence_number > second.sequence_number);
+    }
+
+    #[tokio::test]
+    async fn queued_rapid_swaps_last_wins() {
+        let mut source = SwitchingChunkSource::new(Constant::new(2, 1.0, 10));
+        let switcher = source.switcher();
+        let _ = source.next_chunk().await.unwrap();
+        switcher.send(Constant::new(2, 2.0, 10)).unwrap();
+        switcher.send(Constant::new(2, 3.0, 10)).unwrap();
+        let chunk = source.next_chunk().await.unwrap();
+        assert_eq!(chunk.audio_data, vec![3.0; 4]);
+    }
+
+    #[tokio::test]
+    async fn silence_matches_format_and_advances_sequence() {
+        let format = AudioFormat::new(2, 48000);
+        let mut silence = SilenceChunkSource::new(format.clone(), 480);
+        let first = silence.next_chunk().await.unwrap();
+        assert_eq!(first.audio_data, vec![0.0; 960]);
+        assert_eq!(first.format, format);
+        let second = silence.next_chunk().await.unwrap();
+        assert!(second.sequence_number > first.sequence_number);
     }
 }
