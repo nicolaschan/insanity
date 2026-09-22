@@ -171,6 +171,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     };
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
     let task_stats = stats.clone();
+    let task_format = format.clone();
     tokio::spawn(async move {
         run_mixer_owner(
             mixer,
@@ -178,7 +179,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
             task_stats,
             op_rx,
             block_samples,
-            audio_config.chunk_period(),
+            task_format,
         )
         .await
     });
