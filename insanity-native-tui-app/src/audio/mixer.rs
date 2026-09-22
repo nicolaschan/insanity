@@ -191,7 +191,6 @@ pub(crate) async fn run_mixer_owner(
     assert!(block_samples > 0, "block_samples must be > 0");
     let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
     let mut ticker = tokio::time::interval(tick_period);
-    let mut block = Vec::with_capacity(block_samples);
     loop {
         tokio::select! {
             biased;
@@ -235,15 +234,16 @@ pub(crate) async fn run_mixer_owner(
             if ring.slots() < block_samples {
                 break;
             }
-            block.extend((0..block_samples).map(|_| mixer.next_sync().unwrap_or(0.0)));
-            let mut overruns = 0;
-            for sample in block.drain(..) {
-                if ring.push(sample).is_err() {
-                    overruns += 1;
+            match ring.write_chunk_uninit(block_samples) {
+                Ok(chunk) => {
+                    chunk.fill_from_iter(
+                        (0..block_samples).map(|_| mixer.next_sync().unwrap_or(0.0)),
+                    );
                 }
-            }
-            if overruns > 0 {
-                stats.note_overrun(overruns);
+                Err(_) => {
+                    stats.note_overrun(block_samples);
+                    break;
+                }
             }
         }
     }

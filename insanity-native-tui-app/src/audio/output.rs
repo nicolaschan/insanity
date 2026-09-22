@@ -68,8 +68,8 @@ impl OutputStats {
         }
     }
 
-    fn note_underrun(&self) {
-        self.underruns.fetch_add(1, Ordering::Relaxed);
+    fn note_underruns(&self, samples: usize) {
+        self.underruns.fetch_add(samples, Ordering::Relaxed);
     }
 
     pub(crate) fn note_overrun(&self, samples: usize) {
@@ -222,6 +222,21 @@ fn build_output_stream(
     }
 }
 
+fn render_samples<T>(outs: &mut [T], first: &[f32], second: &[f32])
+where
+    T: SizedSample + FromSample<f32>,
+{
+    let mut outs = outs.iter_mut();
+    for sample in first.iter().chain(second.iter()) {
+        if let Some(out) = outs.next() {
+            *out = T::from_sample(*sample);
+        }
+    }
+    for out in outs {
+        *out = T::from_sample(0.0);
+    }
+}
+
 fn run_output<T>(
     config: StreamConfig,
     device: &Device,
@@ -238,13 +253,16 @@ where
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 let start = std::time::Instant::now();
-                for out in data.iter_mut() {
-                    let sample = consumer.pop().unwrap_or_else(|_| {
-                        stats.note_underrun();
-                        0.0
-                    });
-                    *out = T::from_sample(sample);
+                let available = consumer.slots().min(data.len());
+                match consumer.read_chunk(available) {
+                    Ok(chunk) => {
+                        let (first, second) = chunk.as_slices();
+                        render_samples(data, first, second);
+                        chunk.commit_all();
+                    }
+                    Err(_) => render_samples(data, &[], &[]),
                 }
+                stats.note_underruns(data.len() - available);
                 timing.record(start.elapsed());
             },
             err_fn,
