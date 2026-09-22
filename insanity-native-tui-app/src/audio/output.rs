@@ -14,7 +14,7 @@ use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use super::config::get_output_config;
-use super::cpal_registry::{default_real_output, device_name};
+use super::cpal_registry::{default_output_device, device_name};
 use super::mixer::{MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, run_mixer_owner};
 
 // Output mixer
@@ -110,11 +110,11 @@ pub(crate) struct AudioOutput {
 }
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
-    let output = default_real_output().map(|d| d.0).and_then(|device| {
-        get_output_config(&device, audio_config)
+    let output = default_output_device().and_then(|device| {
+        get_output_config(&device.0, audio_config)
             .inspect_err(|e| log::warn!("Failed to get output config, falling back to dummy: {e}"))
             .ok()
-            .map(|(sample_format, config)| (device, sample_format, config))
+            .map(|(sample_format, config)| (device.0, sample_format, config))
     });
     let name = output.as_ref().map_or_else(
         || UNKNOWN_DEVICE_NAME.into(),

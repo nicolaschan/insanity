@@ -14,7 +14,7 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
 
 use super::config::get_input_config;
-use super::cpal_registry::{default_real_input, device_name};
+use super::cpal_registry::{default_input_device, device_name};
 use super::output::RING_CAPACITY_BLOCKS;
 
 #[derive(Default)]
@@ -67,10 +67,10 @@ pub struct CpalStreamReceiver {
 
 impl CpalStreamReceiver {
     pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
-        let Some(device) = default_real_input().map(|d| d.0) else {
+        let Some(device) = default_input_device() else {
             return Err(anyhow!("No default device available"));
         };
-        make_single_input(device, audio_config)
+        make_single_input(device.0, audio_config)
     }
 
     pub fn name(&self) -> &str {
