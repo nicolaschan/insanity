@@ -2,6 +2,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+use std::time::Duration;
 
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
@@ -86,7 +87,31 @@ pub fn output_resampler(out: AudioFormat, audio_config: AudioPipelineConfig) -> 
     )
 }
 
-pub(crate) const MIXER_OPS_BOUND: usize = 64;
+pub const MIXER_OPS_BOUND: usize = 64;
+pub const TARGET_RING_BLOCKS: usize = 2;
+const MIN_FILL_SLEEP: Duration = Duration::from_millis(2);
+const MAX_FILL_SLEEP: Duration = Duration::from_millis(30);
+
+pub(crate) fn demand_sleep(
+    capacity_samples: usize,
+    free_samples: usize,
+    block_samples: usize,
+    channels: usize,
+    sample_rate: u32,
+) -> Duration {
+    if block_samples == 0 || channels == 0 || sample_rate == 0 {
+        return MAX_FILL_SLEEP;
+    }
+    let occupied = capacity_samples.saturating_sub(free_samples);
+    let target = block_samples.saturating_mul(TARGET_RING_BLOCKS);
+    let excess = occupied.saturating_sub(target);
+    if excess == 0 {
+        return MIN_FILL_SLEEP;
+    }
+    let samples_per_sec = channels as u64 * u64::from(sample_rate);
+    let nanos = excess as u64 * 1_000_000_000 / samples_per_sec;
+    Duration::from_nanos(nanos).clamp(MIN_FILL_SLEEP, MAX_FILL_SLEEP)
+}
 
 pub(crate) struct SubscribeRequest {
     pub(crate) transform: PeerChain,
@@ -186,12 +211,17 @@ pub(crate) async fn run_mixer_owner(
     stats: Arc<OutputStats>,
     mut rx: mpsc::Receiver<MixerOp>,
     block_samples: usize,
-    tick_period: tokio::time::Duration,
+    out_format: AudioFormat,
 ) {
     assert!(block_samples > 0, "block_samples must be > 0");
+    assert!(out_format.channel_count > 0, "channel_count must be > 0");
+    assert!(out_format.sample_rate > 0, "sample_rate must be > 0");
+    let capacity_samples = block_samples * RING_CAPACITY_BLOCKS;
+    let target_samples = block_samples * TARGET_RING_BLOCKS;
+    let channels = usize::from(out_format.channel_count);
+    let sample_rate = out_format.sample_rate;
     let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
-    let mut ticker = tokio::time::interval(tick_period);
-    let mut block = Vec::with_capacity(block_samples);
+    let mut sleep = Duration::ZERO;
     loop {
         tokio::select! {
             biased;
@@ -200,7 +230,7 @@ pub(crate) async fn run_mixer_owner(
                     break;
                 }
             }
-            _ = ticker.tick() => {}
+            _ = tokio::time::sleep(sleep) => {}
         }
         let mut slot_replies = Vec::new();
         let mut snapshot_replies = Vec::new();
@@ -231,20 +261,105 @@ pub(crate) async fn run_mixer_owner(
         for (reply, snapshot) in snapshot_replies {
             let _ = reply.send(snapshot);
         }
-        for _ in 0..RING_CAPACITY_BLOCKS {
+        for _ in 0..TARGET_RING_BLOCKS {
+            if capacity_samples.saturating_sub(ring.slots()) >= target_samples {
+                break;
+            }
             if ring.slots() < block_samples {
                 break;
             }
-            block.extend((0..block_samples).map(|_| mixer.next_sync().unwrap_or(0.0)));
-            let mut overruns = 0;
-            for sample in block.drain(..) {
-                if ring.push(sample).is_err() {
-                    overruns += 1;
+            match ring.write_chunk_uninit(block_samples) {
+                Ok(chunk) => {
+                    chunk.fill_from_iter(
+                        (0..block_samples).map(|_| mixer.next_sync().unwrap_or(0.0)),
+                    );
+                }
+                Err(_) => {
+                    stats.note_overrun(block_samples);
+                    break;
                 }
             }
-            if overruns > 0 {
-                stats.note_overrun(overruns);
-            }
         }
+        sleep = demand_sleep(
+            capacity_samples,
+            ring.slots(),
+            block_samples,
+            channels,
+            sample_rate,
+        );
+    }
+}
+
+#[cfg(test)]
+mod demand_sleep_tests {
+    use super::{MAX_FILL_SLEEP, MIN_FILL_SLEEP, TARGET_RING_BLOCKS, demand_sleep};
+    use std::time::Duration;
+
+    const BLOCK: usize = 960;
+    const CAPACITY: usize = BLOCK * 8;
+    const CHANNELS: usize = 2;
+    const RATE: u32 = 48000;
+
+    #[test]
+    fn empty_ring_waits_minimum() {
+        assert_eq!(
+            demand_sleep(CAPACITY, CAPACITY, BLOCK, CHANNELS, RATE),
+            MIN_FILL_SLEEP
+        );
+    }
+
+    #[test]
+    fn at_target_waits_minimum() {
+        let target = BLOCK * TARGET_RING_BLOCKS;
+        assert_eq!(
+            demand_sleep(CAPACITY, CAPACITY - target, BLOCK, CHANNELS, RATE),
+            MIN_FILL_SLEEP
+        );
+    }
+
+    #[test]
+    fn one_block_above_target_waits_one_block_period() {
+        let occupied = BLOCK * (TARGET_RING_BLOCKS + 1);
+        assert_eq!(
+            demand_sleep(CAPACITY, CAPACITY - occupied, BLOCK, CHANNELS, RATE),
+            Duration::from_millis(10)
+        );
+    }
+
+    #[test]
+    fn far_above_target_clamps_to_maximum() {
+        let occupied = BLOCK * 6;
+        assert_eq!(
+            demand_sleep(CAPACITY, CAPACITY - occupied, BLOCK, CHANNELS, RATE),
+            MAX_FILL_SLEEP
+        );
+    }
+
+    #[test]
+    fn full_ring_waits_maximum() {
+        assert_eq!(
+            demand_sleep(CAPACITY, 0, BLOCK, CHANNELS, RATE),
+            MAX_FILL_SLEEP
+        );
+        assert_eq!(
+            demand_sleep(CAPACITY, BLOCK - 1, BLOCK, CHANNELS, RATE),
+            MAX_FILL_SLEEP
+        );
+    }
+
+    #[test]
+    fn degenerate_params_wait_maximum() {
+        assert_eq!(
+            demand_sleep(CAPACITY, CAPACITY, 0, CHANNELS, RATE),
+            MAX_FILL_SLEEP
+        );
+        assert_eq!(
+            demand_sleep(CAPACITY, CAPACITY, BLOCK, 0, RATE),
+            MAX_FILL_SLEEP
+        );
+        assert_eq!(
+            demand_sleep(CAPACITY, CAPACITY, BLOCK, CHANNELS, 0),
+            MAX_FILL_SLEEP
+        );
     }
 }
