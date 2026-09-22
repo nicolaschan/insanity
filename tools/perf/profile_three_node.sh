@@ -29,6 +29,11 @@ OUT_DIR="/tmp"
 BINARY=""
 ALLOW_DESKTOP_AUDIO=0
 SKIP_BUILD=0
+# NB: context-switches/cpu-migrations are deliberately absent: with
+# perf_event_paranoid=2 this perf build forces :u onto them and they read
+# hard zero. Wakeups are instead measured via /proc ctxt counters below,
+# which work regardless of paranoid level.
+STAT_EVENTS="task-clock,page-faults,minor-faults,major-faults,cycles,instructions,cache-misses,branch-misses"
 
 usage() {
     sed -n '2,/^$/p' "$0" >&2
@@ -58,7 +63,6 @@ done
 [[ "$MODE" == quiet || "$MODE" == music || "$MODE" == both ]] || { echo "profile_three_node.sh: --mode must be quiet, music, or both" >&2; exit 1; }
 [[ "$WINDOW" =~ ^[0-9]+$ ]] && [[ "$WINDOW" -ge 10 ]] || { echo "profile_three_node.sh: --window must be an integer >= 10" >&2; exit 1; }
 [[ -z "$BINARY" ]] && BINARY="/tmp/insanity-$TAG"
-PREFIX="$(basename "$BINARY")"
 
 log() { echo "profile_three_node.sh: $*" >&2; }
 die() { echo "profile_three_node.sh: ERROR: $*" >&2; exit 1; }
@@ -149,6 +153,49 @@ profiler_gone() {
     [[ "$st" == "Z" ]]
 }
 
+# cpal's pulseaudio backend names each insanity instance's PipeWire nodes
+# cpal-pulseaudio-<pid> (verified via pw-link -l before/after startup), so
+# input ports are discovered per live insanity PID rather than by binary
+# name. Nodes belonging to dead PIDs are never queried, so stale entries
+# cannot leak into counts or fan-out.
+insanity_input_ids() {
+    local chan="$1" pid
+    while read -r pid; do
+        [[ -z "$pid" ]] && continue
+        port_ids -i "cpal-pulseaudio-$pid:input_$chan"
+    done < <(pgrep -f "$INSANITY_PATTERN" 2>/dev/null || true)
+}
+
+insanity_input_count() {
+    local chan="$1" n=0 c pid
+    while read -r pid; do
+        [[ -z "$pid" ]] && continue
+        c="$(count_ports -i "cpal-pulseaudio-$pid:input_$chan")"
+        n=$((n + c))
+    done < <(pgrep -f "$INSANITY_PATTERN" 2>/dev/null || true)
+    echo "$n"
+}
+
+insanity_links_into() {
+    local chan="$1" n=0 c pid
+    while read -r pid; do
+        [[ -z "$pid" ]] && continue
+        c="$(count_links_into "cpal-pulseaudio-$pid:input_$chan")"
+        n=$((n + c))
+    done < <(pgrep -f "$INSANITY_PATTERN" 2>/dev/null || true)
+    echo "$n"
+}
+
+insanity_player_links() {
+    local chan="$1" n=0 c pid
+    while read -r pid; do
+        [[ -z "$pid" ]] && continue
+        c="$(count_links_from_to "pw-play:output_$chan" "cpal-pulseaudio-$pid:input_$chan")"
+        n=$((n + c))
+    done < <(pgrep -f "$INSANITY_PATTERN" 2>/dev/null || true)
+    echo "$n"
+}
+
 GHOST_PIDS=""
 PLAYER_PID=""
 INSANITY_PATTERN="^$BINARY --room"
@@ -163,22 +210,22 @@ unlink_all_inputs() {
                 [[ -z "$src_id" ]] && continue
                 pw-link -d "$src_id" "$in_id" || die "pw-link -d $src_id -> $in_id failed"
             done < <(input_source_ids "$in_id")
-        done < <(port_ids -i "$PREFIX:input_$chan")
+        done < <(insanity_input_ids "$chan")
     done
-    log "unlinked all $PREFIX inputs"
+    log "unlinked all insanity inputs"
 }
 
 assert_inputs_clean() {
     local mode="$1" want="$2" chan total pp other
     for chan in FL FR; do
-        total="$(count_links_into "$PREFIX:input_$chan")"
-        pp="$(count_links_from_to "pw-play:output_$chan" "$PREFIX:input_$chan")"
+        total="$(insanity_links_into "$chan")"
+        pp="$(insanity_player_links "$chan")"
         other=$((total - pp))
         if [[ "$mode" == quiet ]]; then
-            [[ "$total" == 0 ]] || die "mic still linked in quiet mode ($PREFIX:input_$chan has $total link(s))"
+            [[ "$total" == 0 ]] || die "mic still linked in quiet mode (input_$chan has $total link(s))"
         else
-            [[ "$pp" == "$want" ]] || die "music fan-out incomplete ($PREFIX:input_$chan)"
-            [[ "$other" == 0 ]] || die "non-player source linked in music mode ($PREFIX:input_$chan)"
+            [[ "$pp" == "$want" ]] || die "music fan-out incomplete (input_$chan)"
+            [[ "$other" == 0 ]] || die "non-player source linked in music mode (input_$chan)"
         fi
     done
 }
@@ -195,8 +242,8 @@ teardown() {
     if pw-link -o 2>/dev/null | grep -q '^pw-play:'; then
         log "WARN: pw-play ports still present after teardown"
     fi
-    if pw-link -i -o 2>/dev/null | grep -Eq "(^|[.])$PREFIX:"; then
-        log "WARN: $PREFIX ports still present after teardown"
+    if pw-link -i -o 2>/dev/null | grep -Eq "cpal-pulseaudio-[0-9]+:"; then
+        log "WARN: cpal-pulseaudio ports still present after teardown"
     fi
     log "teardown complete"
 }
@@ -216,25 +263,25 @@ python3 tools/perf/validate_audio.py "$WAV" --expect-sha256 "$WAV_SHA256" || die
 if pw-link -o 2>/dev/null | grep -q '^pw-play:'; then
     die "stale pw-play node in graph; stop other players first"
 fi
-if pw-link -i -o 2>/dev/null | grep -Eq "(^|[.])$PREFIX:"; then
-    die "stale $PREFIX ports in graph; stop leftover instances first"
+if pw-link -i -o 2>/dev/null | grep -Eq "cpal-pulseaudio-[0-9]+:"; then
+    die "stale cpal-pulseaudio ports in graph; stop leftover instances first"
 fi
 if pgrep -f "(samply|perf) record.*$TAG" >/dev/null 2>&1; then
     die "stale profiler for tag $TAG running; kill leftovers first"
 fi
 
 if [[ "$ALLOW_DESKTOP_AUDIO" == 0 ]]; then
-    if pw_pairs | PREFIX="$PREFIX" awk -F'\t' '
+    if pw_pairs | awk -F'\t' '
         {
             rb = (index($1, "Rhythmbox:") == 1 || index($2, "Rhythmbox:") == 1)
-            ins = (match($1, "(^|\\.)" ENVIRON["PREFIX"] ":") || match($2, "(^|\\.)" ENVIRON["PREFIX"] ":"))
+            ins = (match($1, "(^|\\.)cpal-pulseaudio-[0-9]+:") || match($2, "(^|\\.)cpal-pulseaudio-[0-9]+:"))
             if (rb && ins) linked=1
         }
         END { exit !linked }'; then
-        die "Rhythmbox is linked to $PREFIX; disconnect it or pass --allow-desktop-audio"
+        die "Rhythmbox is linked to insanity inputs; disconnect it or pass --allow-desktop-audio"
     fi
     if pw-link -o 2>/dev/null | grep -q '^Rhythmbox:'; then
-        log "WARN: Rhythmbox running but not linked to $PREFIX; continuing"
+        log "WARN: Rhythmbox running but not linked to insanity inputs; continuing"
     fi
 fi
 
@@ -274,10 +321,10 @@ done
 sleep 5
 
 for _ in $(seq 1 30); do
-    [[ "$(count_ports -i "$PREFIX:input_FL")" -ge 2 ]] && break
+    [[ "$(insanity_input_count FL)" -ge 2 ]] && break
     sleep 2
 done
-[[ "$(count_ports -i "$PREFIX:input_FL")" -ge 2 ]] || die "peer input ports never appeared (want $PREFIX:input_FL)"
+[[ "$(insanity_input_count FL)" -ge 2 ]] || die "peer input ports never appeared (want 2 cpal-pulseaudio inputs)"
 
 log "unlinking mics from peer inputs"
 unlink_all_inputs
@@ -305,7 +352,7 @@ link_channel() {
     out_id="$(port_ids -o "pw-play:output_$chan")" || die "port query failed for pw-play:output_$chan"
     [[ -n "$out_id" ]] || die "no pw-play:output_$chan port found"
     [[ "$(printf '%s\n' "$out_id" | wc -l)" == 1 ]] || die "want exactly one pw-play:output_$chan, found: $out_id"
-    in_ids="$(port_ids -i "$PREFIX:input_$chan")" || die "port query failed for $PREFIX:input_$chan"
+    in_ids="$(insanity_input_ids "$chan")" || die "port query failed for insanity input_$chan"
     while read -r in_id; do
         [[ -z "$in_id" ]] && continue
         if ! port_linked_to "$in_id" "$out_id"; then
@@ -319,8 +366,8 @@ link_player_to_all() {
     link_channel FL
     link_channel FR
     for _ in $(seq 1 15); do
-        fl="$(count_links_from_to "pw-play:output_FL" "$PREFIX:input_FL")"
-        fr="$(count_links_from_to "pw-play:output_FR" "$PREFIX:input_FR")"
+        fl="$(insanity_player_links FL)"
+        fr="$(insanity_player_links FR)"
         if [[ "$fl" == "$want" && "$fr" == "$want" ]]; then
             log "player fanned out to $want instance(s)"
             return 0
@@ -367,11 +414,11 @@ run_mode() {
     [[ "$(printf '%s\n' "$PROFILER_PID" | wc -l)" == 1 ]] || die "[$mode] multiple profiler processes match; kill leftovers first"
     log "[$mode] profiler pid $PROFILER_PID"
     for _ in $(seq 1 30); do
-        [[ "$(count_ports -i "$PREFIX:input_FL")" -ge 3 ]] && break
+        [[ "$(insanity_input_count FL)" -ge 3 ]] && break
         sleep 2
     done
-    [[ "$(count_ports -i "$PREFIX:input_FL")" -ge 3 ]] || die "[$mode] dir3 input ports never appeared"
-    local WANT="$(count_ports -i "$PREFIX:input_FL")"
+    [[ "$(insanity_input_count FL)" -ge 3 ]] || die "[$mode] dir3 input ports never appeared"
+    local WANT="$(insanity_input_count FL)"
     log "[$mode] unlinking mics from all inputs"
     unlink_all_inputs
     if [[ "$mode" == music ]]; then
@@ -381,8 +428,37 @@ run_mode() {
     else
         assert_inputs_clean quiet 0
     fi
+    local stat_out="$OUT_DIR/${TAG}_${mode}.stat"
+    rm -f "$stat_out"
+    local dir3_pid
+    dir3_pid="$(pgrep -f "$DIR3_PATTERN" 2>/dev/null | grep -vx "$PROFILER_PID" || true)"
+    [[ -n "$dir3_pid" ]] || die "[$mode] profiled insanity process not found"
+    [[ "$(printf '%s\n' "$dir3_pid" | wc -l)" == 1 ]] || die "[$mode] multiple profiled insanity processes match; kill leftovers first"
+    # /proc/<pid>/status covers only the group-leader thread; sum all tasks.
+    # Threads may exit mid-scan; skip them (before/after sets may differ
+    # by a thread, slightly undercounting that thread's delta).
+    ctxt_sum() {
+        local _pid="$1" _field="$2" _total=0 _val _st
+        for _st in /proc/"$_pid"/task/*/status; do
+            _val="$(grep "^$_field" "$_st" 2>/dev/null | awk '{print $2}')" || continue
+            [[ "$_val" =~ ^[0-9]+$ ]] || continue
+            _total=$((_total + _val))
+        done
+        echo "$_total"
+    }
+    local vol_before invol_before
+    vol_before="$(ctxt_sum "$dir3_pid" 'voluntary_ctxt_switches:')" || die "[$mode] cannot read ctxt counters for pid $dir3_pid"
+    invol_before="$(ctxt_sum "$dir3_pid" 'nonvoluntary_ctxt_switches:')" || die "[$mode] cannot read ctxt counters for pid $dir3_pid"
+    log "[$mode] collecting counters for ${WINDOW}s -> $stat_out (pid $dir3_pid)"
+    perf stat -e "$STAT_EVENTS" -x ';' -p "$dir3_pid" -o "$stat_out" -- sleep "$WINDOW" &
+    local stat_pid=$!
     log "[$mode] capturing for ${WINDOW}s -> $out"
     sleep "$WINDOW"
+    wait "$stat_pid" || die "[$mode] perf stat failed"
+    local vol_after invol_after
+    vol_after="$(ctxt_sum "$dir3_pid" 'voluntary_ctxt_switches:')" || die "[$mode] profiled process died before ctxt snapshot"
+    invol_after="$(ctxt_sum "$dir3_pid" 'nonvoluntary_ctxt_switches:')" || die "[$mode] profiled process died before ctxt snapshot"
+    printf '%s;;voluntary-ctxt-switches\n%s;;involuntary-ctxt-switches\n' "$((vol_after - vol_before))" "$((invol_after - invol_before))" >> "$stat_out" || die "[$mode] cannot append ctxt counters"
     if [[ "$mode" == music ]]; then
         assert_inputs_clean music "$WANT"
     else
@@ -413,6 +489,9 @@ run_mode() {
     [[ -f "$out" ]] || die "[$mode] profiler output missing: $out"
     [[ "$(stat -c%s "$out")" -gt 10240 ]] || die "[$mode] profiler output suspiciously small: $out"
     log "[$mode] captured $(stat -c%s "$out") bytes -> $out"
+    [[ -f "$stat_out" ]] || die "[$mode] stat output missing: $stat_out"
+    [[ "$(stat -c%s "$stat_out")" -gt 100 ]] || die "[$mode] stat output suspiciously small: $stat_out"
+    log "[$mode] captured $(stat -c%s "$stat_out") bytes -> $stat_out"
     if grep -ai "stream error\|xrun" dir3/insanity.log 2>/dev/null | head -n 5; then
         log "WARN: [$mode] possible audio stream errors in dir3 log (see above)"
     fi
