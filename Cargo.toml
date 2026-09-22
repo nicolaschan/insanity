@@ -14,3 +14,6 @@ debug = true
 inherits = "release"
 debug = true
 strip = false
+
+[patch.crates-io]
+pulseaudio = { git = "https://github.com/neelayjunnarkar/pulseaudio-rs", rev = "9cbea6a600c5e8eea4b44f86c77a562b1c4035f8" }
