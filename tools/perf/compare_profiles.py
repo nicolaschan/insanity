@@ -8,9 +8,12 @@ import subprocess
 import sys
 from typing import NoReturn
 
-DATASET_ARG = re.compile(r"^--dataset(\d+)(?:-(name|quiet|music|bin))?$")
+DATASET_ARG = re.compile(r"^--dataset(\d+)(?:-(name|quiet|music|stat-quiet|stat-music|bin))?$")
 SYMBOL_LINE = re.compile(r"^\s*([\d.]+)%\s+(\S+)\s+(\S+)\s+\[.?\]\s+(.*)")
 SAMPLES_LINE = re.compile(r"^#\s*Samples:\s*([\d.]+)([KMB]?)")
+LOST_LINE = re.compile(r"^#\s*Total Lost Samples:\s*(\d+)")
+STATS_SECTION = re.compile(r"^\s*(\S.*?)\s+stats:\s*$")
+STATS_SAMPLES = re.compile(r"^\s*SAMPLE events:\s*(\d+)")
 HEX_SYMBOL = re.compile(r"^0x[0-9a-fA-F]+$")
 SUFFIX = {"": 1.0, "K": 1e3, "M": 1e6, "B": 1e9}
 FREQ_HZ = 997.0
@@ -86,6 +89,14 @@ def resolve_datasets(raw, data_dir):
         if quiet is None or music is None:
             die(f"dataset {idx}: need quiet+music files "
                 f"(or a --dataset{idx} TAG shorthand)")
+        stat_quiet = r.get("stat-quiet")
+        stat_music = r.get("stat-music")
+        stat_quiet_explicit = stat_quiet is not None
+        stat_music_explicit = stat_music is not None
+        if stat_quiet is None and tag:
+            stat_quiet = os.path.join(data_dir, f"{tag}_quiet.stat")
+        if stat_music is None and tag:
+            stat_music = os.path.join(data_dir, f"{tag}_music.stat")
         binpath = r.get("bin")
         if binpath is None:
             for cand in (os.path.join(data_dir, f"insanity-{name}"),
@@ -97,7 +108,10 @@ def resolve_datasets(raw, data_dir):
                 die(f"dataset {idx} ({name}): binary not found; "
                     f"pass --dataset{idx}-bin PATH")
         out.append({"idx": idx, "name": name,
-                    "quiet": quiet, "music": music, "bin": binpath})
+                    "quiet": quiet, "music": music, "bin": binpath,
+                    "stat-quiet": stat_quiet, "stat-music": stat_music,
+                    "stat-quiet-explicit": stat_quiet_explicit,
+                    "stat-music-explicit": stat_music_explicit})
     return out
 
 
@@ -134,12 +148,67 @@ def run_flat_report(perf, dsname, path):
     return p.stdout
 
 
+def run_exact_samples(perf, dsname, path):
+    try:
+        p = subprocess.run(
+            [perf, "report", "--stats", "-i", path],
+            capture_output=True, text=True)
+    except OSError as e:
+        die(f"[{dsname}] failed to run perf: {e}")
+    if p.returncode != 0:
+        tail = "\n".join(p.stderr.splitlines()[-5:])
+        die(f"[{dsname}] perf report --stats failed on {path}:\n{tail}")
+    sections = {}
+    section = None
+    for line in p.stdout.splitlines():
+        m = STATS_SECTION.match(line)
+        if m:
+            section = m.group(1).strip()
+            continue
+        m = STATS_SAMPLES.match(line)
+        if m:
+            sections[section] = int(m.group(1))
+    for name, count in sections.items():
+        if name is not None and "cycles" in name:
+            return name, count
+    if None in sections:
+        return "", sections[None]
+    die(f"[{dsname}] perf report --stats on {path}: no SAMPLE count found")
+
+
+STAT_EVENTS = ["task-clock", "voluntary-ctxt-switches",
+               "involuntary-ctxt-switches", "page-faults", "minor-faults",
+               "major-faults", "cycles", "instructions", "cache-misses",
+               "branch-misses"]
+
+
+def parse_stat(text):
+    vals = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split(";")
+        if len(fields) < 3:
+            continue
+        raw, unit, event = fields[0].strip(), fields[1].strip(), fields[2].strip()
+        if raw in ("<not counted>", "<not supported>", ""):
+            vals[event.split(":")[0]] = None
+            continue
+        try:
+            vals[event.split(":")[0]] = (float(raw), unit)
+        except ValueError:
+            continue
+    return vals
+
+
 def parse_count(num, suffix):
     return int(float(num) * SUFFIX.get(suffix.upper(), 1.0))
 
 
 def parse_report(text):
     samples = None
+    lost = 0
     entries = []
     for line in text.splitlines():
         if samples is None:
@@ -147,10 +216,14 @@ def parse_report(text):
             if m:
                 samples = parse_count(m.group(1), m.group(2))
                 continue
+        m = LOST_LINE.match(line)
+        if m:
+            lost = int(m.group(1))
+            continue
         m = SYMBOL_LINE.match(line)
         if m:
             entries.append((float(m.group(1)), m.group(3), m.group(4).strip()))
-    return samples, entries
+    return samples, lost, entries
 
 
 def categorize(sym, dso):
@@ -172,19 +245,40 @@ def analyze(entries):
     return cats, syms
 
 
-def collect(perf, datasets, modes):
+def collect(perf, datasets, modes, stat_modes):
+    stats = {}
+    for mode in stat_modes:
+        for ds in datasets:
+            path = ds[f"stat-{mode}"]
+            try:
+                with open(path) as f:
+                    text = f.read()
+            except OSError as e:
+                die(f"[{ds['name']}] {mode} stat file unreadable: {path}: {e}")
+            vals = parse_stat(text)
+            if not vals:
+                die(f"[{ds['name']}] {mode} stat file has no counters: {path}")
+            stats[(ds["idx"], mode)] = vals
     jobs = [(ds, mode, ds[mode]) for ds in datasets for mode in modes]
     texts = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as ex:
-        futs = {ex.submit(run_flat_report, perf, ds["name"], path): (ds, mode)
-                for ds, mode, path in jobs}
+    exact = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2 * len(jobs)) as ex:
+        futs = {}
+        for ds, mode, path in jobs:
+            futs[ex.submit(run_flat_report, perf, ds["name"], path)] = ("report", ds, mode)
+            futs[ex.submit(run_exact_samples, perf, ds["name"], path)] = ("stats", ds, mode)
         for fut in concurrent.futures.as_completed(futs):
-            ds, mode = futs[fut]
-            texts[(ds["idx"], mode)] = fut.result()
+            kind, ds, mode = futs[fut]
+            if kind == "report":
+                texts[(ds["idx"], mode)] = fut.result()
+            else:
+                exact[(ds["idx"], mode)] = fut.result()
     results = {}
     for ds in datasets:
         for mode in modes:
-            samples, entries = parse_report(texts[(ds["idx"], mode)])
+            samples, lost, entries = parse_report(texts[(ds["idx"], mode)])
+            event, exact_samples = exact[(ds["idx"], mode)]
+            samples = exact_samples or samples
             if not entries:
                 die(f"[{ds['name']}] {mode}: no symbols parsed; "
                     f"capture may be corrupt")
@@ -196,7 +290,14 @@ def collect(perf, datasets, modes):
                      f"addresses; is the exact binary in place?")
             cats, syms = analyze(entries)
             results[(ds["idx"], mode)] = {"samples": samples,
+                                          "lost": lost,
+                                          "event": event,
+                                          "stat": stats.get((ds["idx"], mode)),
                                           "cats": cats, "syms": syms}
+    events = {results[k]["event"] for k in results if results[k]["event"]}
+    if len(events) > 1:
+        warn(f"captures use different sample events: {sorted(events)}; "
+             f"shares may not be comparable")
     return results
 
 
@@ -226,15 +327,25 @@ def flagged(d, base, min_abs, min_rel):
 
 def show_mode(mode, datasets, base_pos, results, top_n, min_abs, min_rel):
     print(f"== {mode} ==")
+    base = datasets[base_pos]
+    base_n = results[(base["idx"], mode)]["samples"]
     sanity = []
     for ds in datasets:
         r = results[(ds["idx"], mode)]
         n = r["samples"]
         cpu = f"{n / FREQ_HZ:.1f} CPU-s" if n else "samples unknown"
-        sanity.append(f"[{ds['idx']}]{ds['name']}: "
-                      f"{n if n else '?'} samples (~{cpu}), bin OK")
+        cell = (f"[{ds['idx']}]{ds['name']}: "
+                f"{n if n else '?'} samples (~{cpu})")
+        if ds is not base and n and base_n:
+            delta = n - base_n
+            cell += f" Δ{delta:+d}/{fmt_rel(delta, base_n)}"
+        if r["lost"]:
+            cell += f" LOST={r['lost']}"
+            warn(f"[{ds['name']}] {mode}: {r['lost']} lost samples; "
+                 f"totals and shares may skew")
+        cell += ", bin OK"
+        sanity.append(cell)
     print("sanity: " + " | ".join(sanity))
-    base = datasets[base_pos]
     others = [ds for ds in datasets if ds is not base]
     cats = set()
     for ds in datasets:
@@ -337,6 +448,57 @@ def show_mode(mode, datasets, base_pos, results, top_n, min_abs, min_rel):
     print(" " + " | ".join(verdicts))
 
 
+def fmt_stat(value):
+    if value is None:
+        return "?"
+    num, unit = value
+    if unit == "msec":
+        text = f"{num:,.2f}"
+    elif num == int(num):
+        text = f"{int(num):,}"
+    else:
+        text = f"{num:,.2f}"
+    return f"{text} {unit}".rstrip() if unit else text
+
+
+def show_stat(mode, datasets, base_pos, results, min_rel):
+    print(f"-- counters ({mode}) --")
+    base = datasets[base_pos]
+    others = [ds for ds in datasets if ds is not base]
+    events = [e for e in STAT_EVENTS
+              if any(results[(ds["idx"], mode)]["stat"].get(e) is not None
+                     for ds in datasets)]
+    if not events:
+        print("no counters parsed")
+        return
+    name_w = max([len("counter")] + [len(e) for e in events])
+    val_w = 18
+    abs_w = 14
+    cells = [" ".join([f"[{o['idx']}]{o['name']}".rjust(val_w),
+                       "Δabs".rjust(abs_w), "Δrel".rjust(9)])
+             for o in others]
+    print(f"{'counter'.ljust(name_w)} "
+          f"{f'[{base['idx']}]{base['name']}'.rjust(val_w)} " +
+          " ".join(cells))
+    for event in events:
+        bval = results[(base["idx"], mode)]["stat"].get(event)
+        line = f"{event.ljust(name_w)} {fmt_stat(bval).rjust(val_w)}"
+        for ds in others:
+            cval = results[(ds["idx"], mode)]["stat"].get(event)
+            if bval is None or cval is None:
+                line += f" {'?'.rjust(val_w)} {'?'.rjust(abs_w)} {'?'.rjust(9)} "
+                continue
+            delta = cval[0] - bval[0]
+            rel = fmt_rel(delta, bval[0])
+            counter_hit = (bval[0] > 0
+                           and abs(100.0 * delta / bval[0]) >= min_rel)
+            star = "*" if counter_hit else " "
+            line += f" {fmt_stat(cval).rjust(val_w)}"
+            line += f" {f'{delta:+,.2f}'.rjust(abs_w)}"
+            line += f" {rel.rjust(8)}{star}"
+        print(line)
+
+
 def main(argv):
     raw, rest = split_argv(argv)
     ap = argparse.ArgumentParser(
@@ -368,11 +530,31 @@ def main(argv):
     for ds in datasets:
         check_dataset(ds)
     modes = ("quiet", "music") if args.mode == "both" else (args.mode,)
-    results = collect("perf", datasets, modes)
+    stat_modes = set()
+    for mode in modes:
+        missing = [ds["name"] for ds in datasets
+                   if not (ds.get(f"stat-{mode}") and
+                           os.path.isfile(ds[f"stat-{mode}"]))]
+        explicit_missing = [ds["name"] for ds in datasets
+                            if ds.get(f"stat-{mode}-explicit")
+                            and not (ds.get(f"stat-{mode}") and
+                                     os.path.isfile(ds[f"stat-{mode}"]))]
+        if explicit_missing:
+            die(f"{mode} stat file explicitly passed but missing for: "
+                f"{', '.join(explicit_missing)}")
+        if not missing:
+            stat_modes.add(mode)
+        elif len(missing) != len(datasets):
+            die(f"{mode} stat counters missing for: {', '.join(missing)}; "
+                f"recapture with the current profiler or drop the .stat files")
+    results = collect("perf", datasets, modes, stat_modes)
     base_pos = idxs.index(args.baseline)
     for mode in modes:
         show_mode(mode, datasets, base_pos, results,
                   args.top, args.min_abs, args.min_rel)
+        if mode in stat_modes:
+            show_stat(mode, datasets, base_pos, results,
+                      args.min_rel)
 
 
 if __name__ == "__main__":
