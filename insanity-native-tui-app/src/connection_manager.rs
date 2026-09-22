@@ -21,7 +21,7 @@ use crate::{
     audio::{
         codec::rebuild_opus_encoder,
         config::AUDIO_CALLBACK_FRAMES,
-        cpal_stream_receiver::CpalStreamReceiver,
+        cpal_stream_receiver::{CpalStreamReceiver, InputStats},
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, start_output},
         stream_errors,
@@ -63,6 +63,7 @@ struct SharedAudio {
     hub: Arc<AudioInputHub<EncodedChunk>>,
     handle: OutputHandle,
     audio_config: AudioPipelineConfig,
+    input_stats: Arc<InputStats>,
 }
 
 impl ConnectionManager {
@@ -291,6 +292,7 @@ fn manage_peers(
     let audio_config = AudioPipelineConfig::default();
     let source = CpalStreamReceiver::default(audio_config).unwrap();
     let source_name = source.name().to_owned();
+    let input_stats = source.stats();
     let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
     let chunked = SampleChunker::new(resampled, audio_config.frames());
     let hub = Arc::new(AudioInputHub::from_chunk_source(
@@ -314,6 +316,7 @@ fn manage_peers(
         hub: hub.clone(),
         handle: output.handle.clone(),
         audio_config,
+        input_stats,
     };
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
@@ -335,6 +338,7 @@ fn manage_peers(
         let mut prev_overruns = metrics_audio.handle.stats.overruns();
         let mut prev_input_errors = stream_errors::input_errors();
         let mut prev_output_errors = stream_errors::output_errors();
+        let mut prev_input_overruns = metrics_audio.input_stats.overruns();
         let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
@@ -374,6 +378,15 @@ fn manage_peers(
                     }
                     prev_input_errors = input_errors;
                     prev_output_errors = output_errors;
+                    let input_overruns = metrics_audio.input_stats.overruns();
+                    let new_overruns = input_overruns.saturating_sub(prev_input_overruns);
+                    if new_overruns > 0 {
+                        log::warn!(
+                            "dropped {new_overruns} input samples (capture overrun) in last {}s",
+                            AUDIO_METRICS_INTERVAL.as_secs(),
+                        );
+                    }
+                    prev_input_overruns = input_overruns;
                 }
                 _ = metrics_token.cancelled() => {
                     log::debug!("Audio metrics shutdown.");
