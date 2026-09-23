@@ -7,6 +7,7 @@ pub enum UserInputEvent {
     SendMessage(String),
     SetMuteSelf(bool),
     SetInputDevice(String),
+    SetOutputDevice(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

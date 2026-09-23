@@ -144,7 +144,8 @@ mod tests {
     use super::StreamResampler;
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
-    use insanity_core::audio::converter::ResampledSource;
+    use insanity_core::audio::config::AudioPipelineConfig;
+    use insanity_core::audio::converter::{FormatConverter, ResampledSource};
     use insanity_core::audio::sample::{Resampler, SampleSource};
 
     struct Sine {
@@ -295,5 +296,28 @@ mod tests {
         );
         assert_eq!(resampler.buffered(), 100 * 48000 / 44100);
         assert_eq!(resampler.pop_sample(), None);
+    }
+
+    #[test]
+    fn converter_48k_to_44100_produces_expected_count() {
+        let config = AudioPipelineConfig::default();
+        let from = config.audio_format();
+        let to = AudioFormat::new(2, 44100);
+        let device_block = 2 * config.frames();
+        let mut converter: FormatConverter<StreamResampler> =
+            FormatConverter::new(from, to, device_block, device_block * 16);
+        let mut total = 0;
+        for _ in 0..40 {
+            assert_eq!(converter.feed(vec![0.5; config.block_samples()]), 0);
+            while let Some(block) = converter.take_block() {
+                total += block.len();
+            }
+        }
+        total += converter.pending_samples();
+        let expected = 40 * config.block_samples() * 44100 / 48000;
+        assert!(
+            total.abs_diff(expected) <= device_block,
+            "total={total} expected={expected}"
+        );
     }
 }

@@ -24,7 +24,7 @@ use crate::{
         cpal_registry::default_input_device,
         input::{InputManager, start_input},
         mixer::format_audio_interval,
-        output::{AudioOutput, OutputHandle, start_output},
+        output::{OutputHandle, OutputManager, start_output},
         stream_errors,
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
@@ -54,7 +54,7 @@ pub struct ConnectionManager {
     socket: VeqSocket,
     cancellation_token: CancellationToken,
     user_action_tx: mpsc::UnboundedSender<UserInputEvent>,
-    _audio_output: Option<AudioOutput>,
+    _audio_output: Option<OutputHandle>,
 }
 
 #[derive(Clone)]
@@ -62,6 +62,7 @@ struct SharedAudio {
     hub: Arc<AudioInputHub<EncodedChunk>>,
     handle: OutputHandle,
     input: InputManager,
+    output: OutputManager,
 }
 
 impl ConnectionManager {
@@ -282,7 +283,7 @@ fn manage_peers(
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     mut user_action_rx: mpsc::UnboundedReceiver<UserInputEvent>,
     cancellation_token: CancellationToken,
-) -> (mpsc::UnboundedSender<AugmentedInfo>, AudioOutput) {
+) -> (mpsc::UnboundedSender<AugmentedInfo>, OutputHandle) {
     // Channel for the manage_peers task to receive updated peers info.
     let (conn_info_tx, mut conn_info_rx) = mpsc::unbounded_channel::<AugmentedInfo>();
 
@@ -300,24 +301,27 @@ fn manage_peers(
             .expect("could not set input device name");
     }
 
-    let output = start_output(audio_config);
+    let (output_manager, output) = start_output(audio_config);
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
-            .send(AppEvent::SetOutputDeviceName(output.handle.name.clone()))
+            .send(AppEvent::SetOutputDeviceName(
+                output_manager.current().name.clone(),
+            ))
             .expect("could not set output device name");
     }
     let audio = SharedAudio {
         hub: hub.clone(),
-        handle: output.handle.clone(),
+        handle: output.clone(),
         input,
+        output: output_manager,
     };
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
             "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES}",
-            metrics_audio.handle.format.channel_count,
-            metrics_audio.handle.format.sample_rate,
+            metrics_audio.output.current().format.channel_count,
+            metrics_audio.output.current().format.sample_rate,
         );
         let mut prev = metrics_audio
             .handle
@@ -410,7 +414,7 @@ fn manage_peers(
                     }
                 },
                 Some(user_action) = user_action_rx.recv() => {
-                    if let Err(e) = handle_user_action(user_action, hub.clone(), &audio.input, app_event_tx.clone(), &mut managed_peers).await {
+                    if let Err(e) = handle_user_action(user_action, hub.clone(), &audio.input, &audio.output, app_event_tx.clone(), &mut managed_peers).await {
                         log::debug!("Failed to handle user action: {:?}", e);
                     }
                 }
@@ -484,6 +488,7 @@ async fn handle_user_action(
     user_action: UserInputEvent,
     hub: Arc<AudioInputHub<EncodedChunk>>,
     input: &InputManager,
+    output: &OutputManager,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {
@@ -537,6 +542,18 @@ async fn handle_user_action(
             }
             Err(e) => {
                 log::warn!("Failed to switch input device: {e:?}");
+            }
+        },
+        UserInputEvent::SetOutputDevice(id) => match output.switch_to(&id) {
+            Ok(name) => {
+                if let Some(app_event_tx) = app_event_tx
+                    && let Err(e) = app_event_tx.send(AppEvent::SetOutputDeviceName(name))
+                {
+                    log::debug!("Failed to send output device name event: {e:?}");
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to switch output device: {e:?}");
             }
         },
     }
