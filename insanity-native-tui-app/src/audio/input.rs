@@ -1,0 +1,151 @@
+use std::sync::Arc;
+
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::device::AudioDevice;
+use rubato_audio_source::RubatoResampler;
+use tokio::sync::{mpsc, watch};
+
+use super::cpal_registry::{CpalAudioDevice, find_input_by_id};
+use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
+use crate::switching_chunk_source::{SilenceChunkSource, SwitchingChunkSource};
+
+pub enum InputChunkSource {
+    Real(Box<SampleChunker<RubatoResampler<CpalStreamReceiver>>>),
+    Silence(SilenceChunkSource),
+}
+
+impl ChunkSource for InputChunkSource {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        match self {
+            Self::Real(source) => source.next_chunk().await,
+            Self::Silence(source) => source.next_chunk().await,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selection {
+    FollowDefault,
+    Explicit(String),
+}
+
+#[derive(Clone)]
+pub struct InputInfo {
+    pub name: String,
+    pub stats: Arc<InputStats>,
+    pub selection: Selection,
+}
+
+#[derive(Clone)]
+pub struct InputManager {
+    switch_tx: mpsc::UnboundedSender<InputChunkSource>,
+    info: watch::Sender<InputInfo>,
+    config: AudioPipelineConfig,
+}
+
+impl InputManager {
+    pub fn current(&self) -> InputInfo {
+        self.info.borrow().clone()
+    }
+
+    pub fn switch_to(&self, id: &str) -> anyhow::Result<String> {
+        let Some(device) = find_input_by_id(id) else {
+            return Err(anyhow::anyhow!("Unknown input device id: {id}"));
+        };
+        let (source, name, stats) = build_real(device, self.config)?;
+        self.switch_tx
+            .send(source)
+            .map_err(|_| anyhow::anyhow!("Input loop is gone"))?;
+        self.info.send_replace(InputInfo {
+            name: name.clone(),
+            stats,
+            selection: Selection::Explicit(id.to_owned()),
+        });
+        Ok(name)
+    }
+}
+
+pub fn start_input(
+    initial: Option<CpalAudioDevice>,
+    config: AudioPipelineConfig,
+) -> (InputManager, SwitchingChunkSource<InputChunkSource>) {
+    let (source, name, stats) = match initial {
+        Some(device) => match build_real(device, config) {
+            Ok(built) => built,
+            Err(e) => {
+                log::warn!("Failed to open default input, falling back to silence: {e:?}");
+                build_silence(config)
+            }
+        },
+        None => build_silence(config),
+    };
+    let (info, _) = watch::channel(InputInfo {
+        name,
+        stats,
+        selection: Selection::FollowDefault,
+    });
+    let switching = SwitchingChunkSource::new(source);
+    let manager = InputManager {
+        switch_tx: switching.switcher(),
+        info,
+        config,
+    };
+    (manager, switching)
+}
+
+fn build_real(
+    device: CpalAudioDevice,
+    config: AudioPipelineConfig,
+) -> anyhow::Result<(InputChunkSource, String, Arc<InputStats>)> {
+    let name = device.name();
+    let receiver = make_single_input(device.0, config)?;
+    let stats = receiver.stats();
+    let resampled = RubatoResampler::new(receiver, config.sample_rate(), config.frames());
+    let chunked = SampleChunker::new(resampled, config.frames());
+    Ok((InputChunkSource::Real(Box::new(chunked)), name, stats))
+}
+
+fn build_silence(config: AudioPipelineConfig) -> (InputChunkSource, String, Arc<InputStats>) {
+    let format = AudioFormat::new(config.channels(), config.sample_rate());
+    let source = SilenceChunkSource::new(format, config.frames());
+    (
+        InputChunkSource::Silence(source),
+        "No input device".to_owned(),
+        Arc::new(InputStats::default()),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Selection, start_input};
+    use insanity_core::audio::AudioFormat;
+    use insanity_core::audio::chunk::ChunkSource;
+    use insanity_core::audio::config::AudioPipelineConfig;
+
+    #[tokio::test]
+    async fn silence_initial_matches_pipeline_format() {
+        let config = AudioPipelineConfig::default();
+        let (_, mut switching) = start_input(None, config);
+        let chunk = switching.next_chunk().await.unwrap();
+        assert_eq!(
+            chunk.audio_data,
+            vec![0.0; config.frames() * usize::from(config.channels())]
+        );
+        assert_eq!(
+            chunk.format,
+            AudioFormat::new(config.channels(), config.sample_rate())
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_id_switch_errors_and_source_undisturbed() {
+        let config = AudioPipelineConfig::default();
+        let (manager, mut switching) = start_input(None, config);
+        assert!(manager.switch_to("no-such-device").is_err());
+        assert_eq!(manager.current().selection, Selection::FollowDefault);
+        let chunk = switching.next_chunk().await.unwrap();
+        assert!(chunk.audio_data.iter().all(|s| *s == 0.0));
+    }
+}

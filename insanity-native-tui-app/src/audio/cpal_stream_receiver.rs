@@ -14,7 +14,6 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
 
 use super::config::get_input_config;
-use super::cpal_registry::{default_input_device, device_name};
 use super::output::RING_CAPACITY_BLOCKS;
 
 #[derive(Default)]
@@ -62,21 +61,9 @@ pub struct CpalStreamReceiver {
     wake: Arc<tokio::sync::Notify>,
     stats: Arc<InputStats>,
     format: AudioFormat,
-    name: String,
 }
 
 impl CpalStreamReceiver {
-    pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
-        let Some(device) = default_input_device() else {
-            return Err(anyhow!("No default device available"));
-        };
-        make_single_input(device.0, audio_config)
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     pub fn stats(&self) -> Arc<InputStats> {
         Arc::clone(&self.stats)
     }
@@ -132,7 +119,6 @@ pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let name = device_name(&device);
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
         return Err(anyhow!(
             "Failed to get input config falling back to silence"
@@ -174,7 +160,6 @@ pub fn make_single_input(
         wake,
         stats,
         format,
-        name,
     })
 }
 

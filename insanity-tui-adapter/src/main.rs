@@ -88,6 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 UserInputEvent::SendMessage(_message) => {}
                 UserInputEvent::SetMuteSelf(_) => todo!(),
+                UserInputEvent::SetInputDevice(_) => {}
             }
         }
     });

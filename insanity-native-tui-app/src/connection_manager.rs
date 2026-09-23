@@ -21,17 +21,16 @@ use crate::{
     audio::{
         codec::rebuild_opus_encoder,
         config::AUDIO_CALLBACK_FRAMES,
-        cpal_stream_receiver::{CpalStreamReceiver, InputStats},
+        cpal_registry::default_input_device,
+        input::{InputManager, start_input},
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, start_output},
         stream_errors,
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
-use insanity_core::audio::chunk::SampleChunker;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
-use rubato_audio_source::RubatoResampler;
 use veq::snow_types::SnowPublicKey;
 
 const AUDIO_METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
@@ -63,7 +62,7 @@ struct SharedAudio {
     hub: Arc<AudioInputHub<EncodedChunk>>,
     handle: OutputHandle,
     audio_config: AudioPipelineConfig,
-    input_stats: Arc<InputStats>,
+    input: InputManager,
 }
 
 impl ConnectionManager {
@@ -290,19 +289,15 @@ fn manage_peers(
 
     // single input hub and single output mixer
     let audio_config = AudioPipelineConfig::default();
-    let source = CpalStreamReceiver::default(audio_config).unwrap();
-    let source_name = source.name().to_owned();
-    let input_stats = source.stats();
-    let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-    let chunked = SampleChunker::new(resampled, audio_config.frames());
+    let (input, switching) = start_input(default_input_device(), audio_config);
     let hub = Arc::new(AudioInputHub::from_chunk_source(
-        chunked,
+        switching,
         audio_config,
         rebuild_opus_encoder,
     ));
     if let Some(app_event_tx) = &app_event_tx {
         app_event_tx
-            .send(AppEvent::SetInputDeviceName(source_name))
+            .send(AppEvent::SetInputDeviceName(input.current().name))
             .expect("could not set input device name");
     }
 
@@ -316,7 +311,7 @@ fn manage_peers(
         hub: hub.clone(),
         handle: output.handle.clone(),
         audio_config,
-        input_stats,
+        input,
     };
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
@@ -338,7 +333,7 @@ fn manage_peers(
         let mut prev_overruns = metrics_audio.handle.stats.overruns();
         let mut prev_input_errors = stream_errors::input_errors();
         let mut prev_output_errors = stream_errors::output_errors();
-        let mut prev_input_overruns = metrics_audio.input_stats.overruns();
+        let mut prev_input_overruns = metrics_audio.input.current().stats.overruns();
         let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
@@ -378,7 +373,7 @@ fn manage_peers(
                     }
                     prev_input_errors = input_errors;
                     prev_output_errors = output_errors;
-                    let input_overruns = metrics_audio.input_stats.overruns();
+                    let input_overruns = metrics_audio.input.current().stats.overruns();
                     let new_overruns = input_overruns.saturating_sub(prev_input_overruns);
                     if new_overruns > 0 {
                         log::warn!(
@@ -417,7 +412,7 @@ fn manage_peers(
                     }
                 },
                 Some(user_action) = user_action_rx.recv() => {
-                    if let Err(e) = handle_user_action(user_action, hub.clone(), app_event_tx.clone(), &mut managed_peers).await {
+                    if let Err(e) = handle_user_action(user_action, hub.clone(), &audio.input, app_event_tx.clone(), &mut managed_peers).await {
                         log::debug!("Failed to handle user action: {:?}", e);
                     }
                 }
@@ -492,6 +487,7 @@ fn update_peer_info(
 async fn handle_user_action(
     user_action: UserInputEvent,
     hub: Arc<AudioInputHub<EncodedChunk>>,
+    input: &InputManager,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {
@@ -535,6 +531,18 @@ async fn handle_user_action(
                 log::debug!("Failed to send mute self event: {:?}", e);
             }
         }
+        UserInputEvent::SetInputDevice(id) => match input.switch_to(&id) {
+            Ok(name) => {
+                if let Some(app_event_tx) = app_event_tx
+                    && let Err(e) = app_event_tx.send(AppEvent::SetInputDeviceName(name))
+                {
+                    log::debug!("Failed to send input device name event: {:?}", e);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to switch input device: {e:?}");
+            }
+        },
     }
     Ok(())
 }
