@@ -7,15 +7,20 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::FormatConverter;
 use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::Mixer;
+use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
-use rtrb::{Consumer, RingBuffer};
+use rtrb::{Consumer, Producer, RingBuffer};
+use rubato_audio_source::StreamResampler;
 use tokio::sync::mpsc;
 
 use super::config::get_output_config;
 use super::cpal_registry::{default_output_device, device_name};
-use super::mixer::{MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, run_mixer_owner};
+use super::mixer::{
+    AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, TARGET_RING_BLOCKS, demand_sleep,
+};
 
 // Output mixer
 
@@ -120,16 +125,20 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
         || UNKNOWN_DEVICE_NAME.into(),
         |(device, _, _)| device_name(device),
     );
-    let format = output.as_ref().map_or_else(
-        || AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
+    let device_format = output.as_ref().map_or_else(
+        || audio_config.audio_format(),
         |(_, _, config)| AudioFormat::new(config.channels, config.sample_rate),
     );
+    let logical = audio_config.audio_format();
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mixer = Mixer::new(format.clone(), audio_config, bus);
+    let mixer = Mixer::new(logical, audio_config, bus);
     let timing = Arc::new(FillStats::new());
     let stats = Arc::new(OutputStats::new());
-    assert!(format.channel_count > 0, "output channel_count must be > 0");
-    let block_samples = format.channel_count as usize * audio_config.frames();
+    assert!(
+        device_format.channel_count > 0,
+        "output channel_count must be > 0"
+    );
+    let block_samples = device_format.channel_count as usize * audio_config.frames();
     let (producer, consumer) = RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
     let callback_timing = timing.clone();
     let callback_stats = stats.clone();
@@ -171,14 +180,14 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     };
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
     let task_stats = stats.clone();
-    let task_format = format.clone();
+    let task_format = device_format.clone();
     tokio::spawn(async move {
-        run_mixer_owner(
+        run_output_owner(
             mixer,
             producer,
             task_stats,
             op_rx,
-            block_samples,
+            audio_config,
             task_format,
         )
         .await
@@ -190,11 +199,112 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
                 dropped: Arc::new(AtomicUsize::new(0)),
             },
             timing,
-            format,
+            format: device_format,
             stats,
             name,
         },
         _guard: OutputGuard { _stream: stream },
+    }
+}
+
+async fn run_output_owner(
+    mut mixer: AppMixer,
+    mut ring: Producer<f32>,
+    stats: Arc<OutputStats>,
+    mut rx: mpsc::Receiver<MixerOp>,
+    audio_config: AudioPipelineConfig,
+    device_format: AudioFormat,
+) {
+    let logical_format = audio_config.audio_format();
+    let logical_block = usize::from(logical_format.channel_count) * audio_config.frames();
+    let device_block = usize::from(device_format.channel_count) * audio_config.frames();
+    assert!(logical_block > 0, "logical block must be > 0");
+    assert!(device_block > 0, "device block must be > 0");
+    assert!(
+        device_format.sample_rate > 0,
+        "device sample_rate must be > 0"
+    );
+    let capacity_samples = device_block * RING_CAPACITY_BLOCKS;
+    let target_samples = device_block * TARGET_RING_BLOCKS;
+    let mut converter: FormatConverter<StreamResampler> = FormatConverter::new(
+        logical_format,
+        device_format.clone(),
+        device_block,
+        capacity_samples,
+    );
+    let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
+    let mut sleep = std::time::Duration::ZERO;
+    loop {
+        tokio::select! {
+            biased;
+            count = rx.recv_many(&mut batch, MIXER_OPS_BOUND) => {
+                if count == 0 {
+                    break;
+                }
+            }
+            _ = tokio::time::sleep(sleep) => {}
+        }
+        let mut slot_replies = Vec::new();
+        let mut snapshot_replies = Vec::new();
+        for op in batch.drain(..) {
+            match op {
+                MixerOp::Push { slot, chunk } => {
+                    mixer.push_to_slot(slot, chunk);
+                }
+                MixerOp::Subscribe(request) => {
+                    let slot =
+                        mixer.subscribe(request.transform, request.decoder, request.resampler);
+                    slot_replies.push((request.reply, slot));
+                }
+                MixerOp::Unsubscribe(slot) => mixer.unsubscribe(slot),
+                MixerOp::Snapshot(reply) => {
+                    snapshot_replies.push((reply, (mixer.metrics_snapshot(), mixer.peer_count())));
+                }
+            }
+        }
+        for (reply, slot) in slot_replies {
+            let _ = reply.send(slot);
+        }
+        for (reply, snapshot) in snapshot_replies {
+            let _ = reply.send(snapshot);
+        }
+        let ring_needs = capacity_samples.saturating_sub(ring.slots()) < target_samples
+            && ring.slots() >= device_block;
+        if ring_needs && converter.pending_samples() < device_block {
+            let mut logical = Vec::with_capacity(logical_block);
+            logical.extend((0..logical_block).map(|_| mixer.next_sync().unwrap_or(0.0)));
+            let dropped = converter.feed(logical);
+            if dropped > 0 {
+                stats.note_overrun(dropped);
+            }
+        }
+        for _ in 0..TARGET_RING_BLOCKS {
+            if capacity_samples.saturating_sub(ring.slots()) >= target_samples {
+                break;
+            }
+            if ring.slots() < device_block {
+                break;
+            }
+            let Some(block) = converter.take_block() else {
+                break;
+            };
+            match ring.write_chunk_uninit(device_block) {
+                Ok(chunk) => {
+                    chunk.fill_from_iter(block);
+                }
+                Err(_) => {
+                    stats.note_overrun(device_block);
+                    break;
+                }
+            }
+        }
+        sleep = demand_sleep(
+            capacity_samples,
+            ring.slots(),
+            device_block,
+            usize::from(device_format.channel_count),
+            device_format.sample_rate,
+        );
     }
 }
 
@@ -270,4 +380,35 @@ where
             None,
         )
         .map_err(|e| anyhow::anyhow!("build output stream: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FormatConverter;
+    use insanity_core::audio::AudioFormat;
+    use insanity_core::audio::config::AudioPipelineConfig;
+    use rubato_audio_source::StreamResampler;
+
+    #[test]
+    fn resample_48k_to_44100_produces_expected_count() {
+        let config = AudioPipelineConfig::default();
+        let from = config.audio_format();
+        let to = AudioFormat::new(2, 44100);
+        let device_block = 2 * config.frames();
+        let mut converter: FormatConverter<StreamResampler> =
+            FormatConverter::new(from, to, device_block, device_block * 16);
+        let mut total = 0;
+        for _ in 0..40 {
+            assert_eq!(converter.feed(vec![0.5; config.block_samples()]), 0);
+            while let Some(block) = converter.take_block() {
+                total += block.len();
+            }
+        }
+        total += converter.pending_samples();
+        let expected = 40 * config.block_samples() * 44100 / 48000;
+        assert!(
+            total.abs_diff(expected) <= device_block,
+            "total={total} expected={expected}"
+        );
+    }
 }

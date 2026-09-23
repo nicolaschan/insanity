@@ -8,20 +8,17 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
-use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{
     ChunkTransform, Denoise, DenoiseControl, Gain, GainControl, Link, MetricsReader, MetricsState,
 };
 #[cfg(feature = "denoise-passthrough")]
 use insanity_core::audio::transform::{Hysteresis, PassthroughGate, RmsDetector};
 use insanity_core::user_input_event::DenoiseSelection;
-use rtrb::Producer;
 use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, oneshot};
 
 use super::codec::OpusDecoder;
 use super::denoise::NnnoiselessDenoiser;
-use super::output::{OutputStats, RING_CAPACITY_BLOCKS};
 
 pub const MAX_VOLUME: usize = 500;
 #[cfg(any(feature = "encode-silence", feature = "denoise-passthrough"))]
@@ -203,91 +200,6 @@ pub fn format_audio_interval(
         ring_underruns,
         ring_overruns,
     )
-}
-
-pub(crate) async fn run_mixer_owner(
-    mut mixer: AppMixer,
-    mut ring: Producer<f32>,
-    stats: Arc<OutputStats>,
-    mut rx: mpsc::Receiver<MixerOp>,
-    block_samples: usize,
-    out_format: AudioFormat,
-) {
-    assert!(block_samples > 0, "block_samples must be > 0");
-    assert!(out_format.channel_count > 0, "channel_count must be > 0");
-    assert!(out_format.sample_rate > 0, "sample_rate must be > 0");
-    let capacity_samples = block_samples * RING_CAPACITY_BLOCKS;
-    let target_samples = block_samples * TARGET_RING_BLOCKS;
-    let channels = usize::from(out_format.channel_count);
-    let sample_rate = out_format.sample_rate;
-    let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
-    let mut sleep = Duration::ZERO;
-    loop {
-        tokio::select! {
-            biased;
-            count = rx.recv_many(&mut batch, MIXER_OPS_BOUND) => {
-                if count == 0 {
-                    break;
-                }
-            }
-            _ = tokio::time::sleep(sleep) => {}
-        }
-        let mut slot_replies = Vec::new();
-        let mut snapshot_replies = Vec::new();
-        for op in batch.drain(..) {
-            match op {
-                MixerOp::Push { slot, chunk } => {
-                    mixer.push_to_slot(slot, chunk);
-                }
-                MixerOp::Subscribe(request) => {
-                    let SubscribeRequest {
-                        transform,
-                        decoder,
-                        resampler,
-                        reply,
-                    } = *request;
-                    let slot = mixer.subscribe(transform, decoder, resampler);
-                    slot_replies.push((reply, slot));
-                }
-                MixerOp::Unsubscribe(slot) => mixer.unsubscribe(slot),
-                MixerOp::Snapshot(reply) => {
-                    snapshot_replies.push((reply, (mixer.metrics_snapshot(), mixer.peer_count())));
-                }
-            }
-        }
-        for (reply, slot) in slot_replies {
-            let _ = reply.send(slot);
-        }
-        for (reply, snapshot) in snapshot_replies {
-            let _ = reply.send(snapshot);
-        }
-        for _ in 0..TARGET_RING_BLOCKS {
-            if capacity_samples.saturating_sub(ring.slots()) >= target_samples {
-                break;
-            }
-            if ring.slots() < block_samples {
-                break;
-            }
-            match ring.write_chunk_uninit(block_samples) {
-                Ok(chunk) => {
-                    chunk.fill_from_iter(
-                        (0..block_samples).map(|_| mixer.next_sync().unwrap_or(0.0)),
-                    );
-                }
-                Err(_) => {
-                    stats.note_overrun(block_samples);
-                    break;
-                }
-            }
-        }
-        sleep = demand_sleep(
-            capacity_samples,
-            ring.slots(),
-            block_samples,
-            channels,
-            sample_rate,
-        );
-    }
 }
 
 #[cfg(test)]
