@@ -84,9 +84,16 @@ pub struct ResampledSource<S: SampleSource, R: Resampler> {
     drained: bool,
 }
 
-impl<S: SampleSource + Send, R: Resampler> ResampledSource<S, R> {
-    pub fn new(delegate: S, resampler: R, target_rate: u32) -> Self {
-        let out_format = AudioFormat::new(delegate.format().channel_count, target_rate);
+impl<S: SampleSource + Send, R: Resampler + From<ResamplerSpec>> ResampledSource<S, R> {
+    pub fn new(delegate: S, target_rate: u32, chunk_frames: usize) -> Self {
+        let source = delegate.format().clone();
+        let out_format = AudioFormat::new(source.channel_count, target_rate);
+        let resampler = R::from(ResamplerSpec {
+            source_rate: source.sample_rate,
+            source_channels: usize::from(source.channel_count),
+            target_rate,
+            block_frames: chunk_frames,
+        });
         Self {
             delegate,
             resampler,
@@ -94,7 +101,9 @@ impl<S: SampleSource + Send, R: Resampler> ResampledSource<S, R> {
             drained: false,
         }
     }
+}
 
+impl<S: SampleSource + Send, R: Resampler> ResampledSource<S, R> {
     fn drive(&mut self, input: Option<f32>) -> Option<f32> {
         match input {
             Some(sample) => {
@@ -164,17 +173,6 @@ mod tests {
         ready: VecDeque<f32>,
     }
 
-    impl ModelPump {
-        fn new(channels: usize, div: usize) -> Self {
-            ModelPump {
-                channels,
-                div,
-                staging: VecDeque::new(),
-                ready: VecDeque::new(),
-            }
-        }
-    }
-
     impl Resampler for ModelPump {
         fn push_sample(&mut self, sample: f32) {
             self.staging.push_back(sample);
@@ -197,7 +195,12 @@ mod tests {
     impl From<ResamplerSpec> for ModelPump {
         fn from(spec: ResamplerSpec) -> Self {
             let div = spec.source_rate / spec.target_rate.max(1);
-            ModelPump::new(spec.source_channels, div.max(1) as usize)
+            ModelPump {
+                channels: spec.source_channels,
+                div: div.max(1) as usize,
+                staging: VecDeque::new(),
+                ready: VecDeque::new(),
+            }
         }
     }
 
@@ -308,8 +311,8 @@ mod tests {
     #[test]
     fn resampled_source_emits_processed_output_at_end_of_stream() {
         let delegate = VecSource::new(1, 48000, vec![1.0, 2.0, 3.0, 4.0]);
-        let mut source = ResampledSource::new(delegate, ModelPump::new(1, 2), 48000);
-        assert_eq!(source.format(), &AudioFormat::new(1, 48000));
+        let mut source: ResampledSource<_, ModelPump> = ResampledSource::new(delegate, 24000, 480);
+        assert_eq!(source.format(), &AudioFormat::new(1, 24000));
         let out = crate::audio::chunk::tests::block_on(async {
             let mut v = Vec::new();
             while let Some(s) = source.next().await {
@@ -323,18 +326,15 @@ mod tests {
     #[test]
     fn resampled_source_derives_channels_from_delegate() {
         let delegate = VecSource::new(2, 44100, vec![1.0, 2.0]);
-        let source = ResampledSource::new(delegate, ModelPump::new(2, 1), 48000);
+        let source: ResampledSource<_, ModelPump> = ResampledSource::new(delegate, 48000, 480);
         assert_eq!(source.format(), &AudioFormat::new(2, 48000));
     }
 
     #[test]
     fn resampled_source_sync_matches_async() {
         let data = vec![4.0, 5.0, 6.0, 7.0];
-        let mut async_source = ResampledSource::new(
-            VecSource::new(1, 48000, data.clone()),
-            ModelPump::new(1, 1),
-            48000,
-        );
+        let mut async_source: ResampledSource<_, ModelPump> =
+            ResampledSource::new(VecSource::new(1, 48000, data.clone()), 48000, 480);
         let async_out = crate::audio::chunk::tests::block_on(async {
             let mut v = Vec::new();
             while let Some(s) = async_source.next().await {
@@ -342,8 +342,8 @@ mod tests {
             }
             v
         });
-        let mut sync_source =
-            ResampledSource::new(VecSource::new(1, 48000, data), ModelPump::new(1, 1), 48000);
+        let mut sync_source: ResampledSource<_, ModelPump> =
+            ResampledSource::new(VecSource::new(1, 48000, data), 48000, 480);
         let mut sync_out = Vec::new();
         while let Some(s) = sync_source.next_sync() {
             sync_out.push(s);

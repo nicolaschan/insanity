@@ -1,4 +1,5 @@
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::ResampledSource;
 use insanity_core::audio::jitter::JitterBuffer;
 use insanity_core::audio::transform::volume_multiplier;
 use insanity_core::audio::{
@@ -6,7 +7,7 @@ use insanity_core::audio::{
     sample::{SampleSource, SyncSampleSource},
 };
 use insanity_core::loudness::calculate_loudness;
-use rubato_audio_source::RubatoResampler;
+use rubato_audio_source::StreamResampler;
 
 // keep tests simple
 
@@ -104,7 +105,8 @@ fn resampler_passthrough() {
         pos: 0,
     };
     let audio_config = AudioPipelineConfig::default();
-    let mut res = RubatoResampler::new(src, 48000, audio_config.frames());
+    let mut res: ResampledSource<_, StreamResampler> =
+        ResampledSource::new(src, 48000, audio_config.frames());
     // passthrough should be identical
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

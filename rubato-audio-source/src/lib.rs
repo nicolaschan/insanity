@@ -2,22 +2,11 @@ use std::collections::VecDeque;
 
 use insanity_core::audio::{
     AudioFormat,
-    sample::{Resampler, SampleSource, SyncSampleSource},
+    sample::{Resampler, ResamplerSpec},
     sample_ops::{interleave_channels, split_channels},
 };
-use log::{error, trace};
+use log::error;
 use rubato::{Resampler as RubatoResamplerTrait, SincFixedIn};
-
-pub struct RubatoResampler<R: SampleSource> {
-    resampler: Option<SincFixedIn<f32>>,
-    resampled_buffer: VecDeque<f32>,
-    original_samples_buffer: VecDeque<f32>,
-    delegate: R,
-    source_format: AudioFormat,
-    out_format: AudioFormat,
-    target_rate: u32,
-    chunk_size: usize,
-}
 
 fn sinc_params() -> rubato::InterpolationParameters {
     rubato::InterpolationParameters {
@@ -26,131 +15,6 @@ fn sinc_params() -> rubato::InterpolationParameters {
         interpolation: rubato::InterpolationType::Linear,
         oversampling_factor: 256,
         window: rubato::WindowFunction::BlackmanHarris2,
-    }
-}
-
-impl<R: SampleSource + Send> RubatoResampler<R> {
-    pub fn new(delegate: R, target_rate: u32, chunk_size: usize) -> RubatoResampler<R> {
-        let source_format = delegate.format().clone();
-        let out_format = AudioFormat::new(source_format.channel_count, target_rate);
-        let resampler = build_sinc(
-            source_format.sample_rate,
-            source_format.channel_count as usize,
-            target_rate,
-            chunk_size,
-        );
-        RubatoResampler {
-            resampler,
-            resampled_buffer: VecDeque::new(),
-            original_samples_buffer: VecDeque::new(),
-            delegate,
-            source_format,
-            out_format,
-            target_rate,
-            chunk_size,
-        }
-    }
-
-    async fn pull_async(&mut self) -> Option<()> {
-        for _ in 0..self.missing_samples() {
-            let next_sample = self.delegate.next().await?;
-            self.original_samples_buffer.push_back(next_sample);
-        }
-        Some(())
-    }
-}
-
-impl<R: SampleSource> RubatoResampler<R> {
-    fn target_samples_count(&self) -> usize {
-        self.chunk_size * self.source_format.channel_count as usize
-    }
-
-    fn missing_samples(&self) -> usize {
-        self.target_samples_count()
-            .saturating_sub(self.original_samples_buffer.len())
-    }
-
-    fn is_passthrough(&self) -> bool {
-        self.source_format.sample_rate == self.target_rate
-    }
-
-    fn take_buffered(&mut self) -> Option<f32> {
-        self.resampled_buffer.pop_front()
-    }
-
-    fn pull_sync(&mut self) -> Option<()>
-    where
-        R: SyncSampleSource,
-    {
-        for _ in 0..self.missing_samples() {
-            let next_sample = self.delegate.next_sync()?;
-            self.original_samples_buffer.push_back(next_sample);
-        }
-        Some(())
-    }
-
-    fn resample_staged(&mut self) -> Option<f32> {
-        trace!(
-            "Number of samples in original buffer: {}",
-            self.original_samples_buffer.len()
-        );
-        let samples = self.original_samples_buffer.drain(..).collect::<Vec<f32>>();
-        let channels = self.source_format.channel_count as usize;
-        let Some(resampler) = self.resampler.as_mut() else {
-            self.resampled_buffer = samples.into();
-            return self.resampled_buffer.pop_front();
-        };
-        let split = split_channels(&samples, channels);
-        trace!("Separated into {} channels", split.len());
-        let Ok(resampled_channels) = resampler.process(&split) else {
-            error!("Resampler failed, passing chunk through unprocessed");
-            self.resampled_buffer = samples.into();
-            return self.resampled_buffer.pop_front();
-        };
-        self.resampled_buffer = interleave_channels(&resampled_channels).into();
-        self.resampled_buffer.pop_front()
-    }
-}
-
-impl<R: SampleSource + Send> SampleSource for RubatoResampler<R> {
-    fn format(&self) -> &AudioFormat {
-        &self.out_format
-    }
-
-    async fn next(&mut self) -> Option<f32> {
-        if self.is_passthrough() {
-            return self.delegate.next().await;
-        }
-        if self.resampled_buffer.is_empty() {
-            trace!(
-                "Audio chunk size: {}, channels: {}, target samples count: {}",
-                self.chunk_size,
-                self.source_format.channel_count,
-                self.target_samples_count()
-            );
-            self.pull_async().await?;
-            return self.resample_staged();
-        }
-        self.take_buffered()
-    }
-}
-
-impl<R: SyncSampleSource + Send> SyncSampleSource for RubatoResampler<R> {
-    fn next_sync(&mut self) -> Option<f32> {
-        if self.is_passthrough() {
-            return self.delegate.next_sync();
-        }
-        if self.resampled_buffer.is_empty() {
-            trace!(
-                "Audio chunk size: {}, channels: {}, target samples count: {}",
-                self.chunk_size,
-                self.source_format.channel_count,
-                self.target_samples_count()
-            );
-            self.pull_sync()?;
-            return self.resample_staged();
-        }
-        self.take_buffered()
     }
 }
 
@@ -285,11 +149,22 @@ impl Resampler for StreamResampler {
     }
 }
 
+impl From<ResamplerSpec> for StreamResampler {
+    fn from(spec: ResamplerSpec) -> Self {
+        StreamResampler::new(
+            AudioFormat::new(spec.source_channels as u16, spec.source_rate),
+            spec.target_rate,
+            spec.block_frames,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RubatoResampler, StreamResampler};
+    use super::StreamResampler;
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
+    use insanity_core::audio::converter::ResampledSource;
     use insanity_core::audio::sample::{Resampler, SampleSource};
 
     struct Sine {
@@ -312,15 +187,13 @@ mod tests {
 
     #[tokio::test]
     async fn resampled_device_path_yields_exact_opus_frames() {
-        let resampled = RubatoResampler::new(
-            Sine {
-                format: AudioFormat::new(2, 44100),
-                freq: 440.0,
-                index: 0,
-            },
-            48000,
-            480,
-        );
+        let delegate = Sine {
+            format: AudioFormat::new(2, 44100),
+            freq: 440.0,
+            index: 0,
+        };
+        let resampled: ResampledSource<_, StreamResampler> =
+            ResampledSource::new(delegate, 48000, 480);
         let target = AudioFormat::new(2, 48000);
         let mut chunker = SampleChunker::new(resampled, 480);
         let mut total = 0usize;

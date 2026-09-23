@@ -3,8 +3,9 @@ use std::sync::Arc;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::ResampledSource;
 use insanity_core::audio::device::AudioDevice;
-use rubato_audio_source::RubatoResampler;
+use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, watch};
 
 use super::cpal_registry::{CpalAudioDevice, find_input_by_id};
@@ -12,7 +13,7 @@ use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_in
 use crate::switching_chunk_source::{SilenceChunkSource, SwitchingChunkSource};
 
 pub enum InputChunkSource {
-    Real(Box<SampleChunker<RubatoResampler<CpalStreamReceiver>>>),
+    Real(Box<SampleChunker<ResampledSource<CpalStreamReceiver, StreamResampler>>>),
     Silence(SilenceChunkSource),
 }
 
@@ -102,7 +103,7 @@ fn build_real(
     let name = device.name();
     let receiver = make_single_input(device.0, config)?;
     let stats = receiver.stats();
-    let resampled = RubatoResampler::new(receiver, config.sample_rate(), config.frames());
+    let resampled = ResampledSource::new(receiver, config.sample_rate(), config.frames());
     let chunked = SampleChunker::new(resampled, config.frames());
     Ok((InputChunkSource::Real(Box::new(chunked)), name, stats))
 }

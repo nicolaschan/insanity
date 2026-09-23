@@ -3,6 +3,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::ResampledSource;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::Gain;
@@ -10,7 +11,7 @@ use insanity_native_tui_app::audio::codec::rebuild_opus_encoder;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::mixer::{AppMixer, MAX_VOLUME};
 use opus::{Channels, Decoder};
-use rubato_audio_source::RubatoResampler;
+use rubato_audio_source::StreamResampler;
 
 pub struct SineSource {
     phase: f32,
@@ -93,7 +94,8 @@ where
     S: SampleSource + Send + Sync + 'static,
 {
     let audio_config = AudioPipelineConfig::default();
-    let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
+    let resampled: ResampledSource<_, StreamResampler> =
+        ResampledSource::new(source, audio_config.sample_rate(), audio_config.frames());
     let chunked = SampleChunker::new(resampled, audio_config.frames());
     let paced = Paced::new(chunked, audio_config.chunk_period());
     AudioInputHub::from_chunk_source(paced, audio_config, rebuild_opus_encoder)
