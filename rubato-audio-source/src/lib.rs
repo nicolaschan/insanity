@@ -127,26 +127,6 @@ impl Resampler for StreamResampler {
             self.pending_in.len() as u64 * self.target_rate as u64 / self.source_rate as u64;
         self.pending_out.len() + estimate as usize
     }
-
-    fn reset(&mut self) {
-        self.pending_in.clear();
-        self.pending_out.clear();
-    }
-
-    fn reconfigure(
-        &mut self,
-        source_rate: u32,
-        source_channels: usize,
-        target_rate: u32,
-        block_frames: usize,
-    ) {
-        self.resampler = build_sinc(source_rate, source_channels, target_rate, block_frames);
-        self.reset();
-        self.source_channels = source_channels;
-        self.source_rate = source_rate;
-        self.target_rate = target_rate;
-        self.block_frames = block_frames;
-    }
 }
 
 impl From<ResamplerSpec> for StreamResampler {
@@ -315,29 +295,5 @@ mod tests {
         );
         assert_eq!(resampler.buffered(), 100 * 48000 / 44100);
         assert_eq!(resampler.pop_sample(), None);
-    }
-
-    #[test]
-    fn reset_discards_pending() {
-        let mut resampler = StreamResampler::new(AudioFormat::new(2, 44100), 48000, 480);
-        push_all(
-            &mut resampler,
-            AudioChunk::new(0, AudioFormat::new(2, 44100), vec![0.4; 100]),
-        );
-        resampler.reset();
-        assert_eq!(resampler.buffered(), 0);
-        assert_eq!(resampler.pop_sample(), None);
-    }
-
-    #[test]
-    fn reconfigure_retunes_ratio() {
-        let mut resampler = StreamResampler::new(AudioFormat::new(2, 44100), 48000, 480);
-        resampler.reconfigure(48000, 2, 48000, 480);
-        let data: Vec<f32> = (0..960).map(|v| v as f32).collect();
-        push_all(
-            &mut resampler,
-            AudioChunk::new(0, AudioFormat::new(2, 48000), data.clone()),
-        );
-        assert_eq!(drain(&mut resampler), data);
     }
 }
