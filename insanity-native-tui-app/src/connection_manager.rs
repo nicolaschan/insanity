@@ -61,7 +61,6 @@ pub struct ConnectionManager {
 struct SharedAudio {
     hub: Arc<AudioInputHub<EncodedChunk>>,
     handle: OutputHandle,
-    audio_config: AudioPipelineConfig,
     input: InputManager,
 }
 
@@ -310,7 +309,6 @@ fn manage_peers(
     let audio = SharedAudio {
         hub: hub.clone(),
         handle: output.handle.clone(),
-        audio_config,
         input,
     };
     let metrics_audio = audio.clone();
@@ -473,8 +471,6 @@ fn update_peer_info(
                 .display_name(new_info.display_name)
                 .denoise(DenoiseSelection::default())
                 .volume(100)
-                .out_format(audio.audio_config.audio_format())
-                .audio_config(audio.audio_config)
                 .hub(audio.hub)
                 .client(audio.handle.client.clone())
                 .build();

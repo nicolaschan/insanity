@@ -11,25 +11,20 @@ use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::FormatConverter;
 use insanity_core::audio::jitter::JitterBuffer;
-use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::audio::transform::ChunkTransform;
-use insanity_core::audio::transform::Gain;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::codec::OpusEncoder;
-use insanity_native_tui_app::audio::mixer::{
-    MAX_VOLUME, PeerControls, chain_from_controls, output_resampler,
-};
 use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
 use opus::{Channels, Decoder};
+use rubato_audio_source::StreamResampler;
 use sine::{SineSource, decode_frame_to_chunk, hub_from_source};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use unit_mixer::{
-    UnitMixer, add_unit_peer, push_chunk, push_value, rebuild_passthrough, render, unit_mixer,
-};
+use unit_mixer::{add_unit_peer, push_value, unit_mixer};
 
 struct ChirpSource {
     n: u64,
@@ -206,42 +201,35 @@ async fn non48k_input_resample_loopback() {
 }
 
 #[test]
-fn resampled_output_fill_budget() {
+fn converter_48k_to_44100_fill_budget() {
     let audio_config = AudioPipelineConfig::default();
-    let out_format = AudioFormat::new(2, 44100);
-    let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mut mixer: UnitMixer = Mixer::new(out_format.clone(), audio_config, bus);
-    let controls = PeerControls::new(100, DenoiseSelection::None);
-    let chain = chain_from_controls(&controls);
-    let id = mixer.subscribe(
-        chain,
-        rebuild_passthrough,
-        output_resampler(out_format, audio_config),
-    );
-    let push = |mixer: &mut UnitMixer, seq: u128| {
-        push_chunk(
-            mixer,
-            id,
-            AudioChunk::new(seq, AudioFormat::new(2, 48000), vec![0.4; 960]),
-        );
-    };
-    for seq in 0..3u128 {
-        push(&mut mixer, seq);
+    let from = audio_config.audio_format();
+    let to = AudioFormat::new(2, 44100);
+    let device_block = 2 * audio_config.frames();
+    let mut converter: FormatConverter<StreamResampler> =
+        FormatConverter::new(from, to, device_block, device_block * 16);
+    for _ in 0..3 {
+        assert_eq!(converter.feed(vec![0.4; audio_config.block_samples()]), 0);
     }
+    let mut total = 0;
     let start = std::time::Instant::now();
-    for seq in 3..13u128 {
-        let out = render(&mut mixer, 960);
-        for s in out.iter() {
-            assert!(s.is_finite());
-            assert!(s.abs() <= 1.0 + 1e-6);
+    for _ in 0..10 {
+        assert_eq!(converter.feed(vec![0.4; audio_config.block_samples()]), 0);
+        while let Some(block) = converter.take_block() {
+            for s in block.iter() {
+                assert!(s.is_finite());
+                assert!(s.abs() <= 1.0 + 1e-6);
+            }
+            total += block.len();
         }
-        push(&mut mixer, seq);
     }
     let elapsed = start.elapsed();
-    let snap = mixer.metrics_snapshot();
-    assert_eq!(
-        snap.underrun, 0,
-        "prefilled resampled mixer must not underrun: {snap:?}"
+    total += converter.pending_samples();
+    let fed = 13 * audio_config.block_samples();
+    let expected = fed * 44100 / 48000;
+    assert!(
+        total.abs_diff(expected) <= device_block,
+        "total={total} expected={expected}"
     );
     let realtime_nanos = 960 / 2 * 1_000_000_000 / 44_100;
     let avg_nanos = elapsed.as_nanos() as u64 / 10;

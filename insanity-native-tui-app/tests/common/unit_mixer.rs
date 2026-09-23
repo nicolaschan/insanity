@@ -8,9 +8,8 @@ use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{ChunkTransform, Gain, GainControl};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
-    MAX_VOLUME, PeerChain, PeerControls, chain_from_controls, output_resampler,
+    MAX_VOLUME, PeerChain, PeerControls, chain_from_controls,
 };
-use rubato_audio_source::StreamResampler;
 use std::sync::Arc;
 
 pub struct PassthroughEncoder;
@@ -56,13 +55,8 @@ impl AudioDecoder for PassthroughDecoder {
     }
 }
 
-pub type UnitMixer = Mixer<
-    PassthroughDecoder,
-    PeerChain,
-    StreamResampler,
-    Gain,
-    fn(&AudioFormat) -> Option<PassthroughDecoder>,
->;
+pub type UnitMixer =
+    Mixer<PassthroughDecoder, PeerChain, Gain, fn(&AudioFormat) -> Option<PassthroughDecoder>>;
 
 pub fn rebuild_passthrough(_: &AudioFormat) -> Option<PassthroughDecoder> {
     Some(PassthroughDecoder)
@@ -89,17 +83,9 @@ pub fn unit_mixer_with_jitter(
 }
 
 pub fn add_unit_peer(mixer: &mut UnitMixer, volume: usize, denoise: DenoiseSelection) -> SlotId {
-    let audio_config = AudioPipelineConfig::default();
     let controls = PeerControls::new(volume, denoise);
     let chain = chain_from_controls(&controls);
-    mixer.subscribe(
-        chain,
-        rebuild_passthrough,
-        output_resampler(
-            AudioFormat::new(2, audio_config.sample_rate()),
-            audio_config,
-        ),
-    )
+    mixer.subscribe(chain, rebuild_passthrough)
 }
 
 pub fn push_chunk(mixer: &mut UnitMixer, slot: SlotId, chunk: AudioChunk) {

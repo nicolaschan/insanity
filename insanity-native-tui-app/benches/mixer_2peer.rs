@@ -7,7 +7,6 @@ use insanity_core::audio::sample::Resampler;
 use insanity_core::audio::transform::{ChunkTransform, Gain};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
-use insanity_native_tui_app::audio::mixer as app_mixer;
 use insanity_native_tui_app::audio::mixer::{MAX_VOLUME, PeerControls, chain_from_controls};
 use rubato_audio_source::StreamResampler;
 use std::hint::black_box;
@@ -104,26 +103,6 @@ fn bench_gain_shared(c: &mut Criterion) {
     });
 }
 
-fn bench_output_resampler_new(c: &mut Criterion) {
-    let config = AudioPipelineConfig::default();
-    c.bench_function("output_resampler_new", |b| {
-        b.iter(|| {
-            black_box(app_mixer::output_resampler(
-                AudioFormat::new(2, config.sample_rate()),
-                config,
-            ));
-        });
-    });
-    c.bench_function("output_resampler_new_48k_to_44100", |b| {
-        b.iter(|| {
-            black_box(app_mixer::output_resampler(
-                AudioFormat::new(2, 44100),
-                config,
-            ));
-        });
-    });
-}
-
 fn bench_stream_resampler_push_pop(c: &mut Criterion) {
     let config = AudioPipelineConfig::default();
     c.bench_function("resampler_push_pop_960", |b| {
@@ -214,7 +193,6 @@ criterion_group!(
     bench_mixer_idle,
     bench_real_chain_construction,
     bench_gain_shared,
-    bench_output_resampler_new,
     bench_stream_resampler_push_pop,
     bench_peerchain_transform
 );

@@ -252,8 +252,7 @@ async fn run_output_owner(
                     mixer.push_to_slot(slot, chunk);
                 }
                 MixerOp::Subscribe(request) => {
-                    let slot =
-                        mixer.subscribe(request.transform, request.decoder, request.resampler);
+                    let slot = mixer.subscribe(request.transform, request.decoder);
                     slot_replies.push((request.reply, slot));
                 }
                 MixerOp::Unsubscribe(slot) => mixer.unsubscribe(slot),

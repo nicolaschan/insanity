@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::audio::AudioFormat;
 use crate::audio::chunk::AudioChunk;
 use crate::audio::codec::{AudioDecoder, EncodedChunk, FormatCache};
-use crate::audio::sample::{Resampler, SampleSource, SyncSampleSource};
+use crate::audio::sample::{SampleSource, SyncSampleSource};
 use crate::audio::transform::{ChannelMap, ChunkTransform, Clip, JitterStage};
 
 use crate::audio::config::AudioPipelineConfig;
@@ -131,40 +131,28 @@ impl Conceal {
     }
 }
 
-pub struct InputSlot<D, T, R, FD>
+pub struct InputSlot<D, T, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform<OutputT = AudioChunk>,
-    R: Resampler,
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
     decoder: ChunkDecoder<D, FD>,
     channel_map: ChannelMap,
     transform: T,
     jitter: JitterStage,
-    resampler: R,
     conceal: Conceal,
-    target_rate: u32,
-    block_frames: usize,
 }
 
-impl<D, T, R, FD> InputSlot<D, T, R, FD>
+impl<D, T, FD> InputSlot<D, T, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform<OutputT = AudioChunk>,
-    R: Resampler,
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
     fn push_frame(&mut self, frame: EncodedChunk) {
         if self.decoder.format() != Some(&frame.format) {
             self.jitter.reset();
-            self.resampler.reset();
-            self.resampler.reconfigure(
-                frame.format.sample_rate,
-                frame.format.channel_count as usize,
-                self.target_rate,
-                self.block_frames,
-            );
             self.conceal.reset_audio();
         }
         let Some(decoded) = self.decoder.decode_frame(&frame) else {
@@ -176,30 +164,27 @@ where
     }
 }
 
-impl<D, T, R, FD> InputSlot<D, T, R, FD>
+impl<D, T, FD> InputSlot<D, T, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform<OutputT = AudioChunk>,
-    R: Resampler,
     FD: FnMut(&AudioFormat) -> Option<D>,
 {
     pub fn reset_stream(&mut self) {
         self.decoder.reset();
         self.jitter.reset();
-        self.resampler.reset();
         self.conceal.reset_audio();
     }
 }
 
-pub struct Mixer<D, T, R, M, FD>
+pub struct Mixer<D, T, M, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform<OutputT = AudioChunk>,
-    R: Resampler,
     M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
-    slots: HashMap<SlotId, InputSlot<D, T, R, FD>>,
+    slots: HashMap<SlotId, InputSlot<D, T, FD>>,
     bus: M,
     clip: Clip,
     pending: VecDeque<f32>,
@@ -212,11 +197,10 @@ where
     next_id: u32,
 }
 
-impl<D, T, R, M, FD> Mixer<D, T, R, M, FD>
+impl<D, T, M, FD> Mixer<D, T, M, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform<OutputT = AudioChunk>,
-    R: Resampler,
     M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
@@ -240,7 +224,7 @@ where
         }
     }
 
-    pub fn subscribe(&mut self, transform: T, rebuild: FD, resampler: R) -> SlotId {
+    pub fn subscribe(&mut self, transform: T, rebuild: FD) -> SlotId {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1);
         let slot = InputSlot {
@@ -248,13 +232,10 @@ where
             channel_map: ChannelMap::new(self.out_format.channel_count),
             transform,
             jitter: JitterStage::new(self.jitter_chunks),
-            resampler,
             conceal: Conceal::with_channels(
                 self.out_format.channel_count as usize,
                 self.out_frames,
             ),
-            target_rate: self.out_format.sample_rate,
-            block_frames: self.out_frames,
         };
         let id = SlotId(id);
         self.slots.insert(id, slot);
@@ -274,6 +255,10 @@ where
             self.stale_dropped += 1;
             return false;
         };
+        if frame.format.sample_rate != self.out_format.sample_rate {
+            self.stale_dropped += 1;
+            return false;
+        }
         slot.push_frame(frame);
         true
     }
@@ -282,7 +267,7 @@ where
         self.slots.remove(&id);
     }
 
-    pub fn input_mut(&mut self, id: SlotId) -> Option<&mut InputSlot<D, T, R, FD>> {
+    pub fn input_mut(&mut self, id: SlotId) -> Option<&mut InputSlot<D, T, FD>> {
         self.slots.get_mut(&id)
     }
 
@@ -307,19 +292,19 @@ where
         metrics
     }
 
-    fn pump_slot(slot: &mut InputSlot<D, T, R, FD>, needed: usize, mixed: &mut [f32]) {
-        while slot.resampler.buffered() < needed {
+    fn pump_slot(slot: &mut InputSlot<D, T, FD>, needed: usize, mixed: &mut [f32]) {
+        let mut staged = Vec::with_capacity(needed);
+        while staged.len() < needed {
             let Some(ordered) = slot.jitter.pull() else {
                 break;
             };
-            ordered
-                .audio_data
-                .into_iter()
-                .for_each(|sample| slot.resampler.push_sample(sample));
+            staged.extend(ordered.audio_data);
         }
+        debug_assert!(staged.len() <= needed);
+        let mut staged = staged.into_iter();
         mixed
             .iter_mut()
-            .for_each(|sample| *sample += slot.conceal.next(slot.resampler.pop_sample()));
+            .for_each(|sample| *sample += slot.conceal.next(staged.next()));
     }
 
     fn refill(&mut self) {
@@ -338,11 +323,10 @@ where
     }
 }
 
-impl<D, T, R, M, FD> SampleSource for Mixer<D, T, R, M, FD>
+impl<D, T, M, FD> SampleSource for Mixer<D, T, M, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform<OutputT = AudioChunk>,
-    R: Resampler,
     M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
@@ -355,11 +339,10 @@ where
     }
 }
 
-impl<D, T, R, M, FD> SyncSampleSource for Mixer<D, T, R, M, FD>
+impl<D, T, M, FD> SyncSampleSource for Mixer<D, T, M, FD>
 where
     D: AudioDecoder,
     T: ChunkTransform<OutputT = AudioChunk>,
-    R: Resampler,
     M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
@@ -381,9 +364,8 @@ mod tests {
     use crate::audio::chunk::AudioChunk;
     use crate::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
     use crate::audio::config::AudioPipelineConfig;
-    use crate::audio::sample::{Resampler, SyncSampleSource};
+    use crate::audio::sample::SyncSampleSource;
     use crate::audio::transform::{ChunkTransform, Gain, JitterStage};
-    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct TagDecoder {
@@ -402,32 +384,8 @@ mod tests {
         }
     }
 
-    struct ScriptedResampler {
-        buffer: VecDeque<f32>,
-    }
-
-    impl Resampler for ScriptedResampler {
-        fn push_sample(&mut self, sample: f32) {
-            self.buffer.push_back(sample);
-        }
-
-        fn pop_sample(&mut self) -> Option<f32> {
-            self.buffer.pop_front()
-        }
-
-        fn buffered(&self) -> usize {
-            self.buffer.len()
-        }
-    }
-
     fn rebuild(_: &AudioFormat) -> Option<TagDecoder> {
         Some(TagDecoder { frames: 480 })
-    }
-
-    fn script() -> ScriptedResampler {
-        ScriptedResampler {
-            buffer: VecDeque::new(),
-        }
     }
 
     fn out_format() -> AudioFormat {
@@ -443,11 +401,10 @@ mod tests {
         }
     }
 
-    fn push<D, T, R, M, FD>(mixer: &mut Mixer<D, T, R, M, FD>, id: SlotId, frame: EncodedChunk)
+    fn push<D, T, M, FD>(mixer: &mut Mixer<D, T, M, FD>, id: SlotId, frame: EncodedChunk)
     where
         D: AudioDecoder,
         T: ChunkTransform<OutputT = AudioChunk>,
-        R: Resampler,
         M: ChunkTransform<OutputT = AudioChunk>,
         FD: FnMut(&AudioFormat) -> Option<D> + Send,
     {
@@ -457,11 +414,10 @@ mod tests {
             .push_frame(frame);
     }
 
-    fn pull<D, T, R, M, FD>(mixer: &mut Mixer<D, T, R, M, FD>, count: usize) -> Vec<f32>
+    fn pull<D, T, M, FD>(mixer: &mut Mixer<D, T, M, FD>, count: usize) -> Vec<f32>
     where
         D: AudioDecoder,
         T: ChunkTransform<OutputT = AudioChunk>,
-        R: Resampler,
         M: ChunkTransform<OutputT = AudioChunk>,
         FD: FnMut(&AudioFormat) -> Option<D> + Send,
     {
@@ -475,13 +431,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "out_format.channel_count must be > 0")]
     fn zero_channel_output_format_rejected() {
-        let _ = Mixer::<
-            TagDecoder,
-            (),
-            ScriptedResampler,
-            (),
-            fn(&AudioFormat) -> Option<TagDecoder>,
-        >::new(
+        let _ = Mixer::<TagDecoder, (), (), fn(&AudioFormat) -> Option<TagDecoder>>::new(
             AudioFormat::new(0, 48000),
             AudioPipelineConfig::default(),
             (),
@@ -491,7 +441,7 @@ mod tests {
     #[test]
     fn pushes_flow_to_output_in_order() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         let out = pull(&mut mixer, 960);
         assert!(out.iter().all(|sample| *sample == 0.0));
@@ -505,7 +455,7 @@ mod tests {
     #[test]
     fn mixer_input_trait_routes_push() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         assert!(mixer.push_to_slot(id, frame(2)));
         assert!(!mixer.push_to_slot(SlotId(99), frame(2)));
         let out = pull(&mut mixer, 960);
@@ -515,7 +465,7 @@ mod tests {
     #[test]
     fn buffered_future_chunk_releases_on_next_push() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         push(&mut mixer, id, frame(2));
         let out = pull(&mut mixer, 960);
@@ -531,7 +481,7 @@ mod tests {
     #[test]
     fn refill_releases_only_what_the_block_needs() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         push(&mut mixer, id, frame(1));
         let _ = pull(&mut mixer, 100);
@@ -542,7 +492,7 @@ mod tests {
     #[test]
     fn duplicate_seq_counts_late_drop() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         let _ = pull(&mut mixer, 960);
         push(&mut mixer, id, frame(0));
@@ -552,7 +502,7 @@ mod tests {
     #[test]
     fn virgin_nonzero_seq_counts_gap_but_plays() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(5));
         assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
         let out = pull(&mut mixer, 960);
@@ -562,7 +512,7 @@ mod tests {
     #[test]
     fn starvation_holds_last_sample_then_fades() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(1));
         let _ = pull(&mut mixer, 960);
         let held = pull(&mut mixer, 1);
@@ -601,16 +551,16 @@ mod tests {
     #[test]
     fn two_peers_sum_and_clip() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let first = mixer.subscribe((), rebuild, script());
-        let second = mixer.subscribe((), rebuild, script());
+        let first = mixer.subscribe((), rebuild);
+        let second = mixer.subscribe((), rebuild);
         push(&mut mixer, first, frame(4));
         push(&mut mixer, second, frame(4));
         let out = pull(&mut mixer, 960);
         assert!(out.iter().all(|sample| *sample == 0.8));
         mixer.unsubscribe(first);
         mixer.unsubscribe(second);
-        let first = mixer.subscribe((), rebuild, script());
-        let second = mixer.subscribe((), rebuild, script());
+        let first = mixer.subscribe((), rebuild);
+        let second = mixer.subscribe((), rebuild);
         push(&mut mixer, first, frame(9));
         push(&mut mixer, second, frame(9));
         let out = pull(&mut mixer, 960);
@@ -622,7 +572,7 @@ mod tests {
     fn per_peer_transform_selects_processing() {
         let (gain, _) = Gain::shared(0, 500);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe(gain, rebuild, script());
+        let id = mixer.subscribe(gain, rebuild);
         push(&mut mixer, id, frame(5));
         let out = pull(&mut mixer, 960);
         assert!(out.iter().all(|sample| *sample == 0.0));
@@ -632,7 +582,7 @@ mod tests {
     fn bus_transform_applies_to_mix() {
         let (gain, _) = Gain::shared(0, 500);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(5));
         let out = pull(&mut mixer, 960);
         assert!(out.iter().all(|sample| *sample == 0.0));
@@ -641,7 +591,7 @@ mod tests {
     #[test]
     fn unsubscribe_stops_peer() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         assert_eq!(mixer.peer_count(), 1);
         mixer.unsubscribe(id);
         assert_eq!(mixer.peer_count(), 0);
@@ -705,24 +655,21 @@ mod tests {
     }
 
     #[test]
-    fn input_slot_runs_config_on_push() {
+    fn input_slot_stages_decoded_audio_on_push() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         let slot = mixer.input_mut(id).expect("slot");
         slot.push_frame(frame(3));
         let ordered = slot.jitter.pull().expect("ordered chunk");
         assert_eq!(ordered.sequence_number, 3);
-        for sample in ordered.audio_data {
-            slot.resampler.push_sample(sample);
-        }
-        assert_eq!(slot.resampler.pop_sample(), Some(0.3));
+        assert!(ordered.audio_data.iter().all(|sample| *sample == 0.3));
     }
 
     #[test]
     fn bus_gain_overshoot_caught_by_terminal_clip() {
         let (gain, _) = Gain::shared(200, 500);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(9));
         let out = pull(&mut mixer, 960);
         assert!(out.iter().all(|sample| *sample == 1.0));
@@ -732,7 +679,7 @@ mod tests {
     #[test]
     fn reset_input_replays_fresh_stream_on_same_slot() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         for seq in 0..10u128 {
             push(&mut mixer, id, frame(seq));
         }
@@ -749,9 +696,23 @@ mod tests {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
         assert!(!mixer.push_to_slot(SlotId(7), frame(0)));
         assert_eq!(mixer.metrics_snapshot().stale_dropped, 1);
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         assert!(mixer.push_to_slot(id, frame(0)));
         assert_eq!(mixer.metrics_snapshot().stale_dropped, 1);
+    }
+
+    #[test]
+    fn rate_mismatched_frame_dropped_and_counted() {
+        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let id = mixer.subscribe((), rebuild);
+        let mut foreign = frame(0);
+        foreign.format = AudioFormat::new(2, 24000);
+        assert!(!mixer.push_to_slot(id, foreign));
+        assert_eq!(mixer.metrics_snapshot().stale_dropped, 1);
+        push(&mut mixer, id, frame(0));
+        let out = pull(&mut mixer, 960);
+        assert!(out.iter().all(|sample| *sample == 0.0));
+        assert_eq!(mixer.metrics_snapshot().fills, 1);
     }
 
     #[test]
@@ -759,7 +720,7 @@ mod tests {
         use crate::audio::transform::Mute;
         let (mute, control) = Mute::shared(true);
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), mute);
-        let id = mixer.subscribe((), rebuild, script());
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(3));
         let out = pull(&mut mixer, 960);
         assert!(out.iter().all(|sample| *sample == 0.0));
@@ -781,48 +742,15 @@ mod tests {
     }
 
     #[test]
-    fn format_change_reconfigures_and_plays() {
-        struct CountingResampler {
-            buffer: VecDeque<f32>,
-            reconfigures: usize,
-        }
-        impl Resampler for CountingResampler {
-            fn push_sample(&mut self, sample: f32) {
-                self.buffer.push_back(sample);
-            }
-            fn pop_sample(&mut self) -> Option<f32> {
-                self.buffer.pop_front()
-            }
-            fn buffered(&self) -> usize {
-                self.buffer.len()
-            }
-            fn reset(&mut self) {
-                self.buffer.clear();
-            }
-            fn reconfigure(
-                &mut self,
-                _source_rate: u32,
-                _source_channels: usize,
-                _target_rate: u32,
-                _block_frames: usize,
-            ) {
-                self.reconfigures += 1;
-            }
-        }
+    fn format_change_resets_and_plays() {
         let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
-        let id = mixer.subscribe(
-            (),
-            rebuild,
-            CountingResampler {
-                buffer: VecDeque::new(),
-                reconfigures: 0,
-            },
-        );
+        let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         let mut mono = frame(1);
         mono.format = AudioFormat::new(1, 48000);
         push(&mut mixer, id, mono);
-        let slot = mixer.input_mut(id).expect("slot");
-        assert_eq!(slot.resampler.reconfigures, 2);
+        let out = pull(&mut mixer, 960);
+        assert!(out.iter().all(|sample| sample.is_finite()));
+        assert_eq!(mixer.metrics_snapshot().fills, 1);
     }
 }

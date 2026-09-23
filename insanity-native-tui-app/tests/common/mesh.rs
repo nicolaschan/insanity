@@ -8,7 +8,7 @@ use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::mixer::{
-    AppMixer, PeerControls, chain_from_controls, output_resampler, rebuild_opus_decoder,
+    AppMixer, PeerControls, chain_from_controls, rebuild_opus_decoder,
 };
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use opus::Decoder;
@@ -93,17 +93,9 @@ impl VirtualNode {
         peer_name: &str,
         denoise: DenoiseSelection,
     ) -> PeerControls {
-        let audio_config = AudioPipelineConfig::default();
         let controls = PeerControls::new(100, denoise);
         let chain = chain_from_controls(&controls);
-        let slot = self.mixer.subscribe(
-            chain,
-            rebuild_opus_decoder,
-            output_resampler(
-                AudioFormat::new(2, audio_config.sample_rate()),
-                audio_config,
-            ),
-        );
+        let slot = self.mixer.subscribe(chain, rebuild_opus_decoder);
         self.peer_ids.insert(peer_name.to_string(), slot);
         self.peer_controls
             .insert(peer_name.to_string(), controls.clone());
