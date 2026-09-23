@@ -1,3 +1,5 @@
+use super::AudioFormat;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioPipelineConfig {
     sample_rate: u32,
@@ -84,11 +86,16 @@ impl AudioPipelineConfig {
         debug_assert!(self.frames > 0);
         self.channels as usize * self.frames
     }
+
+    pub fn audio_format(&self) -> AudioFormat {
+        AudioFormat::new(self.channels, self.sample_rate)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::AudioPipelineConfig;
+    use crate::audio::AudioFormat;
 
     #[test]
     fn default_pins_current_behavior() {
@@ -97,6 +104,7 @@ mod tests {
         assert_eq!(audio_config.channels(), 2);
         assert_eq!(audio_config.frames(), 480);
         assert_eq!(audio_config.jitter_chunks(), 10);
+        assert_eq!(audio_config.audio_format(), AudioFormat::new(2, 48000));
         assert_eq!(
             audio_config.chunk_period(),
             std::time::Duration::from_millis(10)
