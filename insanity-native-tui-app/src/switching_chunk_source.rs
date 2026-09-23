@@ -2,10 +2,15 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+pub struct SwapRequest<T> {
+    pub payload: T,
+    pub on_adopt: Box<dyn FnOnce() + Send>,
+}
+
 pub struct SwitchingChunkSource<T> {
     source: Option<T>,
-    swap_tx: UnboundedSender<T>,
-    swap_rx: UnboundedReceiver<T>,
+    swap_tx: UnboundedSender<SwapRequest<T>>,
+    swap_rx: UnboundedReceiver<SwapRequest<T>>,
     next_seq: u128,
 }
 
@@ -20,7 +25,7 @@ impl<T: ChunkSource + Send> SwitchingChunkSource<T> {
         }
     }
 
-    pub fn switcher(&self) -> UnboundedSender<T> {
+    pub fn switcher(&self) -> UnboundedSender<SwapRequest<T>> {
         self.swap_tx.clone()
     }
 }
@@ -29,13 +34,25 @@ impl<T: ChunkSource + Send> ChunkSource for SwitchingChunkSource<T> {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         loop {
             let Some(source) = self.source.as_mut() else {
-                self.source = self.swap_rx.recv().await;
+                match self.swap_rx.recv().await {
+                    Some(request) => {
+                        self.source = Some(request.payload);
+                        (request.on_adopt)();
+                    }
+                    None => self.source = None,
+                }
                 continue;
             };
             tokio::select! {
                 biased;
                 swapped = self.swap_rx.recv() => {
-                    self.source = swapped;
+                    match swapped {
+                        Some(request) => {
+                            self.source = Some(request.payload);
+                            (request.on_adopt)();
+                        }
+                        None => self.source = None,
+                    }
                 }
                 chunk = source.next_chunk() => match chunk {
                     Some(mut c) => {
@@ -80,7 +97,7 @@ impl ChunkSource for SilenceChunkSource {
 mod tests {
     use std::time::Duration;
 
-    use super::{SilenceChunkSource, SwitchingChunkSource};
+    use super::{SilenceChunkSource, SwapRequest, SwitchingChunkSource};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 
@@ -117,7 +134,12 @@ mod tests {
         let first = source.next_chunk().await.unwrap();
         assert_eq!(first.audio_data, vec![1.0; 4]);
         assert_eq!(first.format.channel_count, 2);
-        switcher.send(Constant::new(1, 2.0, 10)).unwrap();
+        switcher
+            .send(SwapRequest {
+                payload: Constant::new(1, 2.0, 10),
+                on_adopt: Box::new(|| {}),
+            })
+            .unwrap();
         let second = source.next_chunk().await.unwrap();
         assert_eq!(second.audio_data, vec![2.0; 4]);
         assert_eq!(second.format.channel_count, 1);
@@ -130,7 +152,12 @@ mod tests {
         assert!(source.next_chunk().await.is_some());
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(20)).await;
-            switcher.send(Constant::new(2, 3.0, 1)).unwrap();
+            switcher
+                .send(SwapRequest {
+                    payload: Constant::new(2, 3.0, 1),
+                    on_adopt: Box::new(|| {}),
+                })
+                .unwrap();
         });
         let chunk = source.next_chunk().await.unwrap();
         assert_eq!(chunk.audio_data, vec![3.0; 4]);
@@ -143,7 +170,12 @@ mod tests {
         let first = source.next_chunk().await.unwrap();
         let second = source.next_chunk().await.unwrap();
         assert!(second.sequence_number > first.sequence_number);
-        switcher.send(Constant::new(1, 2.0, 10)).unwrap();
+        switcher
+            .send(SwapRequest {
+                payload: Constant::new(1, 2.0, 10),
+                on_adopt: Box::new(|| {}),
+            })
+            .unwrap();
         let third = source.next_chunk().await.unwrap();
         assert!(third.sequence_number > second.sequence_number);
     }
@@ -153,10 +185,42 @@ mod tests {
         let mut source = SwitchingChunkSource::new(Constant::new(2, 1.0, 10));
         let switcher = source.switcher();
         let _ = source.next_chunk().await.unwrap();
-        switcher.send(Constant::new(2, 2.0, 10)).unwrap();
-        switcher.send(Constant::new(2, 3.0, 10)).unwrap();
+        switcher
+            .send(SwapRequest {
+                payload: Constant::new(2, 2.0, 10),
+                on_adopt: Box::new(|| {}),
+            })
+            .unwrap();
+        switcher
+            .send(SwapRequest {
+                payload: Constant::new(2, 3.0, 10),
+                on_adopt: Box::new(|| {}),
+            })
+            .unwrap();
         let chunk = source.next_chunk().await.unwrap();
         assert_eq!(chunk.audio_data, vec![3.0; 4]);
+    }
+
+    #[tokio::test]
+    async fn adopt_hook_fires_at_adoption_not_at_send() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut source = SwitchingChunkSource::new(Constant::new(2, 1.0, 10));
+        let switcher = source.switcher();
+        let adopted = Arc::new(AtomicBool::new(false));
+        let hook_adopted = adopted.clone();
+        switcher
+            .send(SwapRequest {
+                payload: Constant::new(2, 2.0, 10),
+                on_adopt: Box::new(move || {
+                    hook_adopted.store(true, Ordering::SeqCst);
+                }),
+            })
+            .unwrap();
+        assert!(!adopted.load(Ordering::SeqCst));
+        let chunk = source.next_chunk().await.unwrap();
+        assert_eq!(chunk.audio_data, vec![2.0; 4]);
+        assert!(adopted.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::cpal_registry::{CpalAudioDevice, find_input_by_id};
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
-use crate::switching_chunk_source::{SilenceChunkSource, SwitchingChunkSource};
+use crate::switching_chunk_source::{SilenceChunkSource, SwapRequest, SwitchingChunkSource};
 
 pub enum InputChunkSource {
     Real(Box<SampleChunker<ResampledSource<CpalStreamReceiver, StreamResampler>>>),
@@ -41,7 +41,7 @@ pub struct InputInfo {
 
 #[derive(Clone)]
 pub struct InputManager {
-    switch_tx: mpsc::UnboundedSender<InputChunkSource>,
+    switch_tx: mpsc::UnboundedSender<SwapRequest<InputChunkSource>>,
     info: watch::Sender<InputInfo>,
     config: AudioPipelineConfig,
 }
@@ -56,14 +56,21 @@ impl InputManager {
             return Err(anyhow::anyhow!("Unknown input device id: {id}"));
         };
         let (source, name, stats) = build_real(device, self.config)?;
+        let info = self.info.clone();
+        let adopted_name = name.clone();
+        let selection = Selection::Explicit(id.to_owned());
         self.switch_tx
-            .send(source)
+            .send(SwapRequest {
+                payload: source,
+                on_adopt: Box::new(move || {
+                    info.send_replace(InputInfo {
+                        name: adopted_name,
+                        stats,
+                        selection,
+                    });
+                }),
+            })
             .map_err(|_| anyhow::anyhow!("Input loop is gone"))?;
-        self.info.send_replace(InputInfo {
-            name: name.clone(),
-            stats,
-            selection: Selection::Explicit(id.to_owned()),
-        });
         Ok(name)
     }
 }
@@ -120,10 +127,13 @@ fn build_silence(config: AudioPipelineConfig) -> (InputChunkSource, String, Arc<
 
 #[cfg(test)]
 mod tests {
-    use super::{Selection, start_input};
+    use super::super::cpal_stream_receiver::InputStats;
+    use super::{InputInfo, Selection, build_silence, start_input};
+    use crate::switching_chunk_source::SwapRequest;
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::ChunkSource;
     use insanity_core::audio::config::AudioPipelineConfig;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn silence_initial_matches_pipeline_format() {
@@ -148,5 +158,34 @@ mod tests {
         assert_eq!(manager.current().selection, Selection::FollowDefault);
         let chunk = switching.next_chunk().await.unwrap();
         assert!(chunk.audio_data.iter().all(|s| *s == 0.0));
+    }
+
+    #[tokio::test]
+    async fn info_updates_at_adoption_not_at_send() {
+        let config = AudioPipelineConfig::default();
+        let (manager, mut switching) = start_input(None, config);
+        assert_eq!(manager.current().selection, Selection::FollowDefault);
+        let (source, _, _) = build_silence(config);
+        let info = manager.info.clone();
+        manager
+            .switch_tx
+            .send(SwapRequest {
+                payload: source,
+                on_adopt: Box::new(move || {
+                    info.send_replace(InputInfo {
+                        name: "adopted".to_owned(),
+                        stats: Arc::new(InputStats::default()),
+                        selection: Selection::Explicit("adopted-id".to_owned()),
+                    });
+                }),
+            })
+            .unwrap();
+        assert_eq!(manager.current().selection, Selection::FollowDefault);
+        switching.next_chunk().await.unwrap();
+        assert_eq!(manager.current().name, "adopted");
+        assert_eq!(
+            manager.current().selection,
+            Selection::Explicit("adopted-id".to_owned())
+        );
     }
 }
