@@ -134,6 +134,16 @@ impl OutputManager {
         self.switch_to_sink(sink, Selection::Explicit(id.to_owned()))
     }
 
+    pub fn follow_default(&self) -> anyhow::Result<String> {
+        let sink = resolve_sink_or_silent(
+            default_output_device(),
+            self.config,
+            &self.stats,
+            &self.timing,
+        );
+        self.switch_to_sink(sink, Selection::FollowDefault)
+    }
+
     pub(crate) fn switch_to_sink(
         &self,
         sink: Sink,
@@ -329,9 +339,20 @@ impl Sink {
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> (OutputManager, OutputHandle) {
     let timing = Arc::new(FillStats::new());
     let stats = Arc::new(OutputStats::new());
+    let initial_sink =
+        resolve_sink_or_silent(default_output_device(), audio_config, &stats, &timing);
+    spawn_output(audio_config, initial_sink, stats, timing)
+}
+
+fn resolve_sink_or_silent(
+    initial: Option<CpalAudioDevice>,
+    audio_config: AudioPipelineConfig,
+    stats: &Arc<OutputStats>,
+    timing: &Arc<FillStats>,
+) -> Sink {
     let logical_format = audio_config.audio_format();
-    let initial_sink = match default_output_device() {
-        Some(device) => match build_sink(device, &logical_format, audio_config, &stats, &timing) {
+    match initial {
+        Some(device) => match build_sink(device, &logical_format, audio_config, stats, timing) {
             Ok(sink) => sink,
             Err(e) => {
                 log::warn!("Failed to open default output, falling back to dummy: {e:?}");
@@ -339,8 +360,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> (OutputManager,
             }
         },
         None => dummy_sink(audio_config),
-    };
-    spawn_output(audio_config, initial_sink, stats, timing)
+    }
 }
 
 fn spawn_output(
@@ -607,6 +627,25 @@ mod tests {
             "prefill must buffer a device block, got {}",
             consumer.slots()
         );
+    }
+
+    #[tokio::test]
+    async fn follow_default_converges_to_follow_default_selection() {
+        let config = AudioPipelineConfig::default();
+        let timing = Arc::new(FillStats::new());
+        let stats = Arc::new(OutputStats::new());
+        let (manager, _handle) =
+            spawn_output(config, dummy_sink(config), stats.clone(), timing.clone());
+        let name = manager.follow_default().expect("follow_default sends");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while manager.current().name != name {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "owner loop did not adopt follow_default"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(manager.current().selection, Selection::FollowDefault);
     }
 
     #[tokio::test]

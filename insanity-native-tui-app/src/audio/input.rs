@@ -8,7 +8,7 @@ use insanity_core::audio::device::AudioDevice;
 use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, watch};
 
-use super::cpal_registry::{CpalAudioDevice, find_input_by_id};
+use super::cpal_registry::{CpalAudioDevice, default_input_device, find_input_by_id};
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
 use crate::switching_chunk_source::{SilenceChunkSource, SwapRequest, SwitchingChunkSource};
 
@@ -56,9 +56,23 @@ impl InputManager {
             return Err(anyhow::anyhow!("Unknown input device id: {id}"));
         };
         let (source, name, stats) = build_real(device, self.config)?;
+        self.adopt(source, name, stats, Selection::Explicit(id.to_owned()))
+    }
+
+    pub fn follow_default(&self) -> anyhow::Result<String> {
+        let (source, name, stats) = resolve_source_or_silent(default_input_device(), self.config);
+        self.adopt(source, name, stats, Selection::FollowDefault)
+    }
+
+    fn adopt(
+        &self,
+        source: InputChunkSource,
+        name: String,
+        stats: Arc<InputStats>,
+        selection: Selection,
+    ) -> anyhow::Result<String> {
         let info = self.info.clone();
         let adopted_name = name.clone();
-        let selection = Selection::Explicit(id.to_owned());
         self.switch_tx
             .send(SwapRequest {
                 payload: source,
@@ -79,16 +93,7 @@ pub fn start_input(
     initial: Option<CpalAudioDevice>,
     config: AudioPipelineConfig,
 ) -> (InputManager, SwitchingChunkSource<InputChunkSource>) {
-    let (source, name, stats) = match initial {
-        Some(device) => match build_real(device, config) {
-            Ok(built) => built,
-            Err(e) => {
-                log::warn!("Failed to open default input, falling back to silence: {e:?}");
-                build_silence(config)
-            }
-        },
-        None => build_silence(config),
-    };
+    let (source, name, stats) = resolve_source_or_silent(initial, config);
     let (info, _) = watch::channel(InputInfo {
         name,
         stats,
@@ -101,6 +106,22 @@ pub fn start_input(
         config,
     };
     (manager, switching)
+}
+
+fn resolve_source_or_silent(
+    opt_device: Option<CpalAudioDevice>,
+    config: AudioPipelineConfig,
+) -> (InputChunkSource, String, Arc<InputStats>) {
+    match opt_device {
+        Some(device) => match build_real(device, config) {
+            Ok(built) => built,
+            Err(e) => {
+                log::warn!("Failed to open default input, falling back to silence: {e:?}");
+                build_silence(config)
+            }
+        },
+        None => build_silence(config),
+    }
 }
 
 fn build_real(
@@ -148,6 +169,17 @@ mod tests {
             chunk.format,
             AudioFormat::new(config.channels(), config.sample_rate())
         );
+    }
+
+    #[tokio::test]
+    async fn follow_default_converges_to_follow_default_selection() {
+        let config = AudioPipelineConfig::default();
+        let (manager, mut switching) = start_input(None, config);
+        let name = manager.follow_default().expect("follow_default sends");
+        assert_eq!(manager.current().selection, Selection::FollowDefault);
+        switching.next_chunk().await.unwrap();
+        assert_eq!(manager.current().name, name);
+        assert_eq!(manager.current().selection, Selection::FollowDefault);
     }
 
     #[tokio::test]
