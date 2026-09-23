@@ -278,6 +278,7 @@ impl ConnectionManagerBuilder {
 }
 
 /// Receive peer augmented info over channel and connect to peer.
+// TODO: this is a tentacular mess that needs to be refactored.
 fn manage_peers(
     socket: veq::veq::VeqSocket,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
@@ -392,6 +393,15 @@ fn manage_peers(
             }
         }
     });
+    let supervisor_audio = audio.clone();
+    let supervisor_event_tx = app_event_tx.clone();
+    let supervisor_token = cancellation_token.clone();
+    tokio::spawn(run_audio_device_transitioner(
+        supervisor_audio.input,
+        supervisor_audio.output,
+        supervisor_event_tx,
+        supervisor_token,
+    ));
     tokio::spawn(async move {
         let mut managed_peers: HashMap<uuid::Uuid, ManagedPeer> = HashMap::new();
         loop {
@@ -480,6 +490,64 @@ fn update_peer_info(
                 .build();
             managed_peers.insert(id, managed_peer.clone());
             Some(managed_peer)
+        }
+    }
+}
+
+async fn run_audio_device_transitioner(
+    input: InputManager,
+    output: OutputManager,
+    app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
+    cancellation_token: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            _ = stream_errors::wait_input_fatal() => {
+                react_to_input_failure(&input, &app_event_tx);
+            }
+            _ = stream_errors::wait_output_fatal() => {
+                react_to_output_failure(&output, &app_event_tx);
+            }
+            _ = cancellation_token.cancelled() => {
+                log::debug!("Audio device transitioner shutdown.");
+                break;
+            }
+        }
+    }
+}
+
+fn react_to_input_failure(
+    input: &InputManager,
+    app_event_tx: &Option<mpsc::UnboundedSender<AppEvent>>,
+) {
+    match input.follow_default() {
+        Ok(name) => {
+            if let Some(app_event_tx) = app_event_tx
+                && let Err(e) = app_event_tx.send(AppEvent::SetInputDeviceName(name))
+            {
+                log::debug!("Failed to send input device name event: {:?}", e);
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to fall back to default input: {e:?}");
+        }
+    }
+}
+
+fn react_to_output_failure(
+    output: &OutputManager,
+    app_event_tx: &Option<mpsc::UnboundedSender<AppEvent>>,
+) {
+    match output.follow_default() {
+        Ok(name) => {
+            if let Some(app_event_tx) = app_event_tx
+                && let Err(e) = app_event_tx.send(AppEvent::SetOutputDeviceName(name))
+            {
+                log::debug!("Failed to send output device name event: {:?}", e);
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to fall back to default output: {e:?}");
         }
     }
 }
@@ -598,5 +666,55 @@ fn get_or_make_keypair(db: &sled::Db) -> anyhow::Result<SnowKeypair> {
             db.insert(DB_KEY_PRIVATE_KEY, bincode::serialize(&keypair)?)?;
             Ok(keypair)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{react_to_input_failure, react_to_output_failure};
+    use crate::audio::input::{Selection, start_input};
+    use crate::audio::output::start_output;
+    use insanity_core::audio::chunk::ChunkSource;
+    use insanity_core::audio::config::AudioPipelineConfig;
+    use insanity_tui_adapter::AppEvent;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn input_reaction_falls_back_and_emits_name() {
+        let config = AudioPipelineConfig::default();
+        let (input, mut switching) = start_input(None, config);
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        react_to_input_failure(&input, &None);
+        react_to_input_failure(&input, &Some(event_tx));
+        switching.next_chunk().await.unwrap();
+        let current = input.current();
+        assert_eq!(current.selection, Selection::FollowDefault);
+        let Some(AppEvent::SetInputDeviceName(name)) = event_rx.recv().await else {
+            panic!("expected input device name emit");
+        };
+        assert_eq!(name, current.name);
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn output_reaction_falls_back_and_emits_name() {
+        let config = AudioPipelineConfig::default();
+        let (output, _handle) = start_output(config);
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        react_to_output_failure(&output, &None);
+        react_to_output_failure(&output, &Some(event_tx));
+        let Some(AppEvent::SetOutputDeviceName(name)) = event_rx.recv().await else {
+            panic!("expected output device name emit");
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while output.current().name != name {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "owner loop did not adopt fallback"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(output.current().selection, Selection::FollowDefault);
+        assert!(event_rx.try_recv().is_err());
     }
 }
