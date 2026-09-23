@@ -21,6 +21,7 @@ use super::input::Selection;
 use super::mixer::{
     AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, TARGET_RING_BLOCKS, demand_sleep,
 };
+use crate::switching_chunk_source::SwapRequest;
 
 pub struct FillStats {
     total_nanos: AtomicU64,
@@ -110,16 +111,11 @@ pub struct OutputInfo {
 
 #[derive(Clone)]
 pub struct OutputManager {
-    switch_tx: mpsc::UnboundedSender<SwitchRequest>,
+    switch_tx: mpsc::UnboundedSender<SwapRequest<Sink>>,
     info: watch::Sender<OutputInfo>,
     config: AudioPipelineConfig,
     stats: Arc<OutputStats>,
     timing: Arc<FillStats>,
-}
-
-struct SwitchRequest {
-    sink: Sink,
-    selection: Selection,
 }
 
 const MAX_PREFILL_TICKS: usize = 1024;
@@ -144,8 +140,20 @@ impl OutputManager {
         selection: Selection,
     ) -> anyhow::Result<String> {
         let name = sink.name.clone();
+        let format = sink.device_format.clone();
+        let adopted_name = name.clone();
+        let info = self.info.clone();
         self.switch_tx
-            .send(SwitchRequest { sink, selection })
+            .send(SwapRequest {
+                payload: sink,
+                on_adopt: Box::new(move || {
+                    info.send_replace(OutputInfo {
+                        name: adopted_name,
+                        format,
+                        selection,
+                    });
+                }),
+            })
             .map_err(|_| anyhow::anyhow!("Output loop is gone"))?;
         Ok(name)
     }
@@ -357,18 +365,8 @@ fn spawn_output(
         selection: Selection::FollowDefault,
     });
     let task_stats = stats.clone();
-    let task_info = info_tx.clone();
     tokio::spawn(async move {
-        run_output_owner(
-            mixer,
-            initial,
-            logical_block,
-            task_stats,
-            task_info,
-            op_rx,
-            switch_rx,
-        )
-        .await
+        run_output_owner(mixer, initial, logical_block, task_stats, op_rx, switch_rx).await
     });
     let manager = OutputManager {
         switch_tx,
@@ -393,9 +391,8 @@ async fn run_output_owner(
     mut sink: Sink,
     logical_block: usize,
     stats: Arc<OutputStats>,
-    info: watch::Sender<OutputInfo>,
     mut op_rx: mpsc::Receiver<MixerOp>,
-    mut switch_rx: mpsc::UnboundedReceiver<SwitchRequest>,
+    mut switch_rx: mpsc::UnboundedReceiver<SwapRequest<Sink>>,
 ) {
     let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
     let mut sleep = std::time::Duration::ZERO;
@@ -411,9 +408,10 @@ async fn run_output_owner(
             request = switch_rx.recv(), if switch_open => {
                 match request {
                     Some(request) => {
-                        // Replace sink with request.sink
+                        // Replace sink with request payload
+                        let SwapRequest { payload, on_adopt } = request;
                         let evicted = sink;
-                        sink = request.sink;
+                        sink = payload;
                         let mut ticks = 0;
                         while sink.buffered_samples() < sink.device_block
                             && ticks < MAX_PREFILL_TICKS
@@ -426,11 +424,7 @@ async fn run_output_owner(
                                 "Output prefill did not converge; continuing underrun-tolerant"
                             );
                         }
-                        info.send_replace(OutputInfo {
-                            name: sink.name.clone(),
-                            format: sink.device_format.clone(),
-                            selection: request.selection,
-                        });
+                        (on_adopt)();
                         // Dropping evicted sink in a separate task because dropping a send safe wrapper is weird
                         drop(tokio::task::spawn_blocking(move || drop(evicted)));
                     }
