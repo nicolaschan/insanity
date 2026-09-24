@@ -22,6 +22,7 @@ use crate::{
         codec::rebuild_opus_encoder,
         config::AUDIO_CALLBACK_FRAMES,
         cpal_registry::default_input_device,
+        cpal_registry::{list_inputs, list_outputs},
         input::{InputManager, start_input},
         mixer::format_audio_interval,
         output::{OutputHandle, OutputManager, start_output},
@@ -31,6 +32,7 @@ use crate::{
 };
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::device::AudioDevice;
 use veq::snow_types::SnowPublicKey;
 
 const AUDIO_METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
@@ -494,6 +496,23 @@ fn update_peer_info(
     }
 }
 
+fn refresh_device_events(input: &InputManager, output: &OutputManager) -> Vec<AppEvent> {
+    let inputs = list_inputs()
+        .into_iter()
+        .filter_map(|device| device.try_id().map(|id| (id, device.name())))
+        .collect();
+    let outputs = list_outputs()
+        .into_iter()
+        .filter_map(|device| device.try_id().map(|id| (id, device.name())))
+        .collect();
+    vec![
+        AppEvent::SetInputDevices(inputs),
+        AppEvent::SetOutputDevices(outputs),
+        AppEvent::SetInputDeviceName(input.current().name),
+        AppEvent::SetOutputDeviceName(output.current().name),
+    ]
+}
+
 async fn run_audio_device_transitioner(
     input: InputManager,
     output: OutputManager,
@@ -624,6 +643,15 @@ async fn handle_user_action(
                 log::warn!("Failed to switch output device: {e:?}");
             }
         },
+        UserInputEvent::RefreshDevices => {
+            if let Some(app_event_tx) = app_event_tx {
+                for event in refresh_device_events(input, output) {
+                    if let Err(e) = app_event_tx.send(event) {
+                        log::debug!("Failed to send device refresh event: {e:?}");
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -671,12 +699,17 @@ fn get_or_make_keypair(db: &sled::Db) -> anyhow::Result<SnowKeypair> {
 
 #[cfg(test)]
 mod tests {
-    use super::{react_to_input_failure, react_to_output_failure};
+    use super::{handle_user_action, react_to_input_failure, react_to_output_failure};
+    use crate::audio::codec::rebuild_opus_encoder;
+    use crate::audio::hub::AudioInputHub;
     use crate::audio::input::{Selection, start_input};
     use crate::audio::output::start_output;
     use insanity_core::audio::chunk::ChunkSource;
     use insanity_core::audio::config::AudioPipelineConfig;
+    use insanity_core::user_input_event::UserInputEvent;
     use insanity_tui_adapter::AppEvent;
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -715,6 +748,44 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         assert_eq!(output.current().selection, Selection::FollowDefault);
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn refresh_emits_lists_and_current_names() {
+        let config = AudioPipelineConfig::default();
+        let (input, switching) = start_input(None, config);
+        let (output, _handle) = start_output(config);
+        let hub = Arc::new(AudioInputHub::from_chunk_source(
+            switching,
+            config,
+            rebuild_opus_encoder,
+        ));
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let mut peers = HashMap::new();
+        handle_user_action(
+            UserInputEvent::RefreshDevices,
+            hub,
+            &input,
+            &output,
+            Some(event_tx),
+            &mut peers,
+        )
+        .await
+        .unwrap();
+        let mut names = Vec::new();
+        let mut lists = 0;
+        for _ in 0..4 {
+            match event_rx.recv().await.expect("refresh emits four events") {
+                AppEvent::SetInputDevices(_) | AppEvent::SetOutputDevices(_) => lists += 1,
+                AppEvent::SetInputDeviceName(name) => names.push(name),
+                AppEvent::SetOutputDeviceName(name) => names.push(name),
+                _ => panic!("unexpected event from refresh"),
+            }
+        }
+        assert_eq!(lists, 2);
+        assert!(names.contains(&input.current().name));
+        assert!(names.contains(&output.current().name));
         assert!(event_rx.try_recv().is_err());
     }
 }

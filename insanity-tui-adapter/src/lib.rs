@@ -127,6 +127,8 @@ pub enum AppEvent {
     Loudness(String, f64),
     SetInputDeviceName(String),
     SetOutputDeviceName(String),
+    SetInputDevices(Vec<(String, String)>),
+    SetOutputDevices(Vec<(String, String)>),
 }
 
 impl AppEvent {
@@ -420,6 +422,7 @@ impl App {
                 self.output_device_name = output_device_name;
                 true
             }
+            AppEvent::SetInputDevices(_) | AppEvent::SetOutputDevices(_) => false,
             AppEvent::Loudness(peer_id, level) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
                     let name = peer.display_name.as_ref().unwrap_or(&peer.id).clone();
@@ -948,7 +951,9 @@ mod render_scaling_tests {
             | AppEvent::SetPeerVolume(_, _)
             | AppEvent::MuteSelf(_)
             | AppEvent::SetInputDeviceName(_)
-            | AppEvent::SetOutputDeviceName(_) => false,
+            | AppEvent::SetOutputDeviceName(_)
+            | AppEvent::SetInputDevices(_)
+            | AppEvent::SetOutputDevices(_) => false,
         }
     }
 
@@ -995,6 +1000,8 @@ mod render_scaling_tests {
             AppEvent::Loudness("id".to_string(), 0.5),
             AppEvent::SetInputDeviceName("i".to_string()),
             AppEvent::SetOutputDeviceName("o".to_string()),
+            AppEvent::SetInputDevices(vec![]),
+            AppEvent::SetOutputDevices(vec![]),
         ];
         for event in &events {
             assert_eq!(

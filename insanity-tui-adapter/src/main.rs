@@ -90,6 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 UserInputEvent::SetMuteSelf(_) => todo!(),
                 UserInputEvent::SetInputDevice(_) => {}
                 UserInputEvent::SetOutputDevice(_) => {}
+                UserInputEvent::RefreshDevices => {}
             }
         }
     });

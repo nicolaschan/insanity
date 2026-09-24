@@ -8,6 +8,7 @@ pub enum UserInputEvent {
     SetMuteSelf(bool),
     SetInputDevice(String),
     SetOutputDevice(String),
+    RefreshDevices,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
