@@ -8,7 +8,7 @@ use insanity_core::audio::device::AudioDevice;
 use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, watch};
 
-use super::cpal_registry::{CpalAudioDevice, default_input_device, find_input_by_id};
+use super::cpal_registry::{CpalAudioDevice, default_input_device, find_input_by_id_name};
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
 use crate::switching_chunk_source::{SilenceChunkSource, SwapRequest, SwitchingChunkSource};
 
@@ -51,9 +51,11 @@ impl InputManager {
         self.info.borrow().clone()
     }
 
-    pub fn switch_to(&self, id: &str) -> anyhow::Result<String> {
-        let Some(device) = find_input_by_id(id) else {
-            return Err(anyhow::anyhow!("Unknown input device id: {id}"));
+    pub fn switch_to(&self, id: &str, name: &str) -> anyhow::Result<String> {
+        let Some(device) = find_input_by_id_name(id, name) else {
+            return Err(anyhow::anyhow!(
+                "Unknown input device id: {id}, name: {name}"
+            ));
         };
         let (source, name, stats) = build_real(device, self.config)?;
         self.adopt(source, name, stats, Selection::Explicit(id.to_owned()))
@@ -186,7 +188,11 @@ mod tests {
     async fn unknown_id_switch_errors_and_source_undisturbed() {
         let config = AudioPipelineConfig::default();
         let (manager, mut switching) = start_input(None, config);
-        assert!(manager.switch_to("no-such-device").is_err());
+        assert!(
+            manager
+                .switch_to("no-such-device", "No Such Device")
+                .is_err()
+        );
         assert_eq!(manager.current().selection, Selection::FollowDefault);
         let chunk = switching.next_chunk().await.unwrap();
         assert!(chunk.audio_data.iter().all(|s| *s == 0.0));

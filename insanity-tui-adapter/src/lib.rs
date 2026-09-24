@@ -36,6 +36,7 @@ pub const MOVE_UP_PEER_LIST_KEY: char = 'k';
 pub const MOVE_TOP_PEER_LIST_KEY: char = 'g';
 pub const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
 pub const MUTE_KEY: char = 'm';
+pub const REFRESH_DEVICES_KEY: char = 'r';
 
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
@@ -156,6 +157,16 @@ pub struct App {
     pub mute_self: bool,
     pub input_device_name: String,
     pub output_device_name: String,
+    pub input_devices: Vec<(String, String)>,  // (Id, Name)
+    pub output_devices: Vec<(String, String)>, // (Id, Name)
+    pub device_index: usize,                   // Over inputs then outputs.
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DeviceFocus {
+    #[default]
+    Input,
+    Output,
 }
 
 impl App {
@@ -179,6 +190,9 @@ impl App {
             mute_self: false,
             input_device_name: "".into(),
             output_device_name: "".into(),
+            input_devices: Vec::new(),
+            output_devices: Vec::new(),
+            device_index: 0,
         }
     }
 
@@ -254,14 +268,28 @@ impl App {
                     self.editor.append(c);
                     true
                 }
+                TAB_IDX_SETTINGS => match c {
+                    MOVE_DOWN_PEER_LIST_KEY => self.move_device_cursor(1),
+                    MOVE_UP_PEER_LIST_KEY => self.move_device_cursor(-1),
+                    REFRESH_DEVICES_KEY => {
+                        self.user_action_sender
+                            .send(UserInputEvent::RefreshDevices)
+                            .unwrap();
+                        false
+                    }
+                    _ => false,
+                },
                 _ => false,
             },
             AppEvent::Enter => {
-                let effective = self.tab_index == TAB_IDX_CHAT && !self.editor.is_empty();
-                if effective {
+                if self.tab_index == TAB_IDX_CHAT && !self.editor.is_empty() {
                     self.send_message();
+                    true
+                } else if self.tab_index == TAB_IDX_SETTINGS {
+                    self.select_focused_device()
+                } else {
+                    false
                 }
-                effective
             }
             AppEvent::NewMessage(sender_name, message) => {
                 self.add_message((sender_name, message));
@@ -336,18 +364,7 @@ impl App {
                 true
             }
             AppEvent::Down => match self.tab_index {
-                TAB_IDX_PEERS => {
-                    if self.peers.is_empty() {
-                        false
-                    } else {
-                        let old = self.peer_index;
-                        self.peer_index = std::cmp::min(
-                            self.peer_index.checked_add(1).unwrap_or(0),
-                            self.peers.len() - 1,
-                        );
-                        old != self.peer_index
-                    }
-                }
+                TAB_IDX_PEERS => self.move_peer(1),
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
                     self.chat_offset = self.chat_offset.saturating_sub(1);
@@ -356,23 +373,17 @@ impl App {
                     }
                     old != self.chat_offset
                 }
+                TAB_IDX_SETTINGS => self.move_device_cursor(1),
                 _ => false,
             },
             AppEvent::Up => match self.tab_index {
-                TAB_IDX_PEERS => {
-                    if self.peers.is_empty() {
-                        false
-                    } else {
-                        let old = self.peer_index;
-                        self.peer_index = self.peer_index.saturating_sub(1);
-                        old != self.peer_index
-                    }
-                }
+                TAB_IDX_PEERS => self.move_peer(-1),
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
                     old != self.chat_offset
                 }
+                TAB_IDX_SETTINGS => self.move_device_cursor(-1),
                 _ => false,
             },
             AppEvent::TogglePeer => {
@@ -422,7 +433,20 @@ impl App {
                 self.output_device_name = output_device_name;
                 true
             }
-            AppEvent::SetInputDevices(_) | AppEvent::SetOutputDevices(_) => false,
+            AppEvent::SetInputDevices(devices) => {
+                let changed = self.input_devices != devices;
+                self.input_devices = devices;
+                let total = self.input_devices.len() + self.output_devices.len();
+                let clamped = clamp_selection(&mut self.device_index, total);
+                changed || clamped
+            }
+            AppEvent::SetOutputDevices(devices) => {
+                let changed = self.output_devices != devices;
+                self.output_devices = devices;
+                let total = self.input_devices.len() + self.output_devices.len();
+                let clamped = clamp_selection(&mut self.device_index, total);
+                changed || clamped
+            }
             AppEvent::Loudness(peer_id, level) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
                     let name = peer.display_name.as_ref().unwrap_or(&peer.id).clone();
@@ -440,17 +464,50 @@ impl App {
     }
 
     fn move_peer(&mut self, delta: isize) -> bool {
-        if self.peers.is_empty() {
-            false
-        } else {
-            let old = self.peer_index;
-            self.peer_index = add_in_bounds(self.peer_index, 0, self.peers.len() - 1, delta);
-            old != self.peer_index
-        }
+        advance_selection(&mut self.peer_index, self.peers.len(), delta)
     }
 
     fn selected_peer(&self) -> Option<&Peer> {
         self.peers.values().nth(self.peer_index)
+    }
+
+    fn move_device_cursor(&mut self, delta: isize) -> bool {
+        let total = self.input_devices.len() + self.output_devices.len();
+        advance_selection(&mut self.device_index, total, delta)
+    }
+
+    pub(crate) fn device_cursor_section(&self) -> DeviceFocus {
+        if self.device_index < self.input_devices.len() || self.output_devices.is_empty() {
+            DeviceFocus::Input
+        } else {
+            DeviceFocus::Output
+        }
+    }
+
+    pub(crate) fn device_cursor_row(&self) -> usize {
+        match self.device_cursor_section() {
+            DeviceFocus::Input => self.device_index,
+            DeviceFocus::Output => self.device_index - self.input_devices.len(),
+        }
+    }
+
+    fn select_focused_device(&self) -> bool {
+        let event = match self.device_cursor_section() {
+            DeviceFocus::Input => self
+                .input_devices
+                .get(self.device_cursor_row())
+                .map(|(id, name)| UserInputEvent::SetInputDevice(id.clone(), name.clone())),
+            DeviceFocus::Output => self
+                .output_devices
+                .get(self.device_cursor_row())
+                .map(|(id, name)| UserInputEvent::SetOutputDevice(id.clone(), name.clone())),
+        };
+        if let Some(event) = event {
+            self.user_action_sender.send(event).unwrap();
+            true
+        } else {
+            false
+        }
     }
 
     fn toggle_peer(&mut self) {
@@ -706,6 +763,22 @@ pub async fn stop_tui(handle: JoinHandle<DefaultTerminal>) -> Result<(), Box<dyn
     execute!(terminal.backend_mut(), LeaveAlternateScreen).unwrap();
     terminal.show_cursor().unwrap();
     Ok(())
+}
+
+fn advance_selection(index: &mut usize, len: usize, delta: isize) -> bool {
+    if len == 0 {
+        false
+    } else {
+        let old = *index;
+        *index = add_in_bounds(*index, 0, len - 1, delta);
+        old != *index
+    }
+}
+
+fn clamp_selection(index: &mut usize, len: usize) -> bool {
+    let old = *index;
+    *index = old.min(len.saturating_sub(1));
+    old != *index
 }
 
 fn add_in_bounds(value: usize, min: usize, max: usize, delta: isize) -> usize {
@@ -1010,5 +1083,20 @@ mod render_scaling_tests {
                 "classifier disagrees on {event:?}"
             );
         }
+    }
+
+    fn settings_app() -> (App, UnboundedReceiver<UserInputEvent>) {
+        let (tx, rx) = unbounded_channel();
+        let mut app = App::new(tx);
+        app.tab_index = TAB_IDX_SETTINGS;
+        (app, rx)
+    }
+
+    fn devices(prefix: &str) -> Vec<(String, String)> {
+        vec![
+            (format!("{prefix}-1"), format!("{prefix} One")),
+            (format!("{prefix}-2"), format!("{prefix} Two")),
+            (format!("{prefix}-3"), format!("{prefix} Three")),
+        ]
     }
 }

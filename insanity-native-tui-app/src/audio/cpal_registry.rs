@@ -4,7 +4,9 @@ use cpal::{
     Device,
     traits::{DeviceTrait, HostTrait},
 };
-use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry, UNKNOWN_DEVICE_NAME};
+use insanity_core::audio::device::{
+    AudioDevice, AudioDeviceRegistry, UNKNOWN_DEVICE_NAME, select_by_id_name,
+};
 
 pub struct CpalAudioDevice(pub Device);
 
@@ -53,18 +55,12 @@ pub fn list_outputs() -> Vec<CpalAudioDevice> {
     filtered_devices(|device| device.supports_output())
 }
 
-fn find_by_id(devices: Vec<CpalAudioDevice>, id: &str) -> Option<CpalAudioDevice> {
-    devices
-        .into_iter()
-        .find(|d| d.try_id().as_deref() == Some(id))
+pub fn find_input_by_id_name(id: &str, name: &str) -> Option<CpalAudioDevice> {
+    select_by_id_name(list_inputs(), id, name)
 }
 
-pub fn find_input_by_id(id: &str) -> Option<CpalAudioDevice> {
-    find_by_id(list_inputs(), id)
-}
-
-pub fn find_output_by_id(id: &str) -> Option<CpalAudioDevice> {
-    find_by_id(list_outputs(), id)
+pub fn find_output_by_id_name(id: &str, name: &str) -> Option<CpalAudioDevice> {
+    select_by_id_name(list_outputs(), id, name)
 }
 
 pub fn default_input_device() -> Option<CpalAudioDevice> {
@@ -77,14 +73,6 @@ pub fn default_output_device() -> Option<CpalAudioDevice> {
     cpal::default_host()
         .default_output_device()
         .map(CpalAudioDevice)
-}
-
-pub fn default_input_device_id() -> Option<String> {
-    default_input_device().and_then(|device| device.try_id())
-}
-
-pub fn default_output_device_id() -> Option<String> {
-    default_output_device().and_then(|device| device.try_id())
 }
 
 pub struct CpalRegistry;

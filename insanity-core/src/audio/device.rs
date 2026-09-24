@@ -16,3 +16,14 @@ pub trait AudioDeviceRegistry<DeviceT: AudioDevice> {
     fn list_devices() -> Vec<DeviceT>;
     fn default_device() -> Option<DeviceT>;
 }
+
+/// Selects a device by its `(id, name)` identity tuple
+pub fn select_by_id_name<DeviceT: AudioDevice>(
+    devices: Vec<DeviceT>,
+    id: &str,
+    name: &str,
+) -> Option<DeviceT> {
+    devices
+        .into_iter()
+        .find(|device| device.try_id().as_deref() == Some(id) && device.name() == name)
+}

@@ -298,19 +298,14 @@ fn manage_peers(
         audio_config,
         rebuild_opus_encoder,
     ));
-    if let Some(app_event_tx) = &app_event_tx {
-        app_event_tx
-            .send(AppEvent::SetInputDeviceName(input.current().name))
-            .expect("could not set input device name");
-    }
 
     let (output_manager, output) = start_output(audio_config);
     if let Some(app_event_tx) = &app_event_tx {
-        app_event_tx
-            .send(AppEvent::SetOutputDeviceName(
-                output_manager.current().name.clone(),
-            ))
-            .expect("could not set output device name");
+        for event in refresh_device_events(&input, &output_manager) {
+            app_event_tx
+                .send(event)
+                .expect("could not send initial device state");
+        }
     }
     let audio = SharedAudio {
         hub: hub.clone(),
@@ -505,6 +500,8 @@ fn refresh_device_events(input: &InputManager, output: &OutputManager) -> Vec<Ap
         .into_iter()
         .filter_map(|device| device.try_id().map(|id| (id, device.name())))
         .collect();
+    log::debug!("Enumerated input devices: {inputs:?}");
+    log::debug!("Enumerated output devices: {outputs:?}");
     vec![
         AppEvent::SetInputDevices(inputs),
         AppEvent::SetOutputDevices(outputs),
@@ -619,8 +616,9 @@ async fn handle_user_action(
                 log::debug!("Failed to send mute self event: {:?}", e);
             }
         }
-        UserInputEvent::SetInputDevice(id) => match input.switch_to(&id) {
+        UserInputEvent::SetInputDevice(id, name) => match input.switch_to(&id, &name) {
             Ok(name) => {
+                log::debug!("Switched input device id {id:?} to {name:?}");
                 if let Some(app_event_tx) = app_event_tx
                     && let Err(e) = app_event_tx.send(AppEvent::SetInputDeviceName(name))
                 {
@@ -631,8 +629,9 @@ async fn handle_user_action(
                 log::warn!("Failed to switch input device: {e:?}");
             }
         },
-        UserInputEvent::SetOutputDevice(id) => match output.switch_to(&id) {
+        UserInputEvent::SetOutputDevice(id, name) => match output.switch_to(&id, &name) {
             Ok(name) => {
+                log::debug!("Switched output device id {id:?} to {name:?}");
                 if let Some(app_event_tx) = app_event_tx
                     && let Err(e) = app_event_tx.send(AppEvent::SetOutputDeviceName(name))
                 {

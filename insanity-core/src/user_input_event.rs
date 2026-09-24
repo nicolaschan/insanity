@@ -6,8 +6,8 @@ pub enum UserInputEvent {
     SetVolume(String, usize),
     SendMessage(String),
     SetMuteSelf(bool),
-    SetInputDevice(String),
-    SetOutputDevice(String),
+    SetInputDevice(String, String),
+    SetOutputDevice(String, String),
     RefreshDevices,
 }
 

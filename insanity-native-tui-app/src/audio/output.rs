@@ -16,7 +16,7 @@ use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, watch};
 
 use super::config::get_output_config;
-use super::cpal_registry::{CpalAudioDevice, default_output_device, find_output_by_id};
+use super::cpal_registry::{CpalAudioDevice, default_output_device, find_output_by_id_name};
 use super::input::Selection;
 use super::mixer::{
     AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, TARGET_RING_BLOCKS, demand_sleep,
@@ -125,9 +125,11 @@ impl OutputManager {
         self.info.borrow().clone()
     }
 
-    pub fn switch_to(&self, id: &str) -> anyhow::Result<String> {
-        let Some(device) = find_output_by_id(id) else {
-            return Err(anyhow::anyhow!("Unknown output device id: {id}"));
+    pub fn switch_to(&self, id: &str, name: &str) -> anyhow::Result<String> {
+        let Some(device) = find_output_by_id_name(id, name) else {
+            return Err(anyhow::anyhow!(
+                "Unknown output device id: {id}, name: {name}"
+            ));
         };
         let logical = self.config.audio_format();
         let sink = build_sink(device, &logical, self.config, &self.stats, &self.timing)?;
@@ -655,7 +657,11 @@ mod tests {
         let stats = Arc::new(OutputStats::new());
         let (manager, _handle) =
             spawn_output(config, dummy_sink(config), stats.clone(), timing.clone());
-        assert!(manager.switch_to("no-such-device").is_err());
+        assert!(
+            manager
+                .switch_to("no-such-device", "No Such Device")
+                .is_err()
+        );
         assert_eq!(manager.current().selection, Selection::FollowDefault);
         assert_eq!(manager.current().name, UNKNOWN_DEVICE_NAME);
     }

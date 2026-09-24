@@ -7,15 +7,23 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::{App, components::block::default_block};
+use crate::{
+    App, DeviceFocus,
+    components::block::default_block,
+    style::{BG_GRAY, SELECTED},
+};
 
 pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
+    let input_height = (app.input_devices.len().max(1) + 2) as u16;
+    let output_height = (app.output_devices.len().max(1) + 2) as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(6),
             Constraint::Length(4),
-            Constraint::Length(4),
+            Constraint::Length(input_height),
+            Constraint::Length(output_height),
+            Constraint::Length(1),
             Constraint::Min(0),
         ])
         .split(area);
@@ -83,22 +91,79 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     .style(Style::default().fg(Color::White));
     f.render_widget(version_widget, chunks[1]);
 
-    let audio_widget = audio_widget(&app.input_device_name, &app.output_device_name);
-    f.render_widget(audio_widget, chunks[2]);
+    let (input_cursor, output_cursor) = match app.device_cursor_section() {
+        DeviceFocus::Input => (Some(app.device_cursor_row()), None),
+        DeviceFocus::Output => (None, Some(app.device_cursor_row())),
+    };
+    f.render_widget(
+        device_section(
+            "Input devices",
+            &app.input_devices,
+            &app.input_device_name,
+            input_cursor,
+            "No input devices — press r to refresh",
+        ),
+        chunks[2],
+    );
+    f.render_widget(
+        device_section(
+            "Output devices",
+            &app.output_devices,
+            &app.output_device_name,
+            output_cursor,
+            "No output devices — press r to refresh",
+        ),
+        chunks[3],
+    );
+    let hints = Paragraph::new(Line::from(vec![Span::styled(
+        "Enter select · r refresh",
+        Style::default().fg(Color::DarkGray),
+    )]));
+    f.render_widget(hints, chunks[4]);
 }
 
-fn device_line<'a>(label: &'static str, value: &'a str) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(label, Style::default().fg(Color::DarkGray)),
-        Span::styled(value, Style::default().fg(Color::LightBlue)),
-    ])
-}
-
-fn audio_widget<'a>(input_device_name: &'a str, output_device_name: &'a str) -> Paragraph<'a> {
-    Paragraph::new(vec![
-        device_line("Current input device: ", input_device_name),
-        device_line("Current output device: ", output_device_name),
-    ])
-    .block(default_block())
-    .style(Style::default().fg(Color::White))
+fn device_section<'a>(
+    title: &'static str,
+    devices: &'a [(String, String)],
+    current_name: &'a str,
+    cursor: Option<usize>,
+    empty_label: &'static str,
+) -> Paragraph<'a> {
+    let mut lines = Vec::new();
+    if devices.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            empty_label,
+            Style::default().fg(Color::DarkGray),
+        )]));
+    }
+    for (index, (_, name)) in devices.iter().enumerate() {
+        let cursor_here = cursor == Some(index);
+        let mut spans = vec![
+            Span::styled(
+                if cursor_here { "> " } else { "  " },
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(name.as_str(), Style::default().fg(Color::LightBlue)),
+        ];
+        if name.as_str() == current_name {
+            spans.push(Span::styled(
+                " (current)",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        let line = Line::from(spans);
+        lines.push(if cursor_here {
+            line.style(Style::default().bg(SELECTED))
+        } else {
+            line
+        });
+    }
+    let border = if cursor.is_some() { SELECTED } else { BG_GRAY };
+    Paragraph::new(lines)
+        .block(
+            default_block()
+                .title(title)
+                .border_style(Style::default().fg(border)),
+        )
+        .style(Style::default().fg(Color::White))
 }
