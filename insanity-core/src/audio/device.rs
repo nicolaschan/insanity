@@ -5,6 +5,8 @@ pub const UNKNOWN_DEVICE_NAME: &str = "unknown device";
 pub trait AudioDevice: Debug + Send + Sync {
     fn try_name(&self) -> Option<String>;
 
+    fn try_id(&self) -> Option<String>;
+
     fn name(&self) -> String {
         self.try_name().unwrap_or(UNKNOWN_DEVICE_NAME.into())
     }
@@ -13,4 +15,15 @@ pub trait AudioDevice: Debug + Send + Sync {
 pub trait AudioDeviceRegistry<DeviceT: AudioDevice> {
     fn list_devices() -> Vec<DeviceT>;
     fn default_device() -> Option<DeviceT>;
+}
+
+/// Selects a device by its `(id, name)` identity tuple.
+pub fn select_by_id_name<DeviceT: AudioDevice>(
+    devices: Vec<DeviceT>,
+    id: &str,
+    name: &str,
+) -> Option<DeviceT> {
+    devices
+        .into_iter()
+        .find(|device| device.try_id().as_deref() == Some(id) && device.name() == name)
 }
