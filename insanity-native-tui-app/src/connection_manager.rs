@@ -496,22 +496,30 @@ fn update_peer_info(
 }
 
 fn refresh_device_events(input: &InputManager, output: &OutputManager) -> Vec<AppEvent> {
+    vec![
+        AppEvent::SetInputDevices(list_input_devices()),
+        AppEvent::SetOutputDevices(list_output_devices()),
+        AppEvent::SetInputDeviceName(input.current().name),
+        AppEvent::SetOutputDeviceName(output.current().name),
+    ]
+}
+
+fn list_input_devices() -> Vec<(String, String)> {
     let inputs = list_inputs()
         .into_iter()
         .filter_map(|device| device.try_id().map(|id| (id, device.name())))
         .collect();
+    log::debug!("Enumerated input devices: {inputs:?}");
+    inputs
+}
+
+fn list_output_devices() -> Vec<(String, String)> {
     let outputs = list_outputs()
         .into_iter()
         .filter_map(|device| device.try_id().map(|id| (id, device.name())))
         .collect();
-    log::debug!("Enumerated input devices: {inputs:?}");
     log::debug!("Enumerated output devices: {outputs:?}");
-    vec![
-        AppEvent::SetInputDevices(inputs),
-        AppEvent::SetOutputDevices(outputs),
-        AppEvent::SetInputDeviceName(input.current().name),
-        AppEvent::SetOutputDeviceName(output.current().name),
-    ]
+    outputs
 }
 
 async fn run_audio_device_transitioner(
@@ -526,9 +534,17 @@ async fn run_audio_device_transitioner(
         tokio::select! {
             _ = input_fatal.notified() => {
                 react_to_input_failure(&input, &app_event_tx);
+                send_device_event(
+                    &app_event_tx,
+                    AppEvent::SetInputDevices(list_input_devices()),
+                );
             }
             _ = output_fatal.notified() => {
                 react_to_output_failure(&output, &app_event_tx);
+                send_device_event(
+                    &app_event_tx,
+                    AppEvent::SetOutputDevices(list_output_devices()),
+                );
             }
             _ = cancellation_token.cancelled() => {
                 log::debug!("Audio device transitioner shutdown.");
@@ -538,18 +554,20 @@ async fn run_audio_device_transitioner(
     }
 }
 
+fn send_device_event(app_event_tx: &Option<mpsc::UnboundedSender<AppEvent>>, event: AppEvent) {
+    if let Some(app_event_tx) = app_event_tx
+        && let Err(e) = app_event_tx.send(event)
+    {
+        log::debug!("Failed to send device event: {:?}", e);
+    }
+}
+
 fn react_to_input_failure(
     input: &InputManager,
     app_event_tx: &Option<mpsc::UnboundedSender<AppEvent>>,
 ) {
     match input.follow_default() {
-        Ok(name) => {
-            if let Some(app_event_tx) = app_event_tx
-                && let Err(e) = app_event_tx.send(AppEvent::SetInputDeviceName(name))
-            {
-                log::debug!("Failed to send input device name event: {:?}", e);
-            }
-        }
+        Ok(name) => send_device_event(app_event_tx, AppEvent::SetInputDeviceName(name)),
         Err(e) => {
             log::warn!("Failed to fall back to default input: {e:?}");
         }
@@ -561,13 +579,7 @@ fn react_to_output_failure(
     app_event_tx: &Option<mpsc::UnboundedSender<AppEvent>>,
 ) {
     match output.follow_default() {
-        Ok(name) => {
-            if let Some(app_event_tx) = app_event_tx
-                && let Err(e) = app_event_tx.send(AppEvent::SetOutputDeviceName(name))
-            {
-                log::debug!("Failed to send output device name event: {:?}", e);
-            }
-        }
+        Ok(name) => send_device_event(app_event_tx, AppEvent::SetOutputDeviceName(name)),
         Err(e) => {
             log::warn!("Failed to fall back to default output: {e:?}");
         }
@@ -704,7 +716,10 @@ fn get_or_make_keypair(db: &sled::Db) -> anyhow::Result<SnowKeypair> {
 
 #[cfg(test)]
 mod tests {
-    use super::{handle_user_action, react_to_input_failure, react_to_output_failure};
+    use super::{
+        handle_user_action, react_to_input_failure, react_to_output_failure,
+        run_audio_device_transitioner,
+    };
     use crate::audio::codec::rebuild_opus_encoder;
     use crate::audio::hub::AudioInputHub;
     use crate::audio::input::start_input;
@@ -716,7 +731,63 @@ mod tests {
     use insanity_tui_adapter::AppEvent;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::{Notify, mpsc};
+    use tokio_util::sync::CancellationToken;
+
+    async fn recv_event(rx: &mut mpsc::UnboundedReceiver<AppEvent>) -> AppEvent {
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for device event")
+            .expect("event channel closed")
+    }
+
+    #[tokio::test]
+    async fn transitioner_emits_names_and_lists_on_fatal() {
+        let config = AudioPipelineConfig::default();
+        let input_fatal = Arc::new(Notify::new());
+        let output_fatal = Arc::new(Notify::new());
+        let (_input, _switching) = start_input(None, config, Arc::new(Notify::new()));
+        let (_output, _handle) = start_output(config, Arc::new(Notify::new()));
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let token = CancellationToken::new();
+        let task = tokio::spawn(run_audio_device_transitioner(
+            _input,
+            _output,
+            Some(event_tx),
+            token.clone(),
+            input_fatal.clone(),
+            output_fatal.clone(),
+        ));
+        input_fatal.notify_one();
+        let mut saw_list = false;
+        let mut saw_name = false;
+        for _ in 0..2 {
+            match recv_event(&mut event_rx).await {
+                AppEvent::SetInputDevices(_) => saw_list = true,
+                AppEvent::SetInputDeviceName(_) => saw_name = true,
+                event => panic!("unexpected event from input fatal: {event:?}"),
+            }
+        }
+        assert!(saw_list && saw_name);
+        output_fatal.notify_one();
+        let mut saw_list = false;
+        let mut saw_name = false;
+        for _ in 0..2 {
+            match recv_event(&mut event_rx).await {
+                AppEvent::SetOutputDevices(_) => saw_list = true,
+                AppEvent::SetOutputDeviceName(_) => saw_name = true,
+                event => panic!("unexpected event from output fatal: {event:?}"),
+            }
+        }
+        assert!(saw_list && saw_name);
+        assert!(event_rx.try_recv().is_err());
+        token.cancel();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("transitioner did not shut down")
+            .expect("transitioner panicked");
+    }
 
     #[tokio::test]
     async fn input_reaction_falls_back_and_emits_name() {
