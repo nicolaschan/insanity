@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use veq::{snow_types::SnowKeypair, veq::VeqSocket};
 
 use std::str::FromStr;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::audio::hub::AudioInputHub;
@@ -292,14 +292,16 @@ fn manage_peers(
 
     // single input hub and single output mixer
     let audio_config = AudioPipelineConfig::default();
-    let (input, switching) = start_input(default_input_device(), audio_config);
+    let input_fatal = Arc::new(Notify::new());
+    let output_fatal = Arc::new(Notify::new());
+    let (input, switching) = start_input(default_input_device(), audio_config, input_fatal.clone());
     let hub = Arc::new(AudioInputHub::from_chunk_source(
         switching,
         audio_config,
         rebuild_opus_encoder,
     ));
 
-    let (output_manager, output) = start_output(audio_config);
+    let (output_manager, output) = start_output(audio_config, output_fatal.clone());
     if let Some(app_event_tx) = &app_event_tx {
         for event in refresh_device_events(&input, &output_manager) {
             app_event_tx
@@ -398,6 +400,8 @@ fn manage_peers(
         supervisor_audio.output,
         supervisor_event_tx,
         supervisor_token,
+        input_fatal,
+        output_fatal,
     ));
     tokio::spawn(async move {
         let mut managed_peers: HashMap<uuid::Uuid, ManagedPeer> = HashMap::new();
@@ -515,13 +519,15 @@ async fn run_audio_device_transitioner(
     output: OutputManager,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     cancellation_token: CancellationToken,
+    input_fatal: Arc<Notify>,
+    output_fatal: Arc<Notify>,
 ) {
     loop {
         tokio::select! {
-            _ = stream_errors::wait_input_fatal() => {
+            _ = input_fatal.notified() => {
                 react_to_input_failure(&input, &app_event_tx);
             }
-            _ = stream_errors::wait_output_fatal() => {
+            _ = output_fatal.notified() => {
                 react_to_output_failure(&output, &app_event_tx);
             }
             _ = cancellation_token.cancelled() => {
@@ -701,20 +707,21 @@ mod tests {
     use super::{handle_user_action, react_to_input_failure, react_to_output_failure};
     use crate::audio::codec::rebuild_opus_encoder;
     use crate::audio::hub::AudioInputHub;
-    use crate::audio::input::{Selection, start_input};
+    use crate::audio::input::start_input;
     use crate::audio::output::start_output;
+    use crate::audio::switch::Selection;
     use insanity_core::audio::chunk::ChunkSource;
     use insanity_core::audio::config::AudioPipelineConfig;
     use insanity_core::user_input_event::UserInputEvent;
     use insanity_tui_adapter::AppEvent;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use tokio::sync::mpsc;
+    use tokio::sync::{Notify, mpsc};
 
     #[tokio::test]
     async fn input_reaction_falls_back_and_emits_name() {
         let config = AudioPipelineConfig::default();
-        let (input, mut switching) = start_input(None, config);
+        let (input, mut switching) = start_input(None, config, Arc::new(Notify::new()));
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         react_to_input_failure(&input, &None);
         react_to_input_failure(&input, &Some(event_tx));
@@ -731,7 +738,7 @@ mod tests {
     #[tokio::test]
     async fn output_reaction_falls_back_and_emits_name() {
         let config = AudioPipelineConfig::default();
-        let (output, _handle) = start_output(config);
+        let (output, _handle) = start_output(config, Arc::new(Notify::new()));
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         react_to_output_failure(&output, &None);
         react_to_output_failure(&output, &Some(event_tx));
@@ -753,8 +760,8 @@ mod tests {
     #[tokio::test]
     async fn refresh_emits_lists_and_current_names() {
         let config = AudioPipelineConfig::default();
-        let (input, switching) = start_input(None, config);
-        let (output, _handle) = start_output(config);
+        let (input, switching) = start_input(None, config, Arc::new(Notify::new()));
+        let (output, _handle) = start_output(config, Arc::new(Notify::new()));
         let hub = Arc::new(AudioInputHub::from_chunk_source(
             switching,
             config,

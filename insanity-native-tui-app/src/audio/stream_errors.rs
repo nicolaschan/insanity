@@ -1,4 +1,3 @@
-use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cpal::ErrorKind;
@@ -53,8 +52,6 @@ impl Counters {
 
 static INPUT: Counters = Counters::new();
 static OUTPUT: Counters = Counters::new();
-static INPUT_FATAL: LazyLock<Notify> = LazyLock::new(Notify::new);
-static OUTPUT_FATAL: LazyLock<Notify> = LazyLock::new(Notify::new);
 
 fn is_fatal(kind: ErrorKind) -> bool {
     !matches!(
@@ -64,27 +61,19 @@ fn is_fatal(kind: ErrorKind) -> bool {
 }
 
 /// Safe on a real-time audio thread
-pub fn note_input_error(kind: ErrorKind) {
+pub fn note_input_error(kind: ErrorKind, fatal: &Notify) {
     INPUT.note(kind);
     if is_fatal(kind) {
-        INPUT_FATAL.notify_one();
+        fatal.notify_one();
     }
 }
 
 /// Safe on a real-time audio thread
-pub fn note_output_error(kind: ErrorKind) {
+pub fn note_output_error(kind: ErrorKind, fatal: &Notify) {
     OUTPUT.note(kind);
     if is_fatal(kind) {
-        OUTPUT_FATAL.notify_one();
+        fatal.notify_one();
     }
-}
-
-pub async fn wait_input_fatal() {
-    INPUT_FATAL.notified().await;
-}
-
-pub async fn wait_output_fatal() {
-    OUTPUT_FATAL.notified().await;
 }
 
 pub fn input_errors() -> StreamErrorCounts {
@@ -99,33 +88,20 @@ pub fn output_errors() -> StreamErrorCounts {
 mod tests {
     use super::{
         StreamErrorCounts, input_errors, note_input_error, note_output_error, output_errors,
-        wait_input_fatal, wait_output_fatal,
     };
     use cpal::ErrorKind;
     use std::time::Duration;
-    use tokio::sync::Mutex;
-
-    static WAKE_TEST_LOCK: Mutex<()> = Mutex::const_new(());
-
-    async fn drain_permits() {
-        while tokio::time::timeout(Duration::from_millis(5), wait_input_fatal())
-            .await
-            .is_ok()
-        {}
-        while tokio::time::timeout(Duration::from_millis(5), wait_output_fatal())
-            .await
-            .is_ok()
-        {}
-    }
+    use tokio::sync::Notify;
 
     #[test]
     fn xruns_and_other_errors_are_counted_separately() {
         let input_before = input_errors();
         let output_before = output_errors();
-        note_input_error(ErrorKind::Xrun);
-        note_input_error(ErrorKind::Xrun);
-        note_input_error(ErrorKind::RealtimeDenied);
-        note_output_error(ErrorKind::DeviceNotAvailable);
+        let silent = Notify::new();
+        note_input_error(ErrorKind::Xrun, &silent);
+        note_input_error(ErrorKind::Xrun, &silent);
+        note_input_error(ErrorKind::RealtimeDenied, &silent);
+        note_output_error(ErrorKind::DeviceNotAvailable, &silent);
         assert_eq!(
             input_errors().since(input_before),
             StreamErrorCounts { xruns: 2, other: 1 }
@@ -145,15 +121,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fatal_wakes_but_live_kinds_stay_silent() {
-        let _guard = WAKE_TEST_LOCK.lock().await;
-        drain_permits().await;
-        note_input_error(ErrorKind::DeviceNotAvailable);
-        note_output_error(ErrorKind::StreamInvalidated);
-        tokio::time::timeout(Duration::from_secs(1), wait_input_fatal())
+    async fn fatal_input_wakes_but_live_kinds_stay_silent() {
+        let fatal = Notify::new();
+        note_input_error(ErrorKind::DeviceNotAvailable, &fatal);
+        tokio::time::timeout(Duration::from_secs(1), fatal.notified())
             .await
             .expect("fatal input error must wake");
-        tokio::time::timeout(Duration::from_secs(1), wait_output_fatal())
+        for kind in [
+            ErrorKind::Xrun,
+            ErrorKind::DeviceChanged,
+            ErrorKind::RealtimeDenied,
+        ] {
+            note_input_error(kind, &fatal);
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), fatal.notified())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn fatal_output_wakes_but_live_kinds_stay_silent() {
+        let fatal = Notify::new();
+        note_output_error(ErrorKind::StreamInvalidated, &fatal);
+        tokio::time::timeout(Duration::from_secs(1), fatal.notified())
             .await
             .expect("fatal output error must wake");
         for kind in [
@@ -161,16 +153,10 @@ mod tests {
             ErrorKind::DeviceChanged,
             ErrorKind::RealtimeDenied,
         ] {
-            note_input_error(kind);
-            note_output_error(kind);
+            note_output_error(kind, &fatal);
         }
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), wait_input_fatal())
-                .await
-                .is_err()
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), wait_output_fatal())
+            tokio::time::timeout(Duration::from_millis(50), fatal.notified())
                 .await
                 .is_err()
         );

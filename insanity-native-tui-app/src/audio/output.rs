@@ -13,15 +13,15 @@ use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
 use rubato_audio_source::StreamResampler;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 
 use super::config::get_output_config;
 use super::cpal_registry::{CpalAudioDevice, default_output_device, find_output_by_id_name};
-use super::input::Selection;
 use super::mixer::{
     AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, TARGET_RING_BLOCKS, demand_sleep,
 };
-use crate::switching_chunk_source::SwapRequest;
+use super::switch::Selection;
+use crate::audio::switch::SwapRequest;
 
 pub struct FillStats {
     total_nanos: AtomicU64,
@@ -116,6 +116,7 @@ pub struct OutputManager {
     config: AudioPipelineConfig,
     stats: Arc<OutputStats>,
     timing: Arc<FillStats>,
+    fatal: Arc<Notify>,
 }
 
 const MAX_PREFILL_TICKS: usize = 1024;
@@ -132,7 +133,14 @@ impl OutputManager {
             ));
         };
         let logical = self.config.audio_format();
-        let sink = build_sink(device, &logical, self.config, &self.stats, &self.timing)?;
+        let sink = build_sink(
+            device,
+            &logical,
+            self.config,
+            &self.stats,
+            &self.timing,
+            self.fatal.clone(),
+        )?;
         self.switch_to_sink(sink, Selection::Explicit(id.to_owned()))
     }
 
@@ -142,6 +150,7 @@ impl OutputManager {
             self.config,
             &self.stats,
             &self.timing,
+            self.fatal.clone(),
         );
         self.switch_to_sink(sink, Selection::FollowDefault)
     }
@@ -197,6 +206,7 @@ fn build_sink(
     audio_config: AudioPipelineConfig,
     stats: &Arc<OutputStats>,
     timing: &Arc<FillStats>,
+    fatal: Arc<Notify>,
 ) -> anyhow::Result<Sink> {
     let (sample_format, config) = get_output_config(&device.0, audio_config)
         .map_err(|e| anyhow::anyhow!("Failed to get output config: {e}"))?;
@@ -224,6 +234,7 @@ fn build_sink(
             consumer,
             callback_timing,
             callback_stats,
+            fatal,
         ) {
             Ok(s) => Some(s),
             Err(e) => {
@@ -338,12 +349,20 @@ impl Sink {
     }
 }
 
-pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> (OutputManager, OutputHandle) {
+pub(crate) fn start_output(
+    audio_config: AudioPipelineConfig,
+    fatal: Arc<Notify>,
+) -> (OutputManager, OutputHandle) {
     let timing = Arc::new(FillStats::new());
     let stats = Arc::new(OutputStats::new());
-    let initial_sink =
-        resolve_sink_or_silent(default_output_device(), audio_config, &stats, &timing);
-    spawn_output(audio_config, initial_sink, stats, timing)
+    let initial_sink = resolve_sink_or_silent(
+        default_output_device(),
+        audio_config,
+        &stats,
+        &timing,
+        fatal.clone(),
+    );
+    spawn_output(audio_config, initial_sink, stats, timing, fatal)
 }
 
 fn resolve_sink_or_silent(
@@ -351,16 +370,19 @@ fn resolve_sink_or_silent(
     audio_config: AudioPipelineConfig,
     stats: &Arc<OutputStats>,
     timing: &Arc<FillStats>,
+    fatal: Arc<Notify>,
 ) -> Sink {
     let logical_format = audio_config.audio_format();
     match initial {
-        Some(device) => match build_sink(device, &logical_format, audio_config, stats, timing) {
-            Ok(sink) => sink,
-            Err(e) => {
-                log::warn!("Failed to open default output, falling back to dummy: {e:?}");
-                dummy_sink(audio_config)
+        Some(device) => {
+            match build_sink(device, &logical_format, audio_config, stats, timing, fatal) {
+                Ok(sink) => sink,
+                Err(e) => {
+                    log::warn!("Failed to open default output, falling back to dummy: {e:?}");
+                    dummy_sink(audio_config)
+                }
             }
-        },
+        }
         None => dummy_sink(audio_config),
     }
 }
@@ -370,6 +392,7 @@ fn spawn_output(
     initial: Sink,
     stats: Arc<OutputStats>,
     timing: Arc<FillStats>,
+    fatal: Arc<Notify>,
 ) -> (OutputManager, OutputHandle) {
     let logical_format = audio_config.audio_format();
     let logical_block = usize::from(logical_format.channel_count) * audio_config.frames();
@@ -396,6 +419,7 @@ fn spawn_output(
         config: audio_config,
         stats: stats.clone(),
         timing: timing.clone(),
+        fatal,
     };
     let handle = OutputHandle {
         client: MixerClient {
@@ -498,18 +522,19 @@ fn build_output_stream(
     consumer: rtrb::Consumer<f32>,
     timing: Arc<FillStats>,
     stats: Arc<OutputStats>,
+    fatal: Arc<Notify>,
 ) -> anyhow::Result<cpal::Stream> {
     match sample_format {
-        SampleFormat::I8 => run_output::<i8>(config, device, consumer, timing, stats),
-        SampleFormat::I16 => run_output::<i16>(config, device, consumer, timing, stats),
-        SampleFormat::I32 => run_output::<i32>(config, device, consumer, timing, stats),
-        SampleFormat::I64 => run_output::<i64>(config, device, consumer, timing, stats),
-        SampleFormat::U8 => run_output::<u8>(config, device, consumer, timing, stats),
-        SampleFormat::U16 => run_output::<u16>(config, device, consumer, timing, stats),
-        SampleFormat::U32 => run_output::<u32>(config, device, consumer, timing, stats),
-        SampleFormat::U64 => run_output::<u64>(config, device, consumer, timing, stats),
-        SampleFormat::F32 => run_output::<f32>(config, device, consumer, timing, stats),
-        SampleFormat::F64 => run_output::<f64>(config, device, consumer, timing, stats),
+        SampleFormat::I8 => run_output::<i8>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::I16 => run_output::<i16>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::I32 => run_output::<i32>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::I64 => run_output::<i64>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U8 => run_output::<u8>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U16 => run_output::<u16>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U32 => run_output::<u32>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U64 => run_output::<u64>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::F32 => run_output::<f32>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::F64 => run_output::<f64>(config, device, consumer, timing, stats, fatal),
         other => Err(anyhow::anyhow!(
             "unsupported output sample format {other:?}"
         )),
@@ -537,11 +562,13 @@ fn run_output<T>(
     mut consumer: rtrb::Consumer<f32>,
     timing: Arc<FillStats>,
     stats: Arc<OutputStats>,
+    fatal: Arc<Notify>,
 ) -> anyhow::Result<cpal::Stream>
 where
     T: SizedSample + FromSample<f32>,
 {
-    let err_fn = |err: cpal::Error| super::stream_errors::note_output_error(err.kind());
+    let err_fn =
+        move |err: cpal::Error| super::stream_errors::note_output_error(err.kind(), &fatal);
     device
         .build_output_stream(
             config,
@@ -567,7 +594,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::input::Selection;
+    use super::super::switch::Selection;
     use super::{FillStats, FormatConverter, OutputStats, RING_CAPACITY_BLOCKS, Sink};
     use super::{dummy_sink, spawn_output};
     use insanity_core::audio::AudioFormat;
@@ -575,6 +602,11 @@ mod tests {
     use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
     use rtrb::{Consumer, RingBuffer};
     use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    fn test_fatal() -> Arc<Notify> {
+        Arc::new(Notify::new())
+    }
 
     fn synthetic_sink(
         config: AudioPipelineConfig,
@@ -607,8 +639,13 @@ mod tests {
         let config = AudioPipelineConfig::default();
         let timing = Arc::new(FillStats::new());
         let stats = Arc::new(OutputStats::new());
-        let (manager, _handle) =
-            spawn_output(config, dummy_sink(config), stats.clone(), timing.clone());
+        let (manager, _handle) = spawn_output(
+            config,
+            dummy_sink(config),
+            stats.clone(),
+            timing.clone(),
+            test_fatal(),
+        );
         let device_format = AudioFormat::new(2, 44100);
         let device_block = 2 * config.frames();
         let (sink, consumer) = synthetic_sink(config, device_format.clone());
@@ -636,8 +673,13 @@ mod tests {
         let config = AudioPipelineConfig::default();
         let timing = Arc::new(FillStats::new());
         let stats = Arc::new(OutputStats::new());
-        let (manager, _handle) =
-            spawn_output(config, dummy_sink(config), stats.clone(), timing.clone());
+        let (manager, _handle) = spawn_output(
+            config,
+            dummy_sink(config),
+            stats.clone(),
+            timing.clone(),
+            test_fatal(),
+        );
         let name = manager.follow_default().expect("follow_default sends");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while manager.current().name != name {
@@ -655,8 +697,13 @@ mod tests {
         let config = AudioPipelineConfig::default();
         let timing = Arc::new(FillStats::new());
         let stats = Arc::new(OutputStats::new());
-        let (manager, _handle) =
-            spawn_output(config, dummy_sink(config), stats.clone(), timing.clone());
+        let (manager, _handle) = spawn_output(
+            config,
+            dummy_sink(config),
+            stats.clone(),
+            timing.clone(),
+            test_fatal(),
+        );
         assert!(
             manager
                 .switch_to("no-such-device", "No Such Device")
@@ -671,8 +718,13 @@ mod tests {
         let config = AudioPipelineConfig::default();
         let timing = Arc::new(FillStats::new());
         let stats = Arc::new(OutputStats::new());
-        let (manager, handle) =
-            spawn_output(config, dummy_sink(config), stats.clone(), timing.clone());
+        let (manager, handle) = spawn_output(
+            config,
+            dummy_sink(config),
+            stats.clone(),
+            timing.clone(),
+            test_fatal(),
+        );
         drop(manager);
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let snapshot =

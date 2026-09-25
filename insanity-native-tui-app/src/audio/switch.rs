@@ -7,6 +7,12 @@ pub struct SwapRequest<T> {
     pub on_adopt: Box<dyn FnOnce() + Send>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selection {
+    FollowDefault,
+    Explicit(String),
+}
+
 pub struct SwitchingChunkSource<T> {
     source: Option<T>,
     swap_tx: UnboundedSender<SwapRequest<T>>,

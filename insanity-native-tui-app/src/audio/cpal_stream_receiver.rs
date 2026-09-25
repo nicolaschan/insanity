@@ -12,6 +12,7 @@ use cpal::{
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
+use tokio::sync::Notify;
 
 use super::config::get_input_config;
 use super::output::RING_CAPACITY_BLOCKS;
@@ -118,6 +119,7 @@ fn publish_samples(
 pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
+    fatal: Arc<Notify>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
         return Err(anyhow!(
@@ -135,7 +137,7 @@ pub fn make_single_input(
     let build_wake = Arc::clone(&wake);
     let build_stats = Arc::clone(&stats);
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        match setup_input_stream(fmt, cfg, &device, producer, build_wake, build_stats) {
+        match setup_input_stream(fmt, cfg, &device, producer, build_wake, build_stats, fatal) {
             Ok(s) => Some(s),
             Err(e) => {
                 log::warn!("Failed to build input stream, falling back to silence: {e:?}");
@@ -170,19 +172,20 @@ fn setup_input_stream(
     producer: rtrb::Producer<f32>,
     wake: Arc<tokio::sync::Notify>,
     stats: Arc<InputStats>,
+    fatal: Arc<Notify>,
 ) -> anyhow::Result<Stream> {
     let producer = NotifyingProducer::new(producer, wake);
     match sample_format {
-        SampleFormat::I8 => run_input::<i8>(config, device, producer, stats),
-        SampleFormat::I16 => run_input::<i16>(config, device, producer, stats),
-        SampleFormat::I32 => run_input::<i32>(config, device, producer, stats),
-        SampleFormat::I64 => run_input::<i64>(config, device, producer, stats),
-        SampleFormat::U8 => run_input::<u8>(config, device, producer, stats),
-        SampleFormat::U16 => run_input::<u16>(config, device, producer, stats),
-        SampleFormat::U32 => run_input::<u32>(config, device, producer, stats),
-        SampleFormat::U64 => run_input::<u64>(config, device, producer, stats),
-        SampleFormat::F32 => run_input::<f32>(config, device, producer, stats),
-        SampleFormat::F64 => run_input::<f64>(config, device, producer, stats),
+        SampleFormat::I8 => run_input::<i8>(config, device, producer, stats, fatal),
+        SampleFormat::I16 => run_input::<i16>(config, device, producer, stats, fatal),
+        SampleFormat::I32 => run_input::<i32>(config, device, producer, stats, fatal),
+        SampleFormat::I64 => run_input::<i64>(config, device, producer, stats, fatal),
+        SampleFormat::U8 => run_input::<u8>(config, device, producer, stats, fatal),
+        SampleFormat::U16 => run_input::<u16>(config, device, producer, stats, fatal),
+        SampleFormat::U32 => run_input::<u32>(config, device, producer, stats, fatal),
+        SampleFormat::U64 => run_input::<u64>(config, device, producer, stats, fatal),
+        SampleFormat::F32 => run_input::<f32>(config, device, producer, stats, fatal),
+        SampleFormat::F64 => run_input::<f64>(config, device, producer, stats, fatal),
         other => Err(anyhow!("unsupported input sample format {other:?}")),
     }
 }
@@ -192,12 +195,13 @@ fn run_input<T>(
     device: &Device,
     mut producer: NotifyingProducer,
     stats: Arc<InputStats>,
+    fatal: Arc<Notify>,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,
 {
-    let err_fn = |err: cpal::Error| super::stream_errors::note_input_error(err.kind());
+    let err_fn = move |err: cpal::Error| super::stream_errors::note_input_error(err.kind(), &fatal);
     device
         .build_input_stream(
             config,

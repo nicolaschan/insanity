@@ -10,6 +10,7 @@ pub mod input;
 pub mod mixer;
 pub mod output;
 pub mod stream_errors;
+pub mod switch;
 
 /// Lock a mutex, recovering from poisoning with an error log instead of
 /// panicking. Audio must stay alive: a poisoned lock means a previous holder
