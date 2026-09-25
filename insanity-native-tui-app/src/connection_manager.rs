@@ -637,11 +637,7 @@ async fn handle_user_action(
         UserInputEvent::SetInputDevice(id, name) => match input.switch_to(&id, &name) {
             Ok(name) => {
                 log::debug!("Switched input device id {id:?} to {name:?}");
-                if let Some(app_event_tx) = app_event_tx
-                    && let Err(e) = app_event_tx.send(AppEvent::SetInputDeviceName(name))
-                {
-                    log::debug!("Failed to send input device name event: {:?}", e);
-                }
+                send_device_event(&app_event_tx, AppEvent::SetInputDeviceName(name));
             }
             Err(e) => {
                 log::warn!("Failed to switch input device: {e:?}");
@@ -650,11 +646,7 @@ async fn handle_user_action(
         UserInputEvent::SetOutputDevice(id, name) => match output.switch_to(&id, &name) {
             Ok(name) => {
                 log::debug!("Switched output device id {id:?} to {name:?}");
-                if let Some(app_event_tx) = app_event_tx
-                    && let Err(e) = app_event_tx.send(AppEvent::SetOutputDeviceName(name))
-                {
-                    log::debug!("Failed to send output device name event: {e:?}");
-                }
+                send_device_event(&app_event_tx, AppEvent::SetOutputDeviceName(name));
             }
             Err(e) => {
                 log::warn!("Failed to switch output device: {e:?}");
