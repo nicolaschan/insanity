@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use insanity_core::audio::{
     AudioFormat,
-    sample::{Resampler, SampleSource, SyncSampleSource},
+    sample::{Resampler, ResamplerSpec, SampleSource, SyncSampleSource},
     sample_ops::{interleave_channels, split_channels},
 };
 use log::{error, trace};
@@ -282,6 +282,16 @@ impl Resampler for StreamResampler {
         self.source_rate = source_rate;
         self.target_rate = target_rate;
         self.block_frames = block_frames;
+    }
+}
+
+impl From<ResamplerSpec> for StreamResampler {
+    fn from(spec: ResamplerSpec) -> Self {
+        StreamResampler::new(
+            AudioFormat::new(spec.source_channels as u16, spec.source_rate),
+            spec.target_rate,
+            spec.block_frames,
+        )
     }
 }
 

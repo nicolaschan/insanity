@@ -11,7 +11,7 @@ use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::{
     codec::rebuild_opus_encoder,
-    mixer::{PeerControls, chain_from_controls, output_resampler},
+    mixer::{PeerControls, chain_from_controls},
 };
 use opus::Decoder;
 use sine::{SineSource, decode_frame_to_chunk, hub_from_source, opus_channels};
@@ -212,11 +212,7 @@ fn retained_peer_controls_drive_volume_and_loudness() {
     let (mut mixer, _): (UnitMixer, _) = unit_mixer(100);
     let controls = PeerControls::new(100, DenoiseSelection::None);
     let chain = chain_from_controls(&controls);
-    let slot: SlotId = mixer.subscribe(
-        chain,
-        rebuild_passthrough,
-        output_resampler(AudioFormat::new(2, 48000), AudioPipelineConfig::default()),
-    );
+    let slot: SlotId = mixer.subscribe(chain, rebuild_passthrough);
     push_value(&mut mixer, slot, 0, 0.5);
     let out = render(&mut mixer, 960);
     assert!(out.iter().all(|s| (*s - 0.5).abs() < 1e-5));

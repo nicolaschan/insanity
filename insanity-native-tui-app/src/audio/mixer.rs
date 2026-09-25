@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
-use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::{
@@ -16,7 +15,6 @@ use insanity_core::audio::transform::{
 use insanity_core::audio::transform::{Hysteresis, PassthroughGate, RmsDetector};
 use insanity_core::user_input_event::DenoiseSelection;
 use rtrb::Producer;
-use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, oneshot};
 
 use super::codec::OpusDecoder;
@@ -37,7 +35,7 @@ pub type PeerChain = Link<
 #[cfg(not(feature = "denoise-passthrough"))]
 pub type PeerChain = Link<Denoise<NnnoiselessDenoiser>, Link<Gain, MetricsReader>>;
 pub(crate) type OpusRebuild = fn(&AudioFormat) -> Option<OpusDecoder>;
-pub type AppMixer = Mixer<OpusDecoder, PeerChain, StreamResampler, Gain, OpusRebuild>;
+pub type AppMixer = Mixer<OpusDecoder, PeerChain, Gain, OpusRebuild>;
 
 #[derive(Clone)]
 pub struct PeerControls {
@@ -79,14 +77,6 @@ pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
     OpusDecoder::new(format.sample_rate, format.channel_count)
 }
 
-pub fn output_resampler(out: AudioFormat, audio_config: AudioPipelineConfig) -> StreamResampler {
-    StreamResampler::new(
-        AudioFormat::new(out.channel_count, audio_config.sample_rate()),
-        out.sample_rate,
-        audio_config.frames(),
-    )
-}
-
 pub const MIXER_OPS_BOUND: usize = 64;
 pub const TARGET_RING_BLOCKS: usize = 2;
 const MIN_FILL_SLEEP: Duration = Duration::from_millis(2);
@@ -116,7 +106,6 @@ pub(crate) fn demand_sleep(
 pub(crate) struct SubscribeRequest {
     pub(crate) transform: PeerChain,
     pub(crate) decoder: OpusRebuild,
-    pub(crate) resampler: StreamResampler,
     pub(crate) reply: oneshot::Sender<SlotId>,
 }
 
@@ -150,14 +139,12 @@ impl MixerClient {
         &self,
         transform: PeerChain,
         decoder: OpusRebuild,
-        resampler: StreamResampler,
     ) -> Option<SlotId> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(MixerOp::Subscribe(Box::new(SubscribeRequest {
                 transform,
                 decoder,
-                resampler,
                 reply: reply_tx,
             })))
             .await
@@ -243,10 +230,9 @@ pub(crate) async fn run_mixer_owner(
                     let SubscribeRequest {
                         transform,
                         decoder,
-                        resampler,
                         reply,
                     } = *request;
-                    let slot = mixer.subscribe(transform, decoder, resampler);
+                    let slot = mixer.subscribe(transform, decoder);
                     slot_replies.push((reply, slot));
                 }
                 MixerOp::Unsubscribe(slot) => mixer.unsubscribe(slot),
