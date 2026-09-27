@@ -52,9 +52,7 @@ impl<S: SampleSource + Send> SampleChunker<S> {
 impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         let channels = self.source.format().channel_count as usize;
-        if channels == 0 {
-            return None;
-        }
+        debug_assert!(channels > 0);
         let len = self.frames * channels;
         let mut audio_data = Vec::with_capacity(len);
         for _ in 0..len {
@@ -162,12 +160,6 @@ pub(crate) mod tests {
     fn exhausted_source_ends_stream() {
         let mut chunker = SampleChunker::new(scripted(vec![0.0; 4], 2), 2);
         assert!(block_on(chunker.next_chunk()).is_some());
-        assert!(block_on(chunker.next_chunk()).is_none());
-    }
-
-    #[test]
-    fn zero_channel_source_ends_stream() {
-        let mut chunker = SampleChunker::new(scripted(vec![0.0; 4], 0), 2);
         assert!(block_on(chunker.next_chunk()).is_none());
     }
 

@@ -12,9 +12,9 @@ use cpal::{
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
+use tokio::sync::Notify;
 
 use super::config::get_input_config;
-use super::cpal_registry::{default_real_input, device_name};
 use super::output::RING_CAPACITY_BLOCKS;
 
 #[derive(Default)]
@@ -23,12 +23,6 @@ pub struct InputStats {
 }
 
 impl InputStats {
-    fn new() -> Self {
-        Self {
-            overruns: AtomicUsize::new(0),
-        }
-    }
-
     fn note_overrun(&self, samples: usize) {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
     }
@@ -62,21 +56,9 @@ pub struct CpalStreamReceiver {
     wake: Arc<tokio::sync::Notify>,
     stats: Arc<InputStats>,
     format: AudioFormat,
-    name: String,
 }
 
 impl CpalStreamReceiver {
-    pub fn default(audio_config: AudioPipelineConfig) -> anyhow::Result<Self> {
-        let Some(device) = default_real_input().map(|d| d.0) else {
-            return Err(anyhow!("No default device available"));
-        };
-        make_single_input(device, audio_config)
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     pub fn stats(&self) -> Arc<InputStats> {
         Arc::clone(&self.stats)
     }
@@ -131,8 +113,9 @@ fn publish_samples(
 pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
+    fatal: &Arc<Notify>,
+    stats: &Arc<InputStats>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let name = device_name(&device);
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
         return Err(anyhow!(
             "Failed to get input config falling back to silence"
@@ -140,16 +123,22 @@ pub fn make_single_input(
     };
     let format = AudioFormat::new(cfg.channels, cfg.sample_rate);
     let block_samples = cfg.channels as usize * audio_config.frames();
-    if block_samples == 0 {
-        return Err(anyhow!("Invalid input config with zero block size"));
-    }
+    debug_assert!(block_samples > 0);
     let (producer, consumer) = rtrb::RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
     let wake = Arc::new(tokio::sync::Notify::new());
-    let stats = Arc::new(InputStats::new());
     let build_wake = Arc::clone(&wake);
-    let build_stats = Arc::clone(&stats);
+    let build_stats = Arc::clone(stats);
+    let build_fatal = Arc::clone(fatal);
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        match setup_input_stream(fmt, cfg, &device, producer, build_wake, build_stats) {
+        match setup_input_stream(
+            fmt,
+            cfg,
+            &device,
+            producer,
+            build_wake,
+            build_stats,
+            &build_fatal,
+        ) {
             Ok(s) => Some(s),
             Err(e) => {
                 log::warn!("Failed to build input stream, falling back to silence: {e:?}");
@@ -172,9 +161,8 @@ pub fn make_single_input(
         _stream: wrapper,
         consumer,
         wake,
-        stats,
+        stats: Arc::clone(stats),
         format,
-        name,
     })
 }
 
@@ -185,19 +173,20 @@ fn setup_input_stream(
     producer: rtrb::Producer<f32>,
     wake: Arc<tokio::sync::Notify>,
     stats: Arc<InputStats>,
+    fatal: &Arc<Notify>,
 ) -> anyhow::Result<Stream> {
     let producer = NotifyingProducer::new(producer, wake);
     match sample_format {
-        SampleFormat::I8 => run_input::<i8>(config, device, producer, stats),
-        SampleFormat::I16 => run_input::<i16>(config, device, producer, stats),
-        SampleFormat::I32 => run_input::<i32>(config, device, producer, stats),
-        SampleFormat::I64 => run_input::<i64>(config, device, producer, stats),
-        SampleFormat::U8 => run_input::<u8>(config, device, producer, stats),
-        SampleFormat::U16 => run_input::<u16>(config, device, producer, stats),
-        SampleFormat::U32 => run_input::<u32>(config, device, producer, stats),
-        SampleFormat::U64 => run_input::<u64>(config, device, producer, stats),
-        SampleFormat::F32 => run_input::<f32>(config, device, producer, stats),
-        SampleFormat::F64 => run_input::<f64>(config, device, producer, stats),
+        SampleFormat::I8 => run_input::<i8>(config, device, producer, stats, fatal),
+        SampleFormat::I16 => run_input::<i16>(config, device, producer, stats, fatal),
+        SampleFormat::I32 => run_input::<i32>(config, device, producer, stats, fatal),
+        SampleFormat::I64 => run_input::<i64>(config, device, producer, stats, fatal),
+        SampleFormat::U8 => run_input::<u8>(config, device, producer, stats, fatal),
+        SampleFormat::U16 => run_input::<u16>(config, device, producer, stats, fatal),
+        SampleFormat::U32 => run_input::<u32>(config, device, producer, stats, fatal),
+        SampleFormat::U64 => run_input::<u64>(config, device, producer, stats, fatal),
+        SampleFormat::F32 => run_input::<f32>(config, device, producer, stats, fatal),
+        SampleFormat::F64 => run_input::<f64>(config, device, producer, stats, fatal),
         other => Err(anyhow!("unsupported input sample format {other:?}")),
     }
 }
@@ -207,12 +196,16 @@ fn run_input<T>(
     device: &Device,
     mut producer: NotifyingProducer,
     stats: Arc<InputStats>,
+    fatal: &Arc<Notify>,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,
 {
-    let err_fn = |err: cpal::Error| super::stream_errors::note_input_error(err.kind());
+    let fatal = Arc::clone(fatal);
+    let err_fn = move |err: cpal::Error| {
+        super::stream_errors::note_input_error(err.kind(), &fatal);
+    };
     device
         .build_input_stream(
             config,
