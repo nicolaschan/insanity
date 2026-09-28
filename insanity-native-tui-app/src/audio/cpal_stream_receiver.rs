@@ -15,6 +15,7 @@ use insanity_core::audio::sample::SampleSource;
 use tokio::sync::Notify;
 
 use super::config::get_input_config;
+use super::cpal_stream::sample_format_dispatch;
 use super::output::RING_CAPACITY_BLOCKS;
 
 #[derive(Default)]
@@ -139,20 +140,17 @@ pub fn make_single_input(
             build_stats,
             &build_fatal,
         ) {
-            Ok(s) => Some(s),
+            Ok(stream) => Some(stream),
             Err(e) => {
                 log::warn!("Failed to build input stream, falling back to silence: {e:?}");
                 None
             }
         }
     });
-    let play_ok = wrapper
-        .execute(|s| match s {
-            Some(stream) => stream.play().is_ok(),
-            None => false,
-        })
+    let playing = wrapper
+        .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
         .unwrap_or(false);
-    if !play_ok {
+    if !playing {
         return Err(anyhow!(
             "Failed to start input stream, falling back to silence"
         ));
@@ -176,19 +174,15 @@ fn setup_input_stream(
     fatal: &Arc<Notify>,
 ) -> anyhow::Result<Stream> {
     let producer = NotifyingProducer::new(producer, wake);
-    match sample_format {
-        SampleFormat::I8 => run_input::<i8>(config, device, producer, stats, fatal),
-        SampleFormat::I16 => run_input::<i16>(config, device, producer, stats, fatal),
-        SampleFormat::I32 => run_input::<i32>(config, device, producer, stats, fatal),
-        SampleFormat::I64 => run_input::<i64>(config, device, producer, stats, fatal),
-        SampleFormat::U8 => run_input::<u8>(config, device, producer, stats, fatal),
-        SampleFormat::U16 => run_input::<u16>(config, device, producer, stats, fatal),
-        SampleFormat::U32 => run_input::<u32>(config, device, producer, stats, fatal),
-        SampleFormat::U64 => run_input::<u64>(config, device, producer, stats, fatal),
-        SampleFormat::F32 => run_input::<f32>(config, device, producer, stats, fatal),
-        SampleFormat::F64 => run_input::<f64>(config, device, producer, stats, fatal),
-        other => Err(anyhow!("unsupported input sample format {other:?}")),
-    }
+    sample_format_dispatch!(
+        sample_format,
+        run_input,
+        config,
+        device,
+        producer,
+        stats,
+        fatal
+    )
 }
 
 fn run_input<T>(

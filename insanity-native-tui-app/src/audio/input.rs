@@ -11,9 +11,7 @@ use tokio::sync::{Notify, mpsc, watch};
 
 use super::cpal_registry::{default_real_input, device_name, find_input_by_id_name};
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
-use super::handoff::{HandoffRequest, Selection};
-
-const HANDOFF_BOUND: usize = 8;
+use super::handoff::{HANDOFF_BOUND, HandoffRequest, Selection};
 
 pub type LiveChain = SampleChunker<RubatoResampler<CpalStreamReceiver>>;
 

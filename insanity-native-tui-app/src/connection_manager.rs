@@ -23,7 +23,7 @@ use crate::{
         config::AUDIO_CALLBACK_FRAMES,
         input::{AudioInput, InputManager, start_input},
         mixer::format_audio_interval,
-        output::{AudioOutput, OutputHandle, start_output},
+        output::{AudioOutput, OutputHandle, OutputManager, start_output},
         stream_errors,
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
@@ -61,6 +61,7 @@ struct SharedAudio {
     hub: Arc<AudioInputHub<EncodedChunk>>,
     handle: OutputHandle,
     input: InputManager,
+    output: OutputManager,
 }
 
 impl ConnectionManager {
@@ -319,26 +320,43 @@ fn manage_peers(
     }
 
     let output = start_output(audio_config);
-    if let Some(app_event_tx) = &app_event_tx
-        && app_event_tx
-            .send(AppEvent::SetOutputDeviceName(output.handle.name.clone()))
+    if let Some(app_event_tx) = &app_event_tx {
+        if app_event_tx
+            .send(AppEvent::SetOutputDeviceName(output.manager.current_name()))
             .is_err()
-    {
-        log::warn!("Could not set output device name");
+        {
+            log::warn!("Could not set output device name");
+        }
+        let name_tx = app_event_tx.clone();
+        let mut output_info = output.manager.subscribe();
+        tokio::spawn(async move {
+            while output_info.changed().await.is_ok() {
+                if name_tx
+                    .send(AppEvent::SetOutputDeviceName(
+                        output_info.borrow().name.clone(),
+                    ))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
     }
     let audio = SharedAudio {
         hub: hub.clone(),
         handle: output.handle.clone(),
         input,
+        output: output.manager.clone(),
     };
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
-            "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES} input={}",
+            "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES} input={} output={}",
             metrics_audio.handle.format.channel_count,
             metrics_audio.handle.format.sample_rate,
             metrics_audio.input.current_name(),
+            metrics_audio.output.current_name(),
         );
         let mut prev = metrics_audio
             .handle
