@@ -12,11 +12,11 @@ use cpal::{
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
-use tokio::sync::Notify;
 
 use super::config::get_input_config;
 use super::cpal_stream::sample_format_dispatch;
 use super::output::RING_CAPACITY_BLOCKS;
+use super::stream_errors::FatalReporter;
 
 #[derive(Default)]
 pub struct InputStats {
@@ -114,7 +114,7 @@ fn publish_samples(
 pub fn make_single_input(
     device: Device,
     audio_config: AudioPipelineConfig,
-    fatal: &Arc<Notify>,
+    reporter: FatalReporter,
     stats: &Arc<InputStats>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
@@ -129,7 +129,6 @@ pub fn make_single_input(
     let wake = Arc::new(tokio::sync::Notify::new());
     let build_wake = Arc::clone(&wake);
     let build_stats = Arc::clone(stats);
-    let build_fatal = Arc::clone(fatal);
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         match setup_input_stream(
             fmt,
@@ -138,7 +137,7 @@ pub fn make_single_input(
             producer,
             build_wake,
             build_stats,
-            &build_fatal,
+            reporter,
         ) {
             Ok(stream) => Some(stream),
             Err(e) => {
@@ -171,7 +170,7 @@ fn setup_input_stream(
     producer: rtrb::Producer<f32>,
     wake: Arc<tokio::sync::Notify>,
     stats: Arc<InputStats>,
-    fatal: &Arc<Notify>,
+    reporter: FatalReporter,
 ) -> anyhow::Result<Stream> {
     let producer = NotifyingProducer::new(producer, wake);
     sample_format_dispatch!(
@@ -181,7 +180,7 @@ fn setup_input_stream(
         device,
         producer,
         stats,
-        fatal
+        reporter
     )
 }
 
@@ -190,15 +189,14 @@ fn run_input<T>(
     device: &Device,
     mut producer: NotifyingProducer,
     stats: Arc<InputStats>,
-    fatal: &Arc<Notify>,
+    reporter: FatalReporter,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,
 {
-    let fatal = Arc::clone(fatal);
     let err_fn = move |err: cpal::Error| {
-        super::stream_errors::note_input_error(err.kind(), &fatal);
+        reporter.report_input(err.kind());
     };
     device
         .build_input_stream(

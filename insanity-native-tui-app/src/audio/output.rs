@@ -15,7 +15,7 @@ use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
 use rtrb::{Consumer, Producer, RingBuffer};
 use rubato_audio_source::StreamResampler;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 
 use super::config::get_output_config;
 use super::cpal_registry::{default_real_output, device_name, find_output_by_id_name};
@@ -25,6 +25,7 @@ use super::mixer::{
     AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, SubscribeRequest,
     TARGET_RING_BLOCKS, demand_sleep,
 };
+use super::stream_errors::{FatalReporter, FatalSignal};
 
 // Output mixer
 
@@ -176,11 +177,11 @@ pub struct OutputInfo {
 pub struct OutputManager {
     config: AudioPipelineConfig,
     switch_tx: mpsc::Sender<HandoffRequest<Sink, OutputInfo>>,
-    fatal: Arc<Notify>,
+    fatal: Arc<FatalSignal>,
     stats: Arc<OutputStats>,
     timing: Arc<FillStats>,
     info: watch::Receiver<OutputInfo>,
-    generation: u64,
+    generation: Arc<AtomicU64>,
     current: Selection,
 }
 
@@ -201,6 +202,14 @@ impl OutputManager {
         Arc::clone(&self.stats)
     }
 
+    pub fn fatal_signal(&self) -> Arc<FatalSignal> {
+        Arc::clone(&self.fatal)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
     pub fn switch_to(&mut self, id: &str, name: &str) {
         let Some(device) = find_output_by_id_name(id, name).map(|d| d.0) else {
             log::warn!("Requested output device not found: {name}");
@@ -217,35 +226,48 @@ impl OutputManager {
 
     pub fn follow_default(&mut self) {
         let Some(device) = default_real_output().map(|d| d.0) else {
-            log::warn!("No output device available, staying silent");
+            log::warn!("No output device available, falling back to dummy");
+            self.adopt_dummy();
             return;
         };
+        let before = self.generation();
         self.adopt(Selection::FollowDefault, device);
+        if self.generation() == before {
+            self.adopt_dummy();
+        }
     }
 
     fn adopt(&mut self, selection: Selection, device: Device) {
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         let logical = AudioFormat::new(self.config.channels(), self.config.sample_rate());
+        let reporter = FatalReporter::new(Arc::clone(&self.fatal), generation);
         if let Some((sink, info)) = build_sink(
             device,
             &logical,
             self.config,
             &self.stats,
             &self.timing,
-            &self.fatal,
+            reporter,
             &selection,
         ) {
             self.current = selection;
-            self.generation += 1;
-            self.send(sink, info);
+            self.send(sink, info, generation);
         }
     }
 
-    fn send(&self, sink: Sink, info: OutputInfo) {
+    fn adopt_dummy(&mut self) {
+        let (sink, info) = build_dummy(self.config);
+        self.current = Selection::FollowDefault;
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        self.send(sink, info, generation);
+    }
+
+    fn send(&self, sink: Sink, info: OutputInfo, generation: u64) {
         let name = info.name.clone();
         let request = HandoffRequest {
             payload: sink,
             info,
-            generation: self.generation,
+            generation,
         };
         if self.switch_tx.try_send(request).is_err() {
             log::warn!("Output switch channel full, dropping switch to {name}");
@@ -259,7 +281,7 @@ fn build_sink(
     config: AudioPipelineConfig,
     stats: &Arc<OutputStats>,
     timing: &Arc<FillStats>,
-    fatal: &Arc<Notify>,
+    reporter: FatalReporter,
     selection: &Selection,
 ) -> Option<(Sink, OutputInfo)> {
     let name = device_name(&device);
@@ -279,7 +301,6 @@ fn build_sink(
     );
     let build_timing = Arc::clone(timing);
     let build_stats = Arc::clone(stats);
-    let build_fatal = Arc::clone(fatal);
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         match build_output_stream(
             sample_format,
@@ -288,7 +309,7 @@ fn build_sink(
             consumer,
             build_timing,
             build_stats,
-            &build_fatal,
+            reporter,
         ) {
             Ok(stream) => Some(stream),
             Err(e) => {
@@ -349,7 +370,7 @@ fn build_dummy(config: AudioPipelineConfig) -> (Sink, OutputInfo) {
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let stats = Arc::new(OutputStats::new());
-    let fatal = Arc::new(Notify::new());
+    let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
     let selection = Selection::FollowDefault;
     let logical = AudioFormat::new(audio_config.channels(), audio_config.sample_rate());
@@ -361,13 +382,14 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let timing = Arc::new(FillStats::new());
     let (initial_sink, initial_info, generation) = match default_real_output().map(|d| d.0) {
         Some(device) => {
+            let reporter = FatalReporter::new(Arc::clone(&fatal), 1);
             match build_sink(
                 device,
                 &logical,
                 audio_config,
                 &stats,
                 &timing,
-                &fatal,
+                reporter,
                 &selection,
             ) {
                 Some(built) => (built.0, built.1, 1),
@@ -413,7 +435,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
             stats,
             timing,
             info: info_rx,
-            generation,
+            generation: Arc::new(AtomicU64::new(generation)),
             current: selection,
         },
     }
@@ -537,7 +559,7 @@ fn build_output_stream(
     consumer: Consumer<f32>,
     timing: Arc<FillStats>,
     stats: Arc<OutputStats>,
-    fatal: &Arc<Notify>,
+    reporter: FatalReporter,
 ) -> anyhow::Result<Stream> {
     sample_format_dispatch!(
         sample_format,
@@ -547,7 +569,7 @@ fn build_output_stream(
         consumer,
         timing,
         stats,
-        fatal
+        reporter
     )
 }
 
@@ -572,14 +594,13 @@ fn run_output<T>(
     mut consumer: Consumer<f32>,
     timing: Arc<FillStats>,
     stats: Arc<OutputStats>,
-    fatal: &Arc<Notify>,
+    reporter: FatalReporter,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
 {
-    let fatal = Arc::clone(fatal);
     let err_fn = move |err: cpal::Error| {
-        super::stream_errors::note_output_error(err.kind(), &fatal);
+        reporter.report_output(err.kind());
     };
     device
         .build_output_stream(
@@ -615,9 +636,11 @@ mod tests {
     use insanity_core::audio::mixer::Mixer;
     use insanity_core::audio::transform::Gain;
     use std::sync::Arc;
-    use tokio::sync::{Notify, mpsc, watch};
+    use std::sync::atomic::AtomicU64;
+    use tokio::sync::{mpsc, watch};
 
     use super::super::mixer::{AppMixer, MAX_VOLUME};
+    use super::super::stream_errors::FatalSignal;
 
     fn pipeline_config() -> AudioPipelineConfig {
         AudioPipelineConfig::default()
@@ -696,11 +719,11 @@ mod tests {
         OutputManager {
             config: pipeline_config(),
             switch_tx,
-            fatal: Notify::new().into(),
+            fatal: Arc::new(FatalSignal::new()),
             stats: Default::default(),
             timing: Default::default(),
             info: info_rx,
-            generation: 0,
+            generation: Arc::new(AtomicU64::new(0)),
             current: Selection::FollowDefault,
         }
     }

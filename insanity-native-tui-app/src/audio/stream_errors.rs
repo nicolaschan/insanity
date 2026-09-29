@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use cpal::ErrorKind;
 use tokio::sync::Notify;
@@ -61,19 +61,72 @@ pub fn is_fatal(kind: ErrorKind) -> bool {
     )
 }
 
-/// Safe on a real-time audio thread
-pub fn note_input_error(kind: ErrorKind, fatal: &Arc<Notify>) {
-    INPUT.note(kind);
-    if is_fatal(kind) {
-        fatal.notify_one();
+pub struct FatalSignal {
+    generation: AtomicU64,
+    notify: Notify,
+}
+
+impl FatalSignal {
+    pub fn new() -> Self {
+        FatalSignal {
+            generation: AtomicU64::new(0),
+            notify: Notify::new(),
+        }
+    }
+
+    pub fn signal(&self, generation: u64) {
+        self.generation.store(generation, Ordering::Relaxed);
+        self.notify.notify_one();
+    }
+
+    pub fn notified(&self) -> impl Future<Output = ()> + '_ {
+        self.notify.notified()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+}
+
+impl Default for FatalSignal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone)]
+pub struct FatalReporter {
+    fatal: Arc<FatalSignal>,
+    generation: u64,
+}
+
+impl FatalReporter {
+    pub fn new(fatal: Arc<FatalSignal>, generation: u64) -> Self {
+        FatalReporter { fatal, generation }
+    }
+
+    pub fn report_input(&self, kind: ErrorKind) {
+        note_input_error(kind, &self.fatal, self.generation);
+    }
+
+    pub fn report_output(&self, kind: ErrorKind) {
+        note_output_error(kind, &self.fatal, self.generation);
     }
 }
 
 /// Safe on a real-time audio thread
-pub fn note_output_error(kind: ErrorKind, fatal: &Arc<Notify>) {
+pub fn note_input_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
+    INPUT.note(kind);
+    if is_fatal(kind) {
+        fatal.signal(generation);
+    }
+}
+
+/// Safe on a real-time audio thread
+pub fn note_output_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
     OUTPUT.note(kind);
     if is_fatal(kind) {
-        fatal.notify_one();
+        fatal.signal(generation);
     }
 }
 
@@ -90,24 +143,26 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        StreamErrorCounts, input_errors, is_fatal, note_input_error, note_output_error,
-        output_errors,
+        FatalSignal, StreamErrorCounts, input_errors, is_fatal, note_input_error,
+        note_output_error, output_errors,
     };
     use cpal::ErrorKind;
-    use tokio::sync::Notify;
 
-    fn test_fatal() -> Arc<Notify> {
-        Arc::new(Notify::new())
+    fn test_fatal() -> Arc<FatalSignal> {
+        Arc::new(FatalSignal::new())
     }
+
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn xruns_and_other_errors_are_counted_separately() {
+        let _guard = SERIAL.lock().unwrap();
         let input_before = input_errors();
         let output_before = output_errors();
-        note_input_error(ErrorKind::Xrun, &test_fatal());
-        note_input_error(ErrorKind::Xrun, &test_fatal());
-        note_input_error(ErrorKind::RealtimeDenied, &test_fatal());
-        note_output_error(ErrorKind::DeviceNotAvailable, &test_fatal());
+        note_input_error(ErrorKind::Xrun, &test_fatal(), 1);
+        note_input_error(ErrorKind::Xrun, &test_fatal(), 1);
+        note_input_error(ErrorKind::RealtimeDenied, &test_fatal(), 1);
+        note_output_error(ErrorKind::DeviceNotAvailable, &test_fatal(), 1);
         assert_eq!(
             input_errors().since(input_before),
             StreamErrorCounts { xruns: 2, other: 1 }
@@ -128,12 +183,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fatal_errors_wake_the_owner() {
+    async fn fatal_errors_wake_the_owner_with_generation() {
         let fatal = test_fatal();
-        note_input_error(ErrorKind::DeviceNotAvailable, &fatal);
+        {
+            let _guard = SERIAL.lock().unwrap();
+            note_input_error(ErrorKind::DeviceNotAvailable, &fatal, 3);
+        }
+        assert_eq!(fatal.generation(), 3);
         fatal.notified().await;
         let quiet = test_fatal();
-        note_output_error(ErrorKind::Xrun, &quiet);
+        {
+            let _guard = SERIAL.lock().unwrap();
+            note_output_error(ErrorKind::Xrun, &quiet, 7);
+        }
+        assert_eq!(quiet.generation(), 0);
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(10), quiet.notified())
                 .await
