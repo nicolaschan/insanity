@@ -36,6 +36,7 @@ pub const MOVE_UP_PEER_LIST_KEY: char = 'k';
 pub const MOVE_TOP_PEER_LIST_KEY: char = 'g';
 pub const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
 pub const MUTE_KEY: char = 'm';
+pub const REFRESH_DEVICES_KEY: char = 'r';
 
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
@@ -156,6 +157,15 @@ pub struct App {
     pub mute_self: bool,
     pub input_device_name: String,
     pub output_device_name: String,
+    pub input_devices: Vec<(String, String)>, // (Device ID, Device Name)
+    pub output_devices: Vec<(String, String)>, // (Device ID, Device Name)
+    pub device_cursor: DeviceCursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceCursor {
+    Input(usize),
+    Output(usize),
 }
 
 impl App {
@@ -179,6 +189,9 @@ impl App {
             mute_self: false,
             input_device_name: "".into(),
             output_device_name: "".into(),
+            input_devices: vec![],
+            output_devices: vec![],
+            device_cursor: DeviceCursor::Input(0),
         }
     }
 
@@ -254,14 +267,30 @@ impl App {
                     self.editor.append(c);
                     true
                 }
+                TAB_IDX_SETTINGS => match c {
+                    MOVE_DOWN_PEER_LIST_KEY => self.move_device_cursor(1),
+                    MOVE_UP_PEER_LIST_KEY => self.move_device_cursor(-1),
+                    REFRESH_DEVICES_KEY => {
+                        self.refresh_devices();
+                        true
+                    }
+                    _ => false,
+                },
                 _ => false,
             },
             AppEvent::Enter => {
-                let effective = self.tab_index == TAB_IDX_CHAT && !self.editor.is_empty();
-                if effective {
-                    self.send_message();
+                if self.tab_index == TAB_IDX_SETTINGS {
+                    self.select_focused_device()
+                } else if self.tab_index == TAB_IDX_CHAT {
+                    if !self.editor.is_empty() {
+                        self.send_message();
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
                 }
-                effective
             }
             AppEvent::NewMessage(sender_name, message) => {
                 self.add_message((sender_name, message));
@@ -356,6 +385,7 @@ impl App {
                     }
                     old != self.chat_offset
                 }
+                TAB_IDX_SETTINGS => self.move_device_cursor(1),
                 _ => false,
             },
             AppEvent::Up => match self.tab_index {
@@ -373,6 +403,7 @@ impl App {
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
                     old != self.chat_offset
                 }
+                TAB_IDX_SETTINGS => self.move_device_cursor(-1),
                 _ => false,
             },
             AppEvent::TogglePeer => {
@@ -422,7 +453,16 @@ impl App {
                 self.output_device_name = output_device_name;
                 true
             }
-            AppEvent::SetInputDevices(_) | AppEvent::SetOutputDevices(_) => false,
+            AppEvent::SetInputDevices(devices) => {
+                let changed = self.input_devices != devices;
+                self.input_devices = devices;
+                self.clamp_device_cursor() || changed
+            }
+            AppEvent::SetOutputDevices(devices) => {
+                let changed = self.output_devices != devices;
+                self.output_devices = devices;
+                self.clamp_device_cursor() || changed
+            }
             AppEvent::Loudness(peer_id, level) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
                     let name = peer.display_name.as_ref().unwrap_or(&peer.id).clone();
@@ -451,6 +491,85 @@ impl App {
 
     fn selected_peer(&self) -> Option<&Peer> {
         self.peers.values().nth(self.peer_index)
+    }
+
+    fn clamp_device_cursor(&mut self) -> bool {
+        let pin = |row: usize, len: usize| std::cmp::min(row, len.saturating_sub(1));
+        let clamped = match self.device_cursor {
+            DeviceCursor::Input(row) => DeviceCursor::Input(pin(row, self.input_devices.len())),
+            DeviceCursor::Output(row) => DeviceCursor::Output(pin(row, self.output_devices.len())),
+        };
+        let changed = clamped != self.device_cursor;
+        self.device_cursor = clamped;
+        changed
+    }
+
+    fn move_device_cursor(&mut self, delta: isize) -> bool {
+        if self.input_devices.is_empty() && self.output_devices.is_empty() {
+            return false;
+        }
+        let old = self.device_cursor;
+        self.device_cursor = match (self.device_cursor, delta.signum()) {
+            (DeviceCursor::Input(row), 1) => {
+                if row + 1 < self.input_devices.len() {
+                    DeviceCursor::Input(row + 1)
+                } else {
+                    DeviceCursor::Output(0)
+                }
+            }
+            (DeviceCursor::Output(row), 1) => {
+                if row + 1 < self.output_devices.len() {
+                    DeviceCursor::Output(row + 1)
+                } else {
+                    DeviceCursor::Input(0)
+                }
+            }
+            (DeviceCursor::Input(row), _) => {
+                if row > 0 && !self.input_devices.is_empty() {
+                    DeviceCursor::Input(row - 1)
+                } else if self.output_devices.is_empty() {
+                    DeviceCursor::Input(0)
+                } else {
+                    DeviceCursor::Output(self.output_devices.len() - 1)
+                }
+            }
+            (DeviceCursor::Output(row), _) => {
+                if row > 0 && !self.output_devices.is_empty() {
+                    DeviceCursor::Output(row - 1)
+                } else if self.input_devices.is_empty() {
+                    DeviceCursor::Output(0)
+                } else {
+                    DeviceCursor::Input(self.input_devices.len() - 1)
+                }
+            }
+        };
+        old != self.device_cursor
+    }
+
+    fn select_focused_device(&mut self) -> bool {
+        let selected = match self.device_cursor {
+            DeviceCursor::Input(row) => self
+                .input_devices
+                .get(row)
+                .map(|(id, name)| UserInputEvent::SetInputDevice(id.clone(), name.clone())),
+            DeviceCursor::Output(row) => self
+                .output_devices
+                .get(row)
+                .map(|(id, name)| UserInputEvent::SetOutputDevice(id.clone(), name.clone())),
+        };
+        match selected {
+            Some(event) => {
+                self.user_action_sender.send(event).unwrap();
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn refresh_devices(&mut self) {
+        self.user_action_sender
+            .send(UserInputEvent::RefreshDevices)
+            .unwrap();
     }
 
     fn toggle_peer(&mut self) {
@@ -916,6 +1035,105 @@ mod render_scaling_tests {
             "live meter level survives the transition"
         );
         assert_eq!(draws, 1, "spam phase drew exactly once");
+    }
+
+    fn test_app_on_settings() -> (App, UnboundedReceiver<UserInputEvent>) {
+        let (tx, rx) = unbounded_channel();
+        let mut app = App::new(tx);
+        assert!(app.process_event(AppEvent::NextTab));
+        assert!(app.process_event(AppEvent::NextTab));
+        assert_eq!(app.tab_index, TAB_IDX_SETTINGS);
+        (app, rx)
+    }
+
+    fn fixture_inputs() -> Vec<(String, String)> {
+        vec![
+            ("mic-0".to_string(), "Mic 0".to_string()),
+            ("mic-1".to_string(), "Mic 1".to_string()),
+            ("mic-2".to_string(), "Mic 2".to_string()),
+        ]
+    }
+
+    fn fixture_outputs() -> Vec<(String, String)> {
+        vec![
+            ("spk-0".to_string(), "Speakers 0".to_string()),
+            ("spk-1".to_string(), "Speakers 1".to_string()),
+        ]
+    }
+
+    #[test]
+    fn device_lists_store_and_clamp_on_shrink() {
+        let (mut app, _rx) = test_app_on_settings();
+        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
+        assert!(app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
+        assert!(!app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(2));
+        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs()[..1].to_vec())));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
+        assert!(!app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
+    }
+
+    #[test]
+    fn device_cursor_wraps_across_sections() {
+        let (mut app, _rx) = test_app_on_settings();
+        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
+        assert!(app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(2));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.device_cursor, DeviceCursor::Output(0));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.device_cursor, DeviceCursor::Output(1));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
+        assert!(app.process_event(AppEvent::Character('k')));
+        assert_eq!(app.device_cursor, DeviceCursor::Output(1));
+        assert!(app.process_event(AppEvent::Down));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
+        assert!(app.process_event(AppEvent::Up));
+        assert_eq!(app.device_cursor, DeviceCursor::Output(1));
+    }
+
+    #[test]
+    fn device_cursor_parks_on_empty_lists() {
+        let (mut app, _rx) = test_app_on_settings();
+        assert!(!app.process_event(AppEvent::Enter));
+        assert!(!app.process_event(AppEvent::Character('j')));
+        assert!(!app.process_event(AppEvent::Character('k')));
+        assert!(!app.process_event(AppEvent::Down));
+        assert!(!app.process_event(AppEvent::Up));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
+    }
+
+    #[test]
+    fn select_sends_explicit_device() {
+        let (mut app, mut rx) = test_app_on_settings();
+        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
+        assert!(app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
+        assert!(app.process_event(AppEvent::Enter));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            UserInputEvent::SetInputDevice("mic-0".to_string(), "Mic 0".to_string())
+        );
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.device_cursor, DeviceCursor::Output(0));
+        assert!(app.process_event(AppEvent::Enter));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            UserInputEvent::SetOutputDevice("spk-0".to_string(), "Speakers 0".to_string())
+        );
+    }
+
+    #[test]
+    fn refresh_key_requests_device_rescan() {
+        let (mut app, mut rx) = test_app_on_settings();
+        assert!(app.process_event(AppEvent::Character('r')));
+        assert_eq!(rx.try_recv().unwrap(), UserInputEvent::RefreshDevices);
     }
 
     fn expected_low_priority(event: &AppEvent) -> bool {
