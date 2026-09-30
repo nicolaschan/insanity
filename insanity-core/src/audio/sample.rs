@@ -25,3 +25,10 @@ pub trait Resampler: Send {
     ) {
     }
 }
+
+pub struct ResamplerSpec {
+    pub source_rate: u32,
+    pub source_channels: usize,
+    pub target_rate: u32,
+    pub block_frames: usize,
+}
