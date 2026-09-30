@@ -5,6 +5,7 @@ use cpal::{
     Device,
     traits::{DeviceTrait, HostTrait},
 };
+use insanity_core::audio::device::select_by_id_name;
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry, UNKNOWN_DEVICE_NAME};
 
 const SYNTHETIC_DEVICE_NAMES: [&str; 3] = ["default_input", "default_output", "default_sink"];
@@ -20,6 +21,10 @@ impl Debug for CpalAudioDevice {
 impl AudioDevice for CpalAudioDevice {
     fn try_name(&self) -> Option<String> {
         device_name_opt(&self.0)
+    }
+
+    fn try_id(&self) -> Option<String> {
+        self.0.id().ok().map(|id| id.to_string())
     }
 }
 
@@ -43,13 +48,16 @@ pub(crate) fn keep_device(name: &str, supports_direction: bool) -> bool {
     supports_direction && !is_synthetic_name(name) && !is_monitor_name(name)
 }
 
-fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> {
-    let devices = cpal::default_host()
+fn raw_devices() -> Vec<Device> {
+    cpal::default_host()
         .devices()
         .map(|d| d.into_iter().collect::<Vec<_>>())
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> {
     let mut seen = HashSet::new();
-    devices
+    raw_devices()
         .into_iter()
         .filter_map(|device| {
             let name = device_name_opt(&device)?;
@@ -70,6 +78,34 @@ pub fn list_inputs() -> Vec<CpalAudioDevice> {
 
 pub fn list_outputs() -> Vec<CpalAudioDevice> {
     filtered_devices(|device| device.supports_output())
+}
+
+// Returns (input devices, output devices)
+pub fn enumerate_devices() -> (Vec<CpalAudioDevice>, Vec<CpalAudioDevice>) {
+    let mut seen_inputs = HashSet::new();
+    let mut seen_outputs = HashSet::new();
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for device in raw_devices() {
+        let Some(name) = device_name_opt(&device) else {
+            continue;
+        };
+        if keep_device(&name, device.supports_input()) && seen_inputs.insert(name.clone()) {
+            inputs.push(CpalAudioDevice(device.clone()));
+        }
+        if keep_device(&name, device.supports_output()) && seen_outputs.insert(name) {
+            outputs.push(CpalAudioDevice(device));
+        }
+    }
+    (inputs, outputs)
+}
+
+pub fn find_input_by_id_name(id: &str, name: &str) -> Option<CpalAudioDevice> {
+    select_by_id_name(list_inputs(), id, name)
+}
+
+pub fn find_output_by_id_name(id: &str, name: &str) -> Option<CpalAudioDevice> {
+    select_by_id_name(list_outputs(), id, name)
 }
 
 fn host_default_usable(
@@ -111,6 +147,14 @@ pub fn default_real_output() -> Option<CpalAudioDevice> {
         return Some(device);
     }
     fallback_first(list_outputs(), "output")
+}
+
+pub fn default_input_device() -> Option<CpalAudioDevice> {
+    default_real_input()
+}
+
+pub fn default_output_device() -> Option<CpalAudioDevice> {
+    default_real_output()
 }
 
 pub struct CpalRegistry;
