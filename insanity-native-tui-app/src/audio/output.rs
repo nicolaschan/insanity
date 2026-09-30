@@ -2,21 +2,29 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::FormatConverter;
 use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::Mixer;
+use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
-use rtrb::{Consumer, RingBuffer};
-use tokio::sync::Notify;
-use tokio::sync::mpsc;
+use rtrb::{Consumer, Producer, RingBuffer};
+use rubato_audio_source::StreamResampler;
+use tokio::sync::{Notify, mpsc, watch};
 
 use super::config::get_output_config;
-use super::cpal_registry::{default_real_output, device_name};
-use super::mixer::{MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, run_mixer_owner};
+use super::cpal_registry::{default_real_output, device_name, find_output_by_id_name};
+use super::cpal_stream::sample_format_dispatch;
+use super::handoff::{HANDOFF_BOUND, HandoffRequest, Selection};
+use super::mixer::{
+    AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, SubscribeRequest,
+    TARGET_RING_BLOCKS, demand_sleep,
+};
 
 // Output mixer
 
@@ -55,8 +63,9 @@ impl Default for FillStats {
 }
 
 pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
+const PREFILL_BOUND: usize = 8;
 
-pub(crate) struct OutputStats {
+pub struct OutputStats {
     underruns: AtomicUsize,
     overruns: AtomicUsize,
 }
@@ -77,11 +86,11 @@ impl OutputStats {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
     }
 
-    pub(crate) fn underruns(&self) -> usize {
+    pub fn underruns(&self) -> usize {
         self.underruns.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn overruns(&self) -> usize {
+    pub fn overruns(&self) -> usize {
         self.overruns.load(Ordering::Relaxed)
     }
 }
@@ -95,109 +104,429 @@ impl Default for OutputStats {
 #[derive(Clone)]
 pub(crate) struct OutputHandle {
     pub(crate) client: MixerClient,
-    pub(crate) timing: Arc<FillStats>,
     pub(crate) format: AudioFormat,
+    pub(crate) timing: Arc<FillStats>,
     pub(crate) stats: Arc<OutputStats>,
-    pub(crate) name: String,
-}
-
-pub(crate) struct OutputGuard {
-    _stream: Option<send_safe::SendWrapperThread<Option<Stream>>>,
 }
 
 pub(crate) struct AudioOutput {
     pub(crate) handle: OutputHandle,
-    pub(crate) _guard: OutputGuard,
+    pub(crate) manager: OutputManager,
 }
 
-pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
-    let output = default_real_output().map(|d| d.0).and_then(|device| {
-        get_output_config(&device, audio_config)
-            .inspect_err(|e| log::warn!("Failed to get output config, falling back to dummy: {e}"))
-            .ok()
-            .map(|(sample_format, config)| (device, sample_format, config))
-    });
-    let name = output.as_ref().map_or_else(
-        || UNKNOWN_DEVICE_NAME.into(),
-        |(device, _, _)| device_name(device),
+pub struct Sink {
+    producer: Producer<f32>,
+    stream: Option<send_safe::SendWrapperThread<Option<Stream>>>,
+    converter: FormatConverter<StreamResampler>,
+    device_format: AudioFormat,
+    device_block: usize,
+    name: String,
+}
+
+impl Sink {
+    fn buffered_samples(&self) -> usize {
+        self.device_block * RING_CAPACITY_BLOCKS - self.producer.slots()
+            + self.converter.pending_samples()
+    }
+
+    fn play(&mut self) -> bool {
+        match self.stream.as_mut() {
+            Some(wrapper) => wrapper
+                .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    fn tick(&mut self, mixer: &mut AppMixer, logical_block: usize, stats: &Arc<OutputStats>) {
+        let logical: Vec<f32> = (0..logical_block)
+            .map(|_| mixer.next_sync().unwrap_or(0.0))
+            .collect();
+        self.converter.feed(logical);
+        while self.converter.pending_samples() >= self.device_block {
+            if self.producer.slots() < self.device_block {
+                break;
+            }
+            let Some(block) = self.converter.take_block() else {
+                debug_assert!(false, "pending samples imply a full block");
+                break;
+            };
+            match self.producer.write_chunk_uninit(block.len()) {
+                Ok(chunk) => {
+                    chunk.fill_from_iter(block);
+                }
+                Err(_) => {
+                    debug_assert!(false, "ring slots were checked");
+                    stats.note_overrun(block.len());
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct OutputInfo {
+    pub name: String,
+    pub format: AudioFormat,
+    pub selection: Selection,
+}
+
+#[derive(Clone)]
+pub struct OutputManager {
+    config: AudioPipelineConfig,
+    switch_tx: mpsc::Sender<HandoffRequest<Sink, OutputInfo>>,
+    fatal: Arc<Notify>,
+    stats: Arc<OutputStats>,
+    timing: Arc<FillStats>,
+    info: watch::Receiver<OutputInfo>,
+    generation: u64,
+    current: Selection,
+}
+
+impl OutputManager {
+    pub fn selection(&self) -> &Selection {
+        &self.current
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<OutputInfo> {
+        self.info.clone()
+    }
+
+    pub fn current_name(&self) -> String {
+        self.info.borrow().name.clone()
+    }
+
+    pub fn stats(&self) -> Arc<OutputStats> {
+        Arc::clone(&self.stats)
+    }
+
+    pub fn switch_to(&mut self, id: &str, name: &str) {
+        let Some(device) = find_output_by_id_name(id, name).map(|d| d.0) else {
+            log::warn!("Requested output device not found: {name}");
+            return;
+        };
+        self.adopt(
+            Selection::Explicit {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            },
+            device,
+        );
+    }
+
+    pub fn follow_default(&mut self) {
+        let Some(device) = default_real_output().map(|d| d.0) else {
+            log::warn!("No output device available, staying silent");
+            return;
+        };
+        self.adopt(Selection::FollowDefault, device);
+    }
+
+    fn adopt(&mut self, selection: Selection, device: Device) {
+        let logical = AudioFormat::new(self.config.channels(), self.config.sample_rate());
+        if let Some((sink, info)) = build_sink(
+            device,
+            &logical,
+            self.config,
+            &self.stats,
+            &self.timing,
+            &self.fatal,
+            &selection,
+        ) {
+            self.current = selection;
+            self.generation += 1;
+            self.send(sink, info);
+        }
+    }
+
+    fn send(&self, sink: Sink, info: OutputInfo) {
+        let name = info.name.clone();
+        let request = HandoffRequest {
+            payload: sink,
+            info,
+            generation: self.generation,
+        };
+        if self.switch_tx.try_send(request).is_err() {
+            log::warn!("Output switch channel full, dropping switch to {name}");
+        }
+    }
+}
+
+fn build_sink(
+    device: Device,
+    logical: &AudioFormat,
+    config: AudioPipelineConfig,
+    stats: &Arc<OutputStats>,
+    timing: &Arc<FillStats>,
+    fatal: &Arc<Notify>,
+    selection: &Selection,
+) -> Option<(Sink, OutputInfo)> {
+    let name = device_name(&device);
+    let Ok((sample_format, cfg)) = get_output_config(&device, config) else {
+        log::warn!("Failed to get output config for {name}, falling back to dummy");
+        return None;
+    };
+    let device_format = AudioFormat::new(cfg.channels, cfg.sample_rate);
+    let device_block = cfg.channels as usize * config.frames();
+    debug_assert!(device_block > 0);
+    let (producer, consumer) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
+    let converter = FormatConverter::<StreamResampler>::new(
+        logical.clone(),
+        device_format.clone(),
+        device_block,
+        device_block * RING_CAPACITY_BLOCKS,
     );
-    let format = output.as_ref().map_or_else(
-        || AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
-        |(_, _, config)| AudioFormat::new(config.channels, config.sample_rate),
-    );
-    let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mixer = Mixer::new(format.clone(), audio_config, bus);
-    let timing = Arc::new(FillStats::new());
-    let stats = Arc::new(OutputStats::new());
-    assert!(format.channel_count > 0, "output channel_count must be > 0");
-    let block_samples = format.channel_count as usize * audio_config.frames();
-    let (producer, consumer) = RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
-    let callback_timing = timing.clone();
-    let callback_stats = stats.clone();
-    let callback_fatal = Arc::new(Notify::new());
-    let stream = match output {
-        Some((device, sample_format, config)) => {
-            let mut wrapper =
-                send_safe::SendWrapperThread::new(move || {
-                    match build_output_stream(
-                        sample_format,
-                        config,
-                        &device,
-                        consumer,
-                        callback_timing,
-                        callback_stats,
-                        &callback_fatal,
-                    ) {
-                        Ok(s) => Some(s),
-                        Err(e) => {
-                            log::warn!(
-                                "Failed to build output stream, falling back to dummy: {e:?}"
-                            );
-                            None
-                        }
-                    }
-                });
-            let play_ok = wrapper
-                .execute(|s| match s {
-                    Some(stream) => stream.play().is_ok(),
-                    None => false,
-                })
-                .unwrap_or(false);
-            if play_ok {
-                Some(wrapper)
-            } else {
-                log::warn!("Failed to start output stream, falling back to dummy");
+    let build_timing = Arc::clone(timing);
+    let build_stats = Arc::clone(stats);
+    let build_fatal = Arc::clone(fatal);
+    let mut wrapper = send_safe::SendWrapperThread::new(move || {
+        match build_output_stream(
+            sample_format,
+            cfg,
+            &device,
+            consumer,
+            build_timing,
+            build_stats,
+            &build_fatal,
+        ) {
+            Ok(stream) => Some(stream),
+            Err(e) => {
+                log::warn!("Failed to build output stream, falling back to dummy: {e:?}");
                 None
             }
         }
-        None => None,
-    };
-    let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
-    let task_stats = stats.clone();
-    let task_format = format.clone();
-    tokio::spawn(async move {
-        run_mixer_owner(
-            mixer,
-            producer,
-            task_stats,
-            op_rx,
-            block_samples,
-            task_format,
-        )
-        .await
     });
+    let playing = wrapper
+        .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
+        .unwrap_or(false);
+    if !playing {
+        log::warn!("Failed to start output stream, falling back to dummy");
+        return None;
+    }
+    let info = OutputInfo {
+        name: name.clone(),
+        format: device_format.clone(),
+        selection: selection.clone(),
+    };
+    let sink = Sink {
+        producer,
+        stream: Some(wrapper),
+        converter,
+        device_format,
+        device_block,
+        name,
+    };
+    Some((sink, info))
+}
+
+fn build_dummy(config: AudioPipelineConfig) -> (Sink, OutputInfo) {
+    let format = AudioFormat::new(config.channels(), config.sample_rate());
+    let device_block = format.channel_count as usize * config.frames();
+    debug_assert!(device_block > 0);
+    let (producer, _) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
+    let converter = FormatConverter::<StreamResampler>::new(
+        format.clone(),
+        format.clone(),
+        device_block,
+        device_block * RING_CAPACITY_BLOCKS,
+    );
+    let info = OutputInfo {
+        name: UNKNOWN_DEVICE_NAME.into(),
+        format: format.clone(),
+        selection: Selection::FollowDefault,
+    };
+    let sink = Sink {
+        producer,
+        stream: None,
+        converter,
+        device_format: format,
+        device_block,
+        name: UNKNOWN_DEVICE_NAME.into(),
+    };
+    (sink, info)
+}
+
+pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
+    let stats = Arc::new(OutputStats::new());
+    let fatal = Arc::new(Notify::new());
+    let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
+    let selection = Selection::FollowDefault;
+    let logical = AudioFormat::new(audio_config.channels(), audio_config.sample_rate());
+    debug_assert!(logical.channel_count > 0);
+    let logical_block = logical.channel_count as usize * audio_config.frames();
+    debug_assert!(logical_block > 0);
+    let (bus, _) = Gain::shared(100, MAX_VOLUME);
+    let mixer = Mixer::new(logical.clone(), audio_config, bus);
+    let timing = Arc::new(FillStats::new());
+    let (initial_sink, initial_info, generation) = match default_real_output().map(|d| d.0) {
+        Some(device) => {
+            match build_sink(
+                device,
+                &logical,
+                audio_config,
+                &stats,
+                &timing,
+                &fatal,
+                &selection,
+            ) {
+                Some(built) => (built.0, built.1, 1),
+                None => {
+                    let (sink, info) = build_dummy(audio_config);
+                    (sink, info, 0)
+                }
+            }
+        }
+        None => {
+            log::warn!("No output device available, falling back to dummy");
+            let (sink, info) = build_dummy(audio_config);
+            (sink, info, 0)
+        }
+    };
+    let initial_format = initial_info.format.clone();
+    let (info_tx, info_rx) = watch::channel(initial_info);
+    let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
+    let task_stats = Arc::clone(&stats);
+    tokio::spawn(run_output_owner(
+        mixer,
+        initial_sink,
+        task_stats,
+        op_rx,
+        swap_rx,
+        info_tx,
+        logical_block,
+    ));
     AudioOutput {
         handle: OutputHandle {
             client: MixerClient {
                 tx: op_tx,
                 dropped: Arc::new(AtomicUsize::new(0)),
             },
-            timing,
-            format,
-            stats,
-            name,
+            timing: Arc::clone(&timing),
+            format: initial_format,
+            stats: Arc::clone(&stats),
         },
-        _guard: OutputGuard { _stream: stream },
+        manager: OutputManager {
+            config: audio_config,
+            switch_tx,
+            fatal,
+            stats,
+            timing,
+            info: info_rx,
+            generation,
+            current: selection,
+        },
+    }
+}
+
+fn activate_sink(
+    sink: &mut Sink,
+    mixer: &mut AppMixer,
+    logical_block: usize,
+    stats: &Arc<OutputStats>,
+) {
+    let mut ticks = 0;
+    while sink.buffered_samples() < sink.device_block && ticks < PREFILL_BOUND {
+        let before = sink.buffered_samples();
+        sink.tick(mixer, logical_block, stats);
+        ticks += 1;
+        if sink.buffered_samples() == before {
+            break;
+        }
+    }
+    sink.play();
+}
+
+fn adopt_sink(
+    sink: &mut Sink,
+    request: HandoffRequest<Sink, OutputInfo>,
+    mixer: &mut AppMixer,
+    logical_block: usize,
+    stats: &Arc<OutputStats>,
+    info_tx: &watch::Sender<OutputInfo>,
+) {
+    let mut fresh = request.payload;
+    activate_sink(&mut fresh, mixer, logical_block, stats);
+    let evicted = std::mem::replace(sink, fresh);
+    info_tx.send_replace(request.info);
+    log::info!(
+        "Output device switched to {} (generation {})",
+        sink.name,
+        request.generation
+    );
+    tokio::task::spawn_blocking(move || drop(evicted));
+}
+
+pub(crate) async fn run_output_owner(
+    mut mixer: AppMixer,
+    mut sink: Sink,
+    stats: Arc<OutputStats>,
+    mut op_rx: mpsc::Receiver<MixerOp>,
+    mut swap_rx: mpsc::Receiver<HandoffRequest<Sink, OutputInfo>>,
+    info_tx: watch::Sender<OutputInfo>,
+    logical_block: usize,
+) {
+    debug_assert!(logical_block > 0);
+    debug_assert!(sink.device_block > 0);
+    activate_sink(&mut sink, &mut mixer, logical_block, &stats);
+    let mut batch = Vec::with_capacity(MIXER_OPS_BOUND);
+    let mut slot_replies = Vec::new();
+    let mut snapshot_replies = Vec::new();
+    let mut sleep = Duration::ZERO;
+    loop {
+        tokio::select! {
+            biased;
+            count = op_rx.recv_many(&mut batch, MIXER_OPS_BOUND) => {
+                if count == 0 {
+                    break;
+                }
+            }
+            swapped = swap_rx.recv() => {
+                let Some(request) = swapped else { break };
+                adopt_sink(&mut sink, request, &mut mixer, logical_block, &stats, &info_tx);
+            }
+            _ = tokio::time::sleep(sleep) => {}
+        }
+        for op in batch.drain(..) {
+            match op {
+                MixerOp::Push { slot, chunk } => {
+                    mixer.push_to_slot(slot, chunk);
+                }
+                MixerOp::Subscribe(request) => {
+                    let SubscribeRequest {
+                        transform,
+                        decoder,
+                        reply,
+                    } = *request;
+                    let slot = mixer.subscribe(transform, decoder);
+                    slot_replies.push((reply, slot));
+                }
+                MixerOp::Unsubscribe(slot) => mixer.unsubscribe(slot),
+                MixerOp::Snapshot(reply) => {
+                    snapshot_replies.push((reply, (mixer.metrics_snapshot(), mixer.peer_count())));
+                }
+            }
+        }
+        for (reply, slot) in slot_replies.drain(..) {
+            let _ = reply.send(slot);
+        }
+        for (reply, snapshot) in snapshot_replies.drain(..) {
+            let _ = reply.send(snapshot);
+        }
+        let target_samples = sink.device_block * TARGET_RING_BLOCKS;
+        for _ in 0..TARGET_RING_BLOCKS {
+            if sink.buffered_samples() >= target_samples {
+                break;
+            }
+            sink.tick(&mut mixer, logical_block, &stats);
+        }
+        sleep = demand_sleep(
+            sink.device_block * RING_CAPACITY_BLOCKS,
+            sink.producer.slots(),
+            sink.device_block,
+            usize::from(sink.device_format.channel_count),
+            sink.device_format.sample_rate,
+        );
     }
 }
 
@@ -210,21 +539,16 @@ fn build_output_stream(
     stats: Arc<OutputStats>,
     fatal: &Arc<Notify>,
 ) -> anyhow::Result<Stream> {
-    match sample_format {
-        SampleFormat::I8 => run_output::<i8>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::I16 => run_output::<i16>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::I32 => run_output::<i32>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::I64 => run_output::<i64>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::U8 => run_output::<u8>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::U16 => run_output::<u16>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::U32 => run_output::<u32>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::U64 => run_output::<u64>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::F32 => run_output::<f32>(config, device, consumer, timing, stats, fatal),
-        SampleFormat::F64 => run_output::<f64>(config, device, consumer, timing, stats, fatal),
-        other => Err(anyhow::anyhow!(
-            "unsupported output sample format {other:?}"
-        )),
-    }
+    sample_format_dispatch!(
+        sample_format,
+        run_output,
+        config,
+        device,
+        consumer,
+        timing,
+        stats,
+        fatal
+    )
 }
 
 fn render_samples<T>(outs: &mut [T], first: &[f32], second: &[f32])
@@ -278,4 +602,120 @@ where
             None,
         )
         .map_err(|e| anyhow::anyhow!("build output stream: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::handoff::{HandoffRequest, Selection};
+    use super::{OutputManager, build_dummy};
+    use super::{activate_sink, adopt_sink};
+    use insanity_core::audio::AudioFormat;
+    use insanity_core::audio::config::AudioPipelineConfig;
+    use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
+    use insanity_core::audio::mixer::Mixer;
+    use insanity_core::audio::transform::Gain;
+    use std::sync::Arc;
+    use tokio::sync::{Notify, mpsc, watch};
+
+    use super::super::mixer::{AppMixer, MAX_VOLUME};
+
+    fn pipeline_config() -> AudioPipelineConfig {
+        AudioPipelineConfig::default()
+    }
+
+    fn empty_mixer() -> AppMixer {
+        let config = pipeline_config();
+        let (bus, _) = Gain::shared(100, MAX_VOLUME);
+        Mixer::new(config.audio_format(), config, bus)
+    }
+
+    fn logical_block() -> usize {
+        let config = pipeline_config();
+        config.channels() as usize * config.frames()
+    }
+
+    #[test]
+    fn build_dummy_matches_pipeline_format() {
+        let config = pipeline_config();
+        let (sink, info) = build_dummy(config);
+        assert_eq!(sink.device_format, config.audio_format());
+        assert_eq!(sink.device_block, config.block_samples());
+        assert_eq!(info.format, config.audio_format());
+        assert_eq!(info.name, UNKNOWN_DEVICE_NAME);
+        assert!(matches!(info.selection, Selection::FollowDefault));
+    }
+
+    #[tokio::test]
+    async fn prefill_converges_within_bound() {
+        let config = pipeline_config();
+        let (mut sink, _) = build_dummy(config);
+        let mut mixer = empty_mixer();
+        let stats = Arc::new(super::OutputStats::new());
+        assert_eq!(sink.buffered_samples(), 0);
+        activate_sink(&mut sink, &mut mixer, logical_block(), &stats);
+        assert!(sink.buffered_samples() >= sink.device_block);
+        assert!(!sink.play());
+    }
+
+    #[tokio::test]
+    async fn adopt_replaces_sink_and_publishes_info() {
+        let config = pipeline_config();
+        let (mut sink, _) = build_dummy(config);
+        let (fresh, fresh_info) = build_dummy(config);
+        let name = fresh.name.clone();
+        let (info_tx, info_rx) = watch::channel(test_info());
+        let mut mixer = empty_mixer();
+        let stats = Arc::new(super::OutputStats::new());
+        adopt_sink(
+            &mut sink,
+            HandoffRequest {
+                payload: fresh,
+                info: fresh_info,
+                generation: 2,
+            },
+            &mut mixer,
+            logical_block(),
+            &stats,
+            &info_tx,
+        );
+        assert_eq!(sink.name, name);
+        assert_eq!(info_rx.borrow().name, name);
+    }
+
+    fn test_info() -> super::OutputInfo {
+        super::OutputInfo {
+            name: "initial".into(),
+            format: AudioFormat::new(2, 48000),
+            selection: Selection::FollowDefault,
+        }
+    }
+
+    fn test_manager() -> OutputManager {
+        let (switch_tx, _) = mpsc::channel(8);
+        let (_, info_rx) = watch::channel(test_info());
+        OutputManager {
+            config: pipeline_config(),
+            switch_tx,
+            fatal: Notify::new().into(),
+            stats: Default::default(),
+            timing: Default::default(),
+            info: info_rx,
+            generation: 0,
+            current: Selection::FollowDefault,
+        }
+    }
+
+    #[test]
+    fn unknown_device_switch_warns_and_keeps_selection() {
+        let mut manager = test_manager();
+        manager.switch_to("no-such-id", "no-such-device");
+        assert!(matches!(manager.selection(), Selection::FollowDefault));
+    }
+
+    #[test]
+    fn follow_default_never_panics_without_devices() {
+        let mut manager = test_manager();
+        manager.follow_default();
+        assert!(matches!(manager.selection(), Selection::FollowDefault));
+    }
 }
