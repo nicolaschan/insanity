@@ -365,18 +365,7 @@ impl App {
                 true
             }
             AppEvent::Down => match self.tab_index {
-                TAB_IDX_PEERS => {
-                    if self.peers.is_empty() {
-                        false
-                    } else {
-                        let old = self.peer_index;
-                        self.peer_index = std::cmp::min(
-                            self.peer_index.checked_add(1).unwrap_or(0),
-                            self.peers.len() - 1,
-                        );
-                        old != self.peer_index
-                    }
-                }
+                TAB_IDX_PEERS => self.move_peer(1),
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
                     self.chat_offset = self.chat_offset.saturating_sub(1);
@@ -389,15 +378,7 @@ impl App {
                 _ => false,
             },
             AppEvent::Up => match self.tab_index {
-                TAB_IDX_PEERS => {
-                    if self.peers.is_empty() {
-                        false
-                    } else {
-                        let old = self.peer_index;
-                        self.peer_index = self.peer_index.saturating_sub(1);
-                        old != self.peer_index
-                    }
-                }
+                TAB_IDX_PEERS => self.move_peer(-1),
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
@@ -513,6 +494,8 @@ impl App {
             (DeviceCursor::Input(row), 1) => {
                 if row + 1 < self.input_devices.len() {
                     DeviceCursor::Input(row + 1)
+                } else if self.output_devices.is_empty() {
+                    DeviceCursor::Input(row)
                 } else {
                     DeviceCursor::Output(0)
                 }
@@ -521,16 +504,14 @@ impl App {
                 if row + 1 < self.output_devices.len() {
                     DeviceCursor::Output(row + 1)
                 } else {
-                    DeviceCursor::Input(0)
+                    DeviceCursor::Output(row)
                 }
             }
             (DeviceCursor::Input(row), _) => {
                 if row > 0 && !self.input_devices.is_empty() {
                     DeviceCursor::Input(row - 1)
-                } else if self.output_devices.is_empty() {
-                    DeviceCursor::Input(0)
                 } else {
-                    DeviceCursor::Output(self.output_devices.len() - 1)
+                    DeviceCursor::Input(0)
                 }
             }
             (DeviceCursor::Output(row), _) => {
@@ -1076,28 +1057,6 @@ mod render_scaling_tests {
     }
 
     #[test]
-    fn device_cursor_wraps_across_sections() {
-        let (mut app, _rx) = test_app_on_settings();
-        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
-        assert!(app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(2));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert_eq!(app.device_cursor, DeviceCursor::Output(0));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert_eq!(app.device_cursor, DeviceCursor::Output(1));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
-        assert!(app.process_event(AppEvent::Character('k')));
-        assert_eq!(app.device_cursor, DeviceCursor::Output(1));
-        assert!(app.process_event(AppEvent::Down));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
-        assert!(app.process_event(AppEvent::Up));
-        assert_eq!(app.device_cursor, DeviceCursor::Output(1));
-    }
-
-    #[test]
     fn device_cursor_parks_on_empty_lists() {
         let (mut app, _rx) = test_app_on_settings();
         assert!(!app.process_event(AppEvent::Enter));
@@ -1134,6 +1093,105 @@ mod render_scaling_tests {
         let (mut app, mut rx) = test_app_on_settings();
         assert!(app.process_event(AppEvent::Character('r')));
         assert_eq!(rx.try_recv().unwrap(), UserInputEvent::RefreshDevices);
+    }
+
+    fn test_settings_app(input_count: usize, output_count: usize) -> App {
+        let (tx, _rx) = unbounded_channel();
+        let mut app = App::new(tx);
+        app.process_event(AppEvent::NextTab);
+        app.process_event(AppEvent::NextTab);
+        let inputs = (0..input_count)
+            .map(|i| (format!("mic-{i}"), format!("Mic {i}")))
+            .collect();
+        let outputs = (0..output_count)
+            .map(|i| (format!("spk-{i}"), format!("Speakers {i}")))
+            .collect();
+        app.process_event(AppEvent::SetInputDevices(inputs));
+        app.process_event(AppEvent::SetOutputDevices(outputs));
+        app
+    }
+
+    fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width as usize;
+        buffer
+            .content
+            .chunks(width)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn settings_picker_shows_all_devices_unclipped() {
+        let app = test_settings_app(3, 2);
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let text = buffer_text(&terminal).join("\n");
+        for name in ["Mic 0", "Mic 1", "Mic 2", "Speakers 0", "Speakers 1"] {
+            assert!(text.contains(name), "{name} clipped from settings picker");
+        }
+        assert!(text.contains("[r] refresh"));
+    }
+
+    #[test]
+    fn settings_cursor_row_is_highlighted() {
+        use crate::style::SELECTED;
+        let mut app = test_settings_app(2, 1);
+        assert!(app.process_event(AppEvent::Character('j')));
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width;
+        let height = buffer.area.height;
+        let mut highlighted = 0;
+        for y in 0..height {
+            let row: String = (0..width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect();
+            if row.contains("Mic 1") {
+                let lit = (0..width).any(|x| buffer[(x, y)].bg == SELECTED);
+                assert!(lit, "cursor row not highlighted");
+                highlighted += 1;
+            }
+        }
+        assert_eq!(highlighted, 1, "Mic 1 must render exactly once");
+    }
+
+    #[test]
+    fn settings_empty_lists_show_placeholders() {
+        let app = test_settings_app(0, 0);
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let text = buffer_text(&terminal).join("\n");
+        assert_eq!(
+            text.matches("(no devices found)").count(),
+            2,
+            "both sections need empty labels"
+        );
+    }
+
+    #[test]
+    fn settings_current_device_is_marked() {
+        use ratatui::style::Color;
+        let mut app = test_settings_app(2, 1);
+        assert!(app.process_event(AppEvent::SetInputDeviceName("Mic 1".to_string())));
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width;
+        let height = buffer.area.height;
+        let mut marked = 0;
+        for y in 0..height {
+            let row: String = (0..width)
+                .map(|x| buffer[(x, y)].symbol().to_string())
+                .collect();
+            if row.contains("Mic 1") {
+                let lit = (0..width).any(|x| buffer[(x, y)].fg == Color::LightBlue);
+                assert!(lit, "current device not marked");
+                marked += 1;
+            }
+        }
+        assert_eq!(marked, 1, "Mic 1 must render exactly once");
     }
 
     fn expected_low_priority(event: &AppEvent) -> bool {

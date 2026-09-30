@@ -41,6 +41,7 @@ pub struct SampleChunker<S: SampleSource + Send> {
 
 impl<S: SampleSource + Send> SampleChunker<S> {
     pub fn new(source: S, frames: usize) -> Self {
+        assert!(source.format().channel_count > 0);
         SampleChunker {
             source,
             frames,
@@ -52,7 +53,6 @@ impl<S: SampleSource + Send> SampleChunker<S> {
 impl<S: SampleSource + Send> ChunkSource for SampleChunker<S> {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         let channels = self.source.format().channel_count as usize;
-        debug_assert!(channels > 0);
         let len = self.frames * channels;
         let mut audio_data = Vec::with_capacity(len);
         for _ in 0..len {
