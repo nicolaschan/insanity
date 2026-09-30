@@ -21,6 +21,7 @@ use crate::{
     audio::{
         codec::rebuild_opus_encoder,
         config::AUDIO_CALLBACK_FRAMES,
+        device_supervisor,
         input::{AudioInput, InputManager, start_input},
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, OutputManager, start_output},
@@ -57,11 +58,21 @@ pub struct ConnectionManager {
 }
 
 #[derive(Clone)]
-struct SharedAudio {
+struct InputSide {
     hub: Arc<AudioInputHub<EncodedChunk>>,
+    manager: InputManager,
+}
+
+#[derive(Clone)]
+struct OutputSide {
     handle: OutputHandle,
-    input: InputManager,
-    output: OutputManager,
+    manager: OutputManager,
+}
+
+#[derive(Clone)]
+struct SharedAudio {
+    input: InputSide,
+    output: OutputSide,
 }
 
 impl ConnectionManager {
@@ -296,12 +307,13 @@ fn manage_peers(
         audio_config,
         rebuild_opus_encoder,
     ));
+    let output = start_output(audio_config);
     if let Some(app_event_tx) = &app_event_tx {
-        if app_event_tx
-            .send(AppEvent::SetInputDeviceName(input.current_name()))
-            .is_err()
-        {
-            log::warn!("Could not set input device name");
+        for event in device_supervisor::refresh_device_events(&input, &output.manager) {
+            if app_event_tx.send(event).is_err() {
+                log::warn!("Could not send initial device state to UI");
+                break;
+            }
         }
         let name_tx = app_event_tx.clone();
         let mut input_info = input.subscribe();
@@ -319,14 +331,7 @@ fn manage_peers(
         });
     }
 
-    let output = start_output(audio_config);
     if let Some(app_event_tx) = &app_event_tx {
-        if app_event_tx
-            .send(AppEvent::SetOutputDeviceName(output.manager.current_name()))
-            .is_err()
-        {
-            log::warn!("Could not set output device name");
-        }
         let name_tx = app_event_tx.clone();
         let mut output_info = output.manager.subscribe();
         tokio::spawn(async move {
@@ -343,46 +348,66 @@ fn manage_peers(
         });
     }
     let audio = SharedAudio {
-        hub: hub.clone(),
-        handle: output.handle.clone(),
-        input,
-        output: output.manager.clone(),
+        input: InputSide {
+            hub: hub.clone(),
+            manager: input,
+        },
+        output: OutputSide {
+            handle: output.handle.clone(),
+            manager: output.manager.clone(),
+        },
     };
+    {
+        let supervisor_input = audio.input.manager.clone();
+        let supervisor_output = audio.output.manager.clone();
+        let supervisor_tx = app_event_tx.clone();
+        let supervisor_cancel = cancellation_token.clone();
+        tokio::spawn(async move {
+            device_supervisor::run_device_supervisor(
+                supervisor_input,
+                supervisor_output,
+                supervisor_tx,
+                supervisor_cancel,
+            )
+            .await;
+        });
+    }
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
             "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES} input={} output={}",
-            metrics_audio.handle.format.channel_count,
-            metrics_audio.handle.format.sample_rate,
-            metrics_audio.input.current_name(),
-            metrics_audio.output.current_name(),
+            metrics_audio.output.handle.format.channel_count,
+            metrics_audio.output.handle.format.sample_rate,
+            metrics_audio.input.manager.current_name(),
+            metrics_audio.output.manager.current_name(),
         );
         let mut prev = metrics_audio
+            .output
             .handle
             .client
             .snapshot()
             .await
             .map(|(snapshot, _)| snapshot)
             .unwrap_or_default();
-        let mut prev_dropped = metrics_audio.handle.client.dropped();
-        let mut prev_underruns = metrics_audio.handle.stats.underruns();
-        let mut prev_overruns = metrics_audio.handle.stats.overruns();
+        let mut prev_dropped = metrics_audio.output.handle.client.dropped();
+        let mut prev_underruns = metrics_audio.output.handle.stats.underruns();
+        let mut prev_overruns = metrics_audio.output.handle.stats.overruns();
         let mut prev_input_errors = stream_errors::input_errors();
         let mut prev_output_errors = stream_errors::output_errors();
-        let mut prev_input_overruns = metrics_audio.input.stats().overruns();
+        let mut prev_input_overruns = metrics_audio.input.manager.stats().overruns();
         let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    if let Some((current, peers)) = metrics_audio.handle.client.snapshot().await {
-                        let dropped = metrics_audio.handle.client.dropped();
-                        let ring_underruns = metrics_audio.handle.stats.underruns();
-                        let ring_overruns = metrics_audio.handle.stats.overruns();
+                    if let Some((current, peers)) = metrics_audio.output.handle.client.snapshot().await {
+                        let dropped = metrics_audio.output.handle.client.dropped();
+                        let ring_underruns = metrics_audio.output.handle.stats.underruns();
+                        let ring_overruns = metrics_audio.output.handle.stats.overruns();
                         let line = format_audio_interval(
                             &prev,
                             &current,
-                            metrics_audio.handle.timing.avg_nanos(),
+                            metrics_audio.output.handle.timing.avg_nanos(),
                             peers,
                             dropped.saturating_sub(prev_dropped),
                             ring_underruns.saturating_sub(prev_underruns),
@@ -410,7 +435,7 @@ fn manage_peers(
                     }
                     prev_input_errors = input_errors;
                     prev_output_errors = output_errors;
-                    let input_overruns = metrics_audio.input.stats().overruns();
+                    let input_overruns = metrics_audio.input.manager.stats().overruns();
                     let new_overruns = input_overruns.saturating_sub(prev_input_overruns);
                     if new_overruns > 0 {
                         log::warn!(
@@ -429,6 +454,7 @@ fn manage_peers(
     });
     tokio::spawn(async move {
         let mut managed_peers: HashMap<uuid::Uuid, ManagedPeer> = HashMap::new();
+        let mut audio = audio;
         loop {
             tokio::select! {
                 Some(augmented_info) = conn_info_rx.recv() => {
@@ -449,7 +475,7 @@ fn manage_peers(
                     }
                 },
                 Some(user_action) = user_action_rx.recv() => {
-                    if let Err(e) = handle_user_action(user_action, hub.clone(), app_event_tx.clone(), &mut managed_peers).await {
+                    if let Err(e) = handle_user_action(user_action, &mut audio, app_event_tx.clone(), &mut managed_peers).await {
                         log::debug!("Failed to handle user action: {:?}", e);
                     }
                 }
@@ -510,8 +536,8 @@ fn update_peer_info(
                 .display_name(new_info.display_name)
                 .denoise(DenoiseSelection::default())
                 .volume(100)
-                .hub(audio.hub)
-                .client(audio.handle.client.clone())
+                .hub(audio.input.hub)
+                .client(audio.output.handle.client.clone())
                 .build();
             managed_peers.insert(id, managed_peer.clone());
             Some(managed_peer)
@@ -521,7 +547,7 @@ fn update_peer_info(
 
 async fn handle_user_action(
     user_action: UserInputEvent,
-    hub: Arc<AudioInputHub<EncodedChunk>>,
+    audio: &mut SharedAudio,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {
@@ -558,11 +584,33 @@ async fn handle_user_action(
             }
         }
         UserInputEvent::SetMuteSelf(is_muted) => {
-            hub.set_muted(is_muted);
+            audio.input.hub.set_muted(is_muted);
             if let Some(app_event_tx) = app_event_tx
                 && let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted))
             {
                 log::debug!("Failed to send mute self event: {:?}", e);
+            }
+        }
+        UserInputEvent::SetInputDevice(id, name) => {
+            audio.input.manager.switch_to(&id, &name);
+            log::debug!("Switched input device to {name}");
+        }
+        UserInputEvent::SetOutputDevice(id, name) => {
+            audio.output.manager.switch_to(&id, &name);
+            log::debug!("Switched output device to {name}");
+        }
+        UserInputEvent::RefreshDevices => {
+            let Some(app_event_tx) = app_event_tx else {
+                return Ok(());
+            };
+            for event in device_supervisor::refresh_device_events(
+                &audio.input.manager,
+                &audio.output.manager,
+            ) {
+                if app_event_tx.send(event).is_err() {
+                    log::debug!("Failed to resend device list to UI");
+                    break;
+                }
             }
         }
     }

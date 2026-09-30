@@ -6,6 +6,7 @@ pub mod cpal_registry;
 pub mod cpal_stream;
 pub mod cpal_stream_receiver;
 pub mod denoise;
+pub mod device_supervisor;
 pub mod handoff;
 pub mod hub;
 pub mod input;
