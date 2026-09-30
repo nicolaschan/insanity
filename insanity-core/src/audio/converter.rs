@@ -21,8 +21,8 @@ impl<R: Resampler + From<ResamplerSpec>> FormatConverter<R> {
         block_samples: usize,
         capacity_samples: usize,
     ) -> Self {
-        debug_assert!(to.channel_count > 0);
-        debug_assert!(from.channel_count > 0);
+        assert!(to.channel_count > 0);
+        assert!(from.channel_count > 0);
         let channels = usize::from(to.channel_count);
         let resampler = R::from(ResamplerSpec {
             source_rate: from.sample_rate,

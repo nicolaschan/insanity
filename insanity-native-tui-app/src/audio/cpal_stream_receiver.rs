@@ -124,7 +124,7 @@ pub fn make_single_input(
     };
     let format = AudioFormat::new(cfg.channels, cfg.sample_rate);
     let block_samples = cfg.channels as usize * audio_config.frames();
-    debug_assert!(block_samples > 0);
+    assert!(block_samples > 0);
     let (producer, consumer) = rtrb::RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
     let wake = Arc::new(tokio::sync::Notify::new());
     let build_wake = Arc::clone(&wake);

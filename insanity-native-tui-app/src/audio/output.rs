@@ -291,7 +291,7 @@ fn build_sink(
     };
     let device_format = AudioFormat::new(cfg.channels, cfg.sample_rate);
     let device_block = cfg.channels as usize * config.frames();
-    debug_assert!(device_block > 0);
+    assert!(device_block > 0);
     let (producer, consumer) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
     let converter = FormatConverter::<StreamResampler>::new(
         logical.clone(),
@@ -344,7 +344,7 @@ fn build_sink(
 fn build_dummy(config: AudioPipelineConfig) -> (Sink, OutputInfo) {
     let format = AudioFormat::new(config.channels(), config.sample_rate());
     let device_block = format.channel_count as usize * config.frames();
-    debug_assert!(device_block > 0);
+    assert!(device_block > 0);
     let (producer, _) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
     let converter = FormatConverter::<StreamResampler>::new(
         format.clone(),
