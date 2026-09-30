@@ -21,17 +21,15 @@ use crate::{
     audio::{
         codec::rebuild_opus_encoder,
         config::AUDIO_CALLBACK_FRAMES,
-        cpal_stream_receiver::{CpalStreamReceiver, InputStats},
+        input::{AudioInput, InputManager, start_input},
         mixer::format_audio_interval,
         output::{AudioOutput, OutputHandle, start_output},
         stream_errors,
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
 };
-use insanity_core::audio::chunk::SampleChunker;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
-use rubato_audio_source::RubatoResampler;
 use veq::snow_types::SnowPublicKey;
 
 const AUDIO_METRICS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
@@ -62,7 +60,7 @@ pub struct ConnectionManager {
 struct SharedAudio {
     hub: Arc<AudioInputHub<EncodedChunk>>,
     handle: OutputHandle,
-    input_stats: Arc<InputStats>,
+    input: InputManager,
 }
 
 impl ConnectionManager {
@@ -286,43 +284,61 @@ fn manage_peers(
 ) -> (mpsc::UnboundedSender<AugmentedInfo>, AudioOutput) {
     // Channel for the manage_peers task to receive updated peers info.
     let (conn_info_tx, mut conn_info_rx) = mpsc::unbounded_channel::<AugmentedInfo>();
-
     // single input hub and single output mixer
     let audio_config = AudioPipelineConfig::default();
-    let source = CpalStreamReceiver::default(audio_config).unwrap();
-    let source_name = source.name().to_owned();
-    let input_stats = source.stats();
-    let resampled = RubatoResampler::new(source, audio_config.sample_rate(), audio_config.frames());
-    let chunked = SampleChunker::new(resampled, audio_config.frames());
+    let AudioInput {
+        manager: input,
+        source,
+    } = start_input(audio_config);
     let hub = Arc::new(AudioInputHub::from_chunk_source(
-        chunked,
+        source,
         audio_config,
         rebuild_opus_encoder,
     ));
     if let Some(app_event_tx) = &app_event_tx {
-        app_event_tx
-            .send(AppEvent::SetInputDeviceName(source_name))
-            .expect("could not set input device name");
+        if app_event_tx
+            .send(AppEvent::SetInputDeviceName(input.current_name()))
+            .is_err()
+        {
+            log::warn!("Could not set input device name");
+        }
+        let name_tx = app_event_tx.clone();
+        let mut input_info = input.subscribe();
+        tokio::spawn(async move {
+            while input_info.changed().await.is_ok() {
+                if name_tx
+                    .send(AppEvent::SetInputDeviceName(
+                        input_info.borrow().name.clone(),
+                    ))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
     }
 
     let output = start_output(audio_config);
-    if let Some(app_event_tx) = &app_event_tx {
-        app_event_tx
+    if let Some(app_event_tx) = &app_event_tx
+        && app_event_tx
             .send(AppEvent::SetOutputDeviceName(output.handle.name.clone()))
-            .expect("could not set output device name");
+            .is_err()
+    {
+        log::warn!("Could not set output device name");
     }
     let audio = SharedAudio {
         hub: hub.clone(),
         handle: output.handle.clone(),
-        input_stats,
+        input,
     };
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
         log::info!(
-            "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES}",
+            "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES} input={}",
             metrics_audio.handle.format.channel_count,
             metrics_audio.handle.format.sample_rate,
+            metrics_audio.input.current_name(),
         );
         let mut prev = metrics_audio
             .handle
@@ -336,7 +352,7 @@ fn manage_peers(
         let mut prev_overruns = metrics_audio.handle.stats.overruns();
         let mut prev_input_errors = stream_errors::input_errors();
         let mut prev_output_errors = stream_errors::output_errors();
-        let mut prev_input_overruns = metrics_audio.input_stats.overruns();
+        let mut prev_input_overruns = metrics_audio.input.stats().overruns();
         let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
@@ -376,7 +392,7 @@ fn manage_peers(
                     }
                     prev_input_errors = input_errors;
                     prev_output_errors = output_errors;
-                    let input_overruns = metrics_audio.input_stats.overruns();
+                    let input_overruns = metrics_audio.input.stats().overruns();
                     let new_overruns = input_overruns.saturating_sub(prev_input_overruns);
                     if new_overruns > 0 {
                         log::warn!(

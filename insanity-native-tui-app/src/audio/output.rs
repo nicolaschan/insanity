@@ -11,6 +11,7 @@ use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::transform::Gain;
 use rtrb::{Consumer, RingBuffer};
+use tokio::sync::Notify;
 use tokio::sync::mpsc;
 
 use super::config::get_output_config;
@@ -133,6 +134,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let (producer, consumer) = RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
     let callback_timing = timing.clone();
     let callback_stats = stats.clone();
+    let callback_fatal = Arc::new(Notify::new());
     let stream = match output {
         Some((device, sample_format, config)) => {
             let mut wrapper =
@@ -144,6 +146,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
                         consumer,
                         callback_timing,
                         callback_stats,
+                        &callback_fatal,
                     ) {
                         Ok(s) => Some(s),
                         Err(e) => {
@@ -205,18 +208,19 @@ fn build_output_stream(
     consumer: Consumer<f32>,
     timing: Arc<FillStats>,
     stats: Arc<OutputStats>,
+    fatal: &Arc<Notify>,
 ) -> anyhow::Result<Stream> {
     match sample_format {
-        SampleFormat::I8 => run_output::<i8>(config, device, consumer, timing, stats),
-        SampleFormat::I16 => run_output::<i16>(config, device, consumer, timing, stats),
-        SampleFormat::I32 => run_output::<i32>(config, device, consumer, timing, stats),
-        SampleFormat::I64 => run_output::<i64>(config, device, consumer, timing, stats),
-        SampleFormat::U8 => run_output::<u8>(config, device, consumer, timing, stats),
-        SampleFormat::U16 => run_output::<u16>(config, device, consumer, timing, stats),
-        SampleFormat::U32 => run_output::<u32>(config, device, consumer, timing, stats),
-        SampleFormat::U64 => run_output::<u64>(config, device, consumer, timing, stats),
-        SampleFormat::F32 => run_output::<f32>(config, device, consumer, timing, stats),
-        SampleFormat::F64 => run_output::<f64>(config, device, consumer, timing, stats),
+        SampleFormat::I8 => run_output::<i8>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::I16 => run_output::<i16>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::I32 => run_output::<i32>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::I64 => run_output::<i64>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U8 => run_output::<u8>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U16 => run_output::<u16>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U32 => run_output::<u32>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::U64 => run_output::<u64>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::F32 => run_output::<f32>(config, device, consumer, timing, stats, fatal),
+        SampleFormat::F64 => run_output::<f64>(config, device, consumer, timing, stats, fatal),
         other => Err(anyhow::anyhow!(
             "unsupported output sample format {other:?}"
         )),
@@ -244,11 +248,15 @@ fn run_output<T>(
     mut consumer: Consumer<f32>,
     timing: Arc<FillStats>,
     stats: Arc<OutputStats>,
+    fatal: &Arc<Notify>,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
 {
-    let err_fn = |err: cpal::Error| super::stream_errors::note_output_error(err.kind());
+    let fatal = Arc::clone(fatal);
+    let err_fn = move |err: cpal::Error| {
+        super::stream_errors::note_output_error(err.kind(), &fatal);
+    };
     device
         .build_output_stream(
             config,
