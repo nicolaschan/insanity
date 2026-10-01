@@ -175,32 +175,36 @@ impl InputManager {
             self.adopt_silent();
             return;
         };
-        let before = self.generation();
-        self.adopt(Selection::FollowDefault, device);
-        if self.generation() == before {
+        if !self.adopt(Selection::FollowDefault, device) {
             self.adopt_silent();
         }
     }
 
-    fn adopt(&mut self, selection: Selection, device: Device) {
-        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        let reporter = FatalReporter::new(Arc::clone(&self.fatal), generation);
+    fn adopt(&mut self, selection: Selection, device: Device) -> bool {
+        let next = self.generation.load(Ordering::Relaxed) + 1;
+        let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
         if let Some((chain, info)) =
             build_input_chain(device, self.config, reporter, &self.stats, &selection)
+            && self.send(chain, info, next)
         {
+            self.generation.store(next, Ordering::Relaxed);
             self.current = selection;
-            self.send(chain, info, generation);
+            true
+        } else {
+            false
         }
     }
 
     fn adopt_silent(&mut self) {
         let (chain, info) = build_silent(self.config);
-        self.current = Selection::FollowDefault;
-        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        self.send(chain, info, generation);
+        let next = self.generation.load(Ordering::Relaxed) + 1;
+        if self.send(chain, info, next) {
+            self.generation.store(next, Ordering::Relaxed);
+            self.current = Selection::FollowDefault;
+        }
     }
 
-    fn send(&self, chain: InputChain, info: InputInfo, generation: u64) {
+    fn send(&self, chain: InputChain, info: InputInfo, generation: u64) -> bool {
         let name = info.name.clone();
         let request = HandoffRequest {
             payload: chain,
@@ -209,6 +213,9 @@ impl InputManager {
         };
         if self.switch_tx.try_send(request).is_err() {
             log::warn!("Input switch channel full, dropping switch to {name}");
+            false
+        } else {
+            true
         }
     }
 }

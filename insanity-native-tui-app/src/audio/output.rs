@@ -230,17 +230,15 @@ impl OutputManager {
             self.adopt_dummy();
             return;
         };
-        let before = self.generation();
-        self.adopt(Selection::FollowDefault, device);
-        if self.generation() == before {
+        if !self.adopt(Selection::FollowDefault, device) {
             self.adopt_dummy();
         }
     }
 
-    fn adopt(&mut self, selection: Selection, device: Device) {
-        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+    fn adopt(&mut self, selection: Selection, device: Device) -> bool {
+        let next = self.generation.load(Ordering::Relaxed) + 1;
         let logical = AudioFormat::new(self.config.channels(), self.config.sample_rate());
-        let reporter = FatalReporter::new(Arc::clone(&self.fatal), generation);
+        let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
         if let Some((sink, info)) = build_sink(
             device,
             &logical,
@@ -249,20 +247,26 @@ impl OutputManager {
             &self.timing,
             reporter,
             &selection,
-        ) {
+        ) && self.send(sink, info, next)
+        {
+            self.generation.store(next, Ordering::Relaxed);
             self.current = selection;
-            self.send(sink, info, generation);
+            true
+        } else {
+            false
         }
     }
 
     fn adopt_dummy(&mut self) {
         let (sink, info) = build_dummy(self.config);
-        self.current = Selection::FollowDefault;
-        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        self.send(sink, info, generation);
+        let next = self.generation.load(Ordering::Relaxed) + 1;
+        if self.send(sink, info, next) {
+            self.generation.store(next, Ordering::Relaxed);
+            self.current = Selection::FollowDefault;
+        }
     }
 
-    fn send(&self, sink: Sink, info: OutputInfo, generation: u64) {
+    fn send(&self, sink: Sink, info: OutputInfo, generation: u64) -> bool {
         let name = info.name.clone();
         let request = HandoffRequest {
             payload: sink,
@@ -271,6 +275,9 @@ impl OutputManager {
         };
         if self.switch_tx.try_send(request).is_err() {
             log::warn!("Output switch channel full, dropping switch to {name}");
+            false
+        } else {
+            true
         }
     }
 }
