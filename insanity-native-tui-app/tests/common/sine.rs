@@ -102,11 +102,7 @@ where
 pub fn new_no_device_mixer() -> AppMixer {
     let audio_config = AudioPipelineConfig::default();
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    Mixer::new(
-        AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
-        audio_config,
-        bus,
-    )
+    Mixer::new(audio_config, bus)
 }
 
 pub fn decode_frame_to_chunk(decoder: &mut Decoder, frame: &EncodedChunk) -> Option<AudioChunk> {
