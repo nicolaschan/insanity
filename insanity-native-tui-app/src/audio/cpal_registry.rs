@@ -59,15 +59,15 @@ fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> 
     let mut seen = HashSet::new();
     raw_devices()
         .into_iter()
+        .map(CpalAudioDevice)
         .filter_map(|device| {
-            let name = device_name_opt(&device)?;
-            if !keep_device(&name, supports(&device)) {
-                return None;
+            let name = device.try_name()?;
+            let id = device.try_id()?;
+            if !keep_device(&name, supports(&device.0)) || !seen.insert((name, id)) {
+                None
+            } else {
+                Some(device)
             }
-            if !seen.insert(name) {
-                return None;
-            }
-            Some(CpalAudioDevice(device))
         })
         .collect()
 }
@@ -82,22 +82,7 @@ pub fn list_outputs() -> Vec<CpalAudioDevice> {
 
 // Returns (input devices, output devices)
 pub fn enumerate_devices() -> (Vec<CpalAudioDevice>, Vec<CpalAudioDevice>) {
-    let mut seen_inputs = HashSet::new();
-    let mut seen_outputs = HashSet::new();
-    let mut inputs = Vec::new();
-    let mut outputs = Vec::new();
-    for device in raw_devices() {
-        let Some(name) = device_name_opt(&device) else {
-            continue;
-        };
-        if keep_device(&name, device.supports_input()) && seen_inputs.insert(name.clone()) {
-            inputs.push(CpalAudioDevice(device.clone()));
-        }
-        if keep_device(&name, device.supports_output()) && seen_outputs.insert(name) {
-            outputs.push(CpalAudioDevice(device));
-        }
-    }
-    (inputs, outputs)
+    (list_inputs(), list_outputs())
 }
 
 pub fn find_input_by_id_name(id: &str, name: &str) -> Option<CpalAudioDevice> {
