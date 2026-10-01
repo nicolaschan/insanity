@@ -378,7 +378,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let logical_block = logical.channel_count as usize * audio_config.frames();
     debug_assert!(logical_block > 0);
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mixer = Mixer::new(logical.clone(), audio_config, bus);
+    let mixer = Mixer::new(audio_config, bus);
     let timing = Arc::new(FillStats::new());
     let (initial_sink, initial_info, generation) = match default_real_output().map(|d| d.0) {
         Some(device) => {
@@ -649,7 +649,7 @@ mod tests {
     fn empty_mixer() -> AppMixer {
         let config = pipeline_config();
         let (bus, _) = Gain::shared(100, MAX_VOLUME);
-        Mixer::new(config.audio_format(), config, bus)
+        Mixer::new(config, bus)
     }
 
     fn logical_block() -> usize {

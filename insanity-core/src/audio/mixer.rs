@@ -204,17 +204,13 @@ where
     M: ChunkTransform<OutputT = AudioChunk>,
     FD: FnMut(&AudioFormat) -> Option<D> + Send,
 {
-    pub fn new(out_format: AudioFormat, audio_config: AudioPipelineConfig, bus: M) -> Self {
-        assert!(
-            out_format.channel_count > 0,
-            "out_format.channel_count must be > 0"
-        );
+    pub fn new(audio_config: AudioPipelineConfig, bus: M) -> Self {
         Mixer {
             slots: HashMap::new(),
             bus,
             clip: Clip::new(),
             pending: VecDeque::new(),
-            out_format,
+            out_format: audio_config.audio_format(),
             out_frames: audio_config.frames(),
             out_sequence: 0,
             jitter_chunks: audio_config.jitter_chunks(),
@@ -388,10 +384,6 @@ mod tests {
         Some(TagDecoder { frames: 480 })
     }
 
-    fn out_format() -> AudioFormat {
-        AudioFormat::new(2, 48000)
-    }
-
     fn frame(sequence_number: u128) -> EncodedChunk {
         EncodedChunk {
             sequence_number,
@@ -429,18 +421,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "out_format.channel_count must be > 0")]
-    fn zero_channel_output_format_rejected() {
-        let _ = Mixer::<TagDecoder, (), (), fn(&AudioFormat) -> Option<TagDecoder>>::new(
-            AudioFormat::new(0, 48000),
-            AudioPipelineConfig::default(),
-            (),
-        );
-    }
-
-    #[test]
     fn pushes_flow_to_output_in_order() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         let out = pull(&mut mixer, 960);
@@ -454,7 +436,7 @@ mod tests {
 
     #[test]
     fn mixer_input_trait_routes_push() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         assert!(mixer.push_to_slot(id, frame(2)));
         assert!(!mixer.push_to_slot(SlotId(99), frame(2)));
@@ -464,7 +446,7 @@ mod tests {
 
     #[test]
     fn buffered_future_chunk_releases_on_next_push() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         push(&mut mixer, id, frame(2));
@@ -480,7 +462,7 @@ mod tests {
 
     #[test]
     fn refill_releases_only_what_the_block_needs() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         push(&mut mixer, id, frame(1));
@@ -491,7 +473,7 @@ mod tests {
 
     #[test]
     fn duplicate_seq_counts_late_drop() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         let _ = pull(&mut mixer, 960);
@@ -501,7 +483,7 @@ mod tests {
 
     #[test]
     fn virgin_nonzero_seq_counts_gap_but_plays() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(5));
         assert_eq!(mixer.metrics_snapshot().gap_detected, 1);
@@ -511,7 +493,7 @@ mod tests {
 
     #[test]
     fn starvation_holds_last_sample_then_fades() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(1));
         let _ = pull(&mut mixer, 960);
@@ -550,7 +532,7 @@ mod tests {
 
     #[test]
     fn two_peers_sum_and_clip() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let first = mixer.subscribe((), rebuild);
         let second = mixer.subscribe((), rebuild);
         push(&mut mixer, first, frame(4));
@@ -571,7 +553,7 @@ mod tests {
     #[test]
     fn per_peer_transform_selects_processing() {
         let (gain, _) = Gain::shared(0, 500);
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe(gain, rebuild);
         push(&mut mixer, id, frame(5));
         let out = pull(&mut mixer, 960);
@@ -581,7 +563,7 @@ mod tests {
     #[test]
     fn bus_transform_applies_to_mix() {
         let (gain, _) = Gain::shared(0, 500);
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), gain);
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(5));
         let out = pull(&mut mixer, 960);
@@ -590,7 +572,7 @@ mod tests {
 
     #[test]
     fn unsubscribe_stops_peer() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         assert_eq!(mixer.peer_count(), 1);
         mixer.unsubscribe(id);
@@ -656,7 +638,7 @@ mod tests {
 
     #[test]
     fn input_slot_stages_decoded_audio_on_push() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         let slot = mixer.input_mut(id).expect("slot");
         slot.push_frame(frame(3));
@@ -668,7 +650,7 @@ mod tests {
     #[test]
     fn bus_gain_overshoot_caught_by_terminal_clip() {
         let (gain, _) = Gain::shared(200, 500);
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), gain);
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), gain);
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(9));
         let out = pull(&mut mixer, 960);
@@ -678,7 +660,7 @@ mod tests {
 
     #[test]
     fn reset_input_replays_fresh_stream_on_same_slot() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         for seq in 0..10u128 {
             push(&mut mixer, id, frame(seq));
@@ -693,7 +675,7 @@ mod tests {
 
     #[test]
     fn push_to_unknown_slot_counts_stale() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         assert!(!mixer.push_to_slot(SlotId(7), frame(0)));
         assert_eq!(mixer.metrics_snapshot().stale_dropped, 1);
         let id = mixer.subscribe((), rebuild);
@@ -705,7 +687,7 @@ mod tests {
     fn muted_bus_serves_cached_silence() {
         use crate::audio::transform::Mute;
         let (mute, control) = Mute::shared(true);
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), mute);
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), mute);
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(3));
         let out = pull(&mut mixer, 960);
@@ -729,7 +711,7 @@ mod tests {
 
     #[test]
     fn rate_mismatched_frame_dropped_and_counted() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         let mut foreign = frame(0);
         foreign.format = AudioFormat::new(2, 24000);
@@ -743,7 +725,7 @@ mod tests {
 
     #[test]
     fn format_change_resets_and_plays() {
-        let mut mixer = Mixer::new(out_format(), AudioPipelineConfig::default(), ());
+        let mut mixer = Mixer::new(AudioPipelineConfig::default(), ());
         let id = mixer.subscribe((), rebuild);
         push(&mut mixer, id, frame(0));
         let mut mono = frame(1);

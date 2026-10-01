@@ -74,11 +74,7 @@ pub fn unit_mixer_with_jitter(
         .with_jitter_chunks(jitter_chunks)
         .expect("test jitter valid");
     let (bus, bus_control) = Gain::shared(bus_volume, MAX_VOLUME);
-    let mixer = Mixer::new(
-        AudioFormat::new(audio_config.channels(), audio_config.sample_rate()),
-        audio_config,
-        bus,
-    );
+    let mixer = Mixer::new(audio_config, bus);
     (mixer, bus_control)
 }
 
