@@ -59,7 +59,6 @@ pub async fn run_device_supervisor(
     let output_fatal = output.fatal_signal();
     loop {
         tokio::select! {
-            biased;
             _ = input_fatal.notified() => {
                 if input_fatal.generation() == input.generation() {
                     log::info!("Input stream failed, following default device");

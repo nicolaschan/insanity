@@ -504,7 +504,6 @@ pub(crate) async fn run_output_owner(
     let mut sleep = Duration::ZERO;
     loop {
         tokio::select! {
-            biased;
             count = op_rx.recv_many(&mut batch, MIXER_OPS_BOUND) => {
                 if count == 0 {
                     break;
