@@ -475,10 +475,23 @@ impl App {
     }
 
     fn clamp_device_cursor(&mut self) -> bool {
-        let pin = |row: usize, len: usize| std::cmp::min(row, len.saturating_sub(1));
-        let clamped = match self.device_cursor {
-            DeviceCursor::Input(row) => DeviceCursor::Input(pin(row, self.input_devices.len())),
-            DeviceCursor::Output(row) => DeviceCursor::Output(pin(row, self.output_devices.len())),
+        let clamp = |row: usize, len: usize| std::cmp::min(row, len.saturating_sub(1));
+        let clamped = match (
+            self.device_cursor,
+            self.input_devices.is_empty(),
+            self.output_devices.is_empty(),
+        ) {
+            (_, true, true) => DeviceCursor::Input(0),
+            (DeviceCursor::Input(row), false, _) => {
+                DeviceCursor::Input(clamp(row, self.input_devices.len()))
+            }
+            (DeviceCursor::Output(row), _, false) => {
+                DeviceCursor::Output(clamp(row, self.output_devices.len()))
+            }
+            (DeviceCursor::Input(_), true, false) => DeviceCursor::Output(0),
+            (DeviceCursor::Output(_), false, true) => {
+                DeviceCursor::Input(self.input_devices.len() - 1)
+            }
         };
         let changed = clamped != self.device_cursor;
         self.device_cursor = clamped;
