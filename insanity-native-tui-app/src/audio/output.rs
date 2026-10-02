@@ -10,6 +10,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::converter::FormatConverter;
 use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
+use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
@@ -17,8 +18,9 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, watch};
 
+use crate::audio::cpal_registry::{CpalAudioDevice, CpalOutputDeviceRegistry};
+
 use super::config::get_output_config;
-use super::cpal_registry::{default_real_output, device_name, find_output_by_id_name};
 use super::cpal_stream::sample_format_dispatch;
 use super::handoff::{HANDOFF_BOUND, HandoffRequest, Selection};
 use super::mixer::{
@@ -211,7 +213,7 @@ impl OutputManager {
     }
 
     pub fn switch_to(&mut self, id: &str, name: &str) {
-        let Some(device) = find_output_by_id_name(id, name).map(|d| d.0) else {
+        let Some(device) = CpalOutputDeviceRegistry::find(id, name) else {
             log::warn!("Requested output device not found: {name}");
             return;
         };
@@ -225,7 +227,7 @@ impl OutputManager {
     }
 
     pub fn follow_default(&mut self) {
-        let Some(device) = default_real_output().map(|d| d.0) else {
+        let Some(device) = CpalOutputDeviceRegistry::default_device() else {
             log::warn!("No output device available, falling back to dummy");
             self.adopt_dummy();
             return;
@@ -235,7 +237,7 @@ impl OutputManager {
         }
     }
 
-    fn adopt(&mut self, selection: Selection, device: Device) -> bool {
+    fn adopt(&mut self, selection: Selection, device: CpalAudioDevice) -> bool {
         let next = self.generation.load(Ordering::Relaxed) + 1;
         let logical = AudioFormat::new(self.config.channels(), self.config.sample_rate());
         let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
@@ -283,7 +285,7 @@ impl OutputManager {
 }
 
 fn build_sink(
-    device: Device,
+    device: CpalAudioDevice,
     logical: &AudioFormat,
     config: AudioPipelineConfig,
     stats: &Arc<OutputStats>,
@@ -291,8 +293,8 @@ fn build_sink(
     reporter: FatalReporter,
     selection: &Selection,
 ) -> Option<(Sink, OutputInfo)> {
-    let name = device_name(&device);
-    let Ok((sample_format, cfg)) = get_output_config(&device, config) else {
+    let name = device.name();
+    let Ok((sample_format, cfg)) = get_output_config(&device.0, config) else {
         log::warn!("Failed to get output config for {name}, falling back to dummy");
         return None;
     };
@@ -312,7 +314,7 @@ fn build_sink(
         match build_output_stream(
             sample_format,
             cfg,
-            &device,
+            &device.0,
             consumer,
             build_timing,
             build_stats,
@@ -387,7 +389,8 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
     let mixer = Mixer::new(audio_config, bus);
     let timing = Arc::new(FillStats::new());
-    let (initial_sink, initial_info, generation) = match default_real_output().map(|d| d.0) {
+    let (initial_sink, initial_info, generation) = match CpalOutputDeviceRegistry::default_device()
+    {
         Some(device) => {
             let reporter = FatalReporter::new(Arc::clone(&fatal), 1);
             match build_sink(

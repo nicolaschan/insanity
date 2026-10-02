@@ -5,12 +5,11 @@ use cpal::{
     Device,
     traits::{DeviceTrait, HostTrait},
 };
-use insanity_core::audio::device::select_by_id_name;
-use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry, UNKNOWN_DEVICE_NAME};
+use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 
 const SYNTHETIC_DEVICE_NAMES: [&str; 3] = ["default_input", "default_output", "default_sink"];
 
-pub struct CpalAudioDevice(pub Device);
+pub(crate) struct CpalAudioDevice(pub Device);
 
 impl Debug for CpalAudioDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -28,24 +27,20 @@ impl AudioDevice for CpalAudioDevice {
     }
 }
 
-pub fn device_name(device: &Device) -> String {
-    device_name_opt(device).unwrap_or_else(|| UNKNOWN_DEVICE_NAME.into())
-}
-
 fn device_name_opt(device: &Device) -> Option<String> {
     device.description().ok().map(|d| d.name().to_owned())
 }
 
-pub(crate) fn is_synthetic_name(name: &str) -> bool {
+fn is_synthetic_name(name: &str) -> bool {
     SYNTHETIC_DEVICE_NAMES.contains(&name)
 }
 
-pub(crate) fn is_monitor_name(name: &str) -> bool {
+fn is_monitor_name(name: &str) -> bool {
     name.to_lowercase().contains("monitor")
 }
 
-pub(crate) fn keep_device(name: &str, supports_direction: bool) -> bool {
-    supports_direction && !is_synthetic_name(name) && !is_monitor_name(name)
+fn keep_device(name: &str) -> bool {
+    !is_synthetic_name(name) && !is_monitor_name(name)
 }
 
 fn raw_devices() -> Vec<Device> {
@@ -63,7 +58,7 @@ fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> 
         .filter_map(|device| {
             let name = device.try_name()?;
             let id = device.try_id()?;
-            if !keep_device(&name, supports(&device.0)) || !seen.insert((name, id)) {
+            if !supports(&device.0) || !keep_device(&name) || !seen.insert((name, id)) {
                 None
             } else {
                 Some(device)
@@ -72,85 +67,42 @@ fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> 
         .collect()
 }
 
-pub fn list_inputs() -> Vec<CpalAudioDevice> {
-    filtered_devices(|device| device.supports_input())
-}
+pub(crate) struct CpalInputDeviceRegistry;
+pub(crate) struct CpalOutputDeviceRegistry;
 
-pub fn list_outputs() -> Vec<CpalAudioDevice> {
-    filtered_devices(|device| device.supports_output())
-}
-
-// Returns (input devices, output devices)
-pub fn enumerate_devices() -> (Vec<CpalAudioDevice>, Vec<CpalAudioDevice>) {
-    (list_inputs(), list_outputs())
-}
-
-pub fn find_input_by_id_name(id: &str, name: &str) -> Option<CpalAudioDevice> {
-    select_by_id_name(list_inputs(), id, name)
-}
-
-pub fn find_output_by_id_name(id: &str, name: &str) -> Option<CpalAudioDevice> {
-    select_by_id_name(list_outputs(), id, name)
-}
-
-fn host_default_usable(
-    device: Option<Device>,
-    supports: impl Fn(&Device) -> bool,
-) -> Option<CpalAudioDevice> {
-    let device = device?;
-    let name = device_name_opt(&device)?;
-    if !keep_device(&name, supports(&device)) {
-        return None;
-    }
-    log::info!("Using host default audio device: {name}");
-    Some(CpalAudioDevice(device))
-}
-
-fn fallback_first(devices: Vec<CpalAudioDevice>, kind: &str) -> Option<CpalAudioDevice> {
-    log::info!(
-        "Available {kind} devices: {:?}",
-        devices
-            .iter()
-            .filter_map(|d| d.try_name())
-            .collect::<Vec<_>>()
-    );
-    devices.into_iter().next()
-}
-
-pub fn default_real_input() -> Option<CpalAudioDevice> {
-    let host = cpal::default_host();
-    if let Some(device) = host_default_usable(host.default_input_device(), |d| d.supports_input()) {
-        return Some(device);
-    }
-    fallback_first(list_inputs(), "input")
-}
-
-pub fn default_real_output() -> Option<CpalAudioDevice> {
-    let host = cpal::default_host();
-    if let Some(device) = host_default_usable(host.default_output_device(), |d| d.supports_output())
-    {
-        return Some(device);
-    }
-    fallback_first(list_outputs(), "output")
-}
-
-pub fn default_input_device() -> Option<CpalAudioDevice> {
-    default_real_input()
-}
-
-pub fn default_output_device() -> Option<CpalAudioDevice> {
-    default_real_output()
-}
-
-pub struct CpalRegistry;
-
-impl AudioDeviceRegistry<CpalAudioDevice> for CpalRegistry {
+impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        filtered_devices(|device| device.supports_input() || device.supports_output())
+        filtered_devices(|device| device.supports_input())
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        default_real_input()
+        if let Some(device) = cpal::default_host().default_input_device()
+            && let Some(name) = device_name_opt(&device)
+            && device.supports_input()
+            && keep_device(&name)
+        {
+            Some(CpalAudioDevice(device))
+        } else {
+            Self::list_devices().into_iter().next()
+        }
+    }
+}
+
+impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
+    fn list_devices() -> Vec<CpalAudioDevice> {
+        filtered_devices(|device| device.supports_output())
+    }
+
+    fn default_device() -> Option<CpalAudioDevice> {
+        if let Some(device) = cpal::default_host().default_output_device()
+            && let Some(name) = device_name_opt(&device)
+            && device.supports_output()
+            && keep_device(&name)
+        {
+            Some(CpalAudioDevice(device))
+        } else {
+            Self::list_devices().into_iter().next()
+        }
     }
 }
 
@@ -162,22 +114,17 @@ mod tests {
     fn synthetic_defaults_are_dropped() {
         for name in ["default_input", "default_output", "default_sink"] {
             assert!(is_synthetic_name(name));
-            assert!(!keep_device(name, true));
+            assert!(!keep_device(name));
         }
         assert!(!is_synthetic_name("Logitech HD Pro Webcam C920"));
-        assert!(keep_device("Logitech HD Pro Webcam C920", true));
+        assert!(keep_device("Logitech HD Pro Webcam C920"));
     }
 
     #[test]
     fn monitors_are_dropped() {
         assert!(is_monitor_name("Monitor of Built-in Audio"));
-        assert!(!keep_device("Monitor of Built-in Audio", true));
-        assert!(!keep_device("monitor", true));
-        assert!(keep_device("Built-in Audio", true));
-    }
-
-    #[test]
-    fn unsupported_direction_is_dropped() {
-        assert!(!keep_device("Logitech HD Pro Webcam C920", false));
+        assert!(!keep_device("Monitor of Built-in Audio"));
+        assert!(!keep_device("monitor"));
+        assert!(keep_device("Built-in Audio"));
     }
 }
