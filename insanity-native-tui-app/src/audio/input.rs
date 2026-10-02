@@ -1,16 +1,16 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cpal::Device;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
+use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry, UNKNOWN_DEVICE_NAME};
 use insanity_core::audio::sample::SampleSource;
 use rubato_audio_source::RubatoResampler;
 use tokio::sync::{mpsc, watch};
 
-use super::cpal_registry::{default_real_input, device_name, find_input_by_id_name};
+use crate::audio::cpal_registry::{CpalAudioDevice, CpalInputDeviceRegistry};
+
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
 use super::handoff::{HANDOFF_BOUND, HandoffRequest, Selection};
 use super::stream_errors::{FatalReporter, FatalSignal};
@@ -156,7 +156,7 @@ impl InputManager {
     }
 
     pub fn switch_to(&mut self, id: &str, name: &str) {
-        let Some(device) = find_input_by_id_name(id, name).map(|d| d.0) else {
+        let Some(device) = CpalInputDeviceRegistry::find(id, name) else {
             log::warn!("Requested input device not found: {name}");
             return;
         };
@@ -170,7 +170,7 @@ impl InputManager {
     }
 
     pub fn follow_default(&mut self) {
-        let Some(device) = default_real_input().map(|d| d.0) else {
+        let Some(device) = CpalInputDeviceRegistry::default_device() else {
             log::warn!("No input device available, starting silent");
             self.adopt_silent();
             return;
@@ -180,7 +180,7 @@ impl InputManager {
         }
     }
 
-    fn adopt(&mut self, selection: Selection, device: Device) -> bool {
+    fn adopt(&mut self, selection: Selection, device: CpalAudioDevice) -> bool {
         let next = self.generation.load(Ordering::Relaxed) + 1;
         let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
         if let Some((chain, info)) =
@@ -229,7 +229,8 @@ pub fn start_input(config: AudioPipelineConfig) -> AudioInput {
     let stats = Arc::new(InputStats::default());
     let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
-    let (initial_chain, initial_info, generation) = match default_real_input().map(|d| d.0) {
+    let (initial_chain, initial_info, generation) = match CpalInputDeviceRegistry::default_device()
+    {
         Some(device) => {
             let selection = Selection::FollowDefault;
             let reporter = FatalReporter::new(Arc::clone(&fatal), 1);
@@ -278,14 +279,14 @@ fn build_silent(config: AudioPipelineConfig) -> (InputChain, InputInfo) {
 }
 
 fn build_input_chain(
-    device: Device,
+    device: CpalAudioDevice,
     config: AudioPipelineConfig,
     reporter: FatalReporter,
     stats: &Arc<InputStats>,
     selection: &Selection,
 ) -> Option<(InputChain, InputInfo)> {
-    let name = device_name(&device);
-    match make_single_input(device, config, reporter, stats) {
+    let name = device.name();
+    match make_single_input(device.0, config, reporter, stats) {
         Ok(receiver) => {
             let format = receiver.format().clone();
             let resampled = RubatoResampler::new(receiver, config.sample_rate(), config.frames());

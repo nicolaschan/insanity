@@ -1,22 +1,22 @@
-use insanity_core::audio::device::AudioDevice;
+use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 use insanity_tui_adapter::AppEvent;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::cpal_registry::enumerate_devices;
+use crate::audio::cpal_registry::{CpalInputDeviceRegistry, CpalOutputDeviceRegistry};
+
 use super::input::InputManager;
 use super::output::OutputManager;
 
 pub type DeviceList = Vec<(String, String)>;
 
 pub fn device_lists() -> (DeviceList, DeviceList) {
-    let (inputs, outputs) = enumerate_devices();
     (
-        inputs
+        CpalInputDeviceRegistry::list_devices()
             .iter()
             .filter_map(|device| Some((device.try_id()?, device.try_name()?)))
             .collect(),
-        outputs
+        CpalOutputDeviceRegistry::list_devices()
             .iter()
             .filter_map(|device| Some((device.try_id()?, device.try_name()?)))
             .collect(),
