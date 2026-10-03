@@ -16,14 +16,14 @@ use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_in
 use super::handoff::{HANDOFF_BOUND, HandoffRequest, Selection};
 use super::stream_errors::{FatalReporter, FatalSignal};
 
-pub struct SilentChunkSource {
+pub(crate) struct SilentChunkSource {
     format: AudioFormat,
     frames: usize,
     next_sequence: u128,
 }
 
 impl SilentChunkSource {
-    pub fn new(format: AudioFormat, frames: usize) -> Self {
+    fn new(format: AudioFormat, frames: usize) -> Self {
         Self {
             format,
             frames,
@@ -44,9 +44,9 @@ impl ChunkSource for SilentChunkSource {
     }
 }
 
-pub type LiveChain = SampleChunker<RubatoResampler<CpalStreamReceiver>>;
+pub(crate) type LiveChain = SampleChunker<RubatoResampler<CpalStreamReceiver>>;
 
-pub enum InputChain {
+pub(crate) enum InputChain {
     Live(Box<LiveChain>),
     Silent(SilentChunkSource),
 }
@@ -60,7 +60,7 @@ impl ChunkSource for InputChain {
     }
 }
 
-pub struct SwitchingInputSource<ChainT> {
+pub(crate) struct SwitchingInputSource<ChainT> {
     current: Option<ChainT>,
     next_sequence: u128,
     swap_rx: mpsc::Receiver<HandoffRequest<ChainT, DeviceInfo>>,
@@ -113,7 +113,7 @@ impl<ChainT: ChunkSource + Send> ChunkSource for SwitchingInputSource<ChainT> {
     }
 }
 
-pub struct InputChainBuilder;
+pub(crate) struct InputChainBuilder;
 
 impl PayloadBuilder for InputChainBuilder {
     type Payload = InputChain;
@@ -160,15 +160,15 @@ impl PayloadBuilder for InputChainBuilder {
     }
 }
 
-pub type InputManager =
+pub(crate) type InputManager =
     DeviceManager<InputChain, InputStats, CpalInputDeviceRegistry, InputChainBuilder>;
 
-pub struct AudioInput {
-    pub manager: InputManager,
-    pub source: SwitchingInputSource<InputChain>,
+pub(crate) struct AudioInput {
+    pub(crate) manager: InputManager,
+    pub(crate) source: SwitchingInputSource<InputChain>,
 }
 
-pub fn start_input(config: AudioPipelineConfig) -> AudioInput {
+pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
     let stats = Arc::new(InputStats::default());
     let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
@@ -212,8 +212,8 @@ pub fn start_input(config: AudioPipelineConfig) -> AudioInput {
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::device_supervisor::PayloadBuilder;
-    use crate::audio::input::InputChainBuilder;
+    use super::super::device_supervisor::PayloadBuilder;
+    use super::InputChainBuilder;
 
     use super::{DeviceInfo, InputChain, InputManager, SilentChunkSource, SwitchingInputSource};
     use insanity_core::audio::AudioFormat;

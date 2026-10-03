@@ -20,9 +20,9 @@ use super::denoise::NnnoiselessDenoiser;
 
 pub const MAX_VOLUME: usize = 500;
 #[cfg(any(feature = "encode-silence", feature = "denoise-passthrough"))]
-pub const QUIET_RMS_THRESHOLD: f32 = 0.0075;
+pub(crate) const QUIET_RMS_THRESHOLD: f32 = 0.0075;
 #[cfg(any(feature = "encode-silence", feature = "denoise-passthrough"))]
-pub const QUIET_HANGOVER_CHUNKS: usize = 30;
+pub(crate) const QUIET_HANGOVER_CHUNKS: usize = 30;
 
 #[cfg(feature = "denoise-passthrough")]
 pub type PeerChain = Link<
@@ -74,8 +74,8 @@ pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
     OpusDecoder::new(format.sample_rate, format.channel_count)
 }
 
-pub const MIXER_OPS_BOUND: usize = 64;
-pub const TARGET_RING_BLOCKS: usize = 2;
+pub(crate) const MIXER_OPS_BOUND: usize = 64;
+pub(crate) const TARGET_RING_BLOCKS: usize = 2;
 const MIN_FILL_SLEEP: Duration = Duration::from_millis(2);
 const MAX_FILL_SLEEP: Duration = Duration::from_millis(30);
 

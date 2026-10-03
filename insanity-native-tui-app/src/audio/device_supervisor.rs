@@ -19,13 +19,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Debug)]
-pub struct DeviceInfo {
-    pub name: String,
-    pub format: AudioFormat,
-    pub selection: Selection,
+pub(crate) struct DeviceInfo {
+    pub(crate) name: String,
+    pub(crate) format: AudioFormat,
+    pub(crate) selection: Selection,
 }
 
-pub trait PayloadBuilder {
+pub(crate) trait PayloadBuilder {
     type Payload;
     type Stats;
 
@@ -40,16 +40,16 @@ pub trait PayloadBuilder {
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo);
 }
 
-pub struct DeviceManager<Payload, Stats, DeviceRegistry, Builder> {
-    pub(crate) config: AudioPipelineConfig,
-    pub(crate) switch_tx: mpsc::Sender<HandoffRequest<Payload, DeviceInfo>>,
-    pub(crate) fatal: Arc<FatalSignal>,
-    pub(crate) stats: Arc<Stats>,
-    pub(crate) info: watch::Receiver<DeviceInfo>,
-    pub(crate) generation: Arc<AtomicU64>,
-    pub(crate) current: Selection,
-    pub(crate) _payload_builder: PhantomData<Builder>,
-    pub(crate) _device_registry: PhantomData<DeviceRegistry>,
+pub(crate) struct DeviceManager<Payload, Stats, DeviceRegistry, Builder> {
+    config: AudioPipelineConfig,
+    switch_tx: mpsc::Sender<HandoffRequest<Payload, DeviceInfo>>,
+    fatal: Arc<FatalSignal>,
+    stats: Arc<Stats>,
+    info: watch::Receiver<DeviceInfo>,
+    generation: Arc<AtomicU64>,
+    current: Selection,
+    _payload_builder: PhantomData<Builder>,
+    _device_registry: PhantomData<DeviceRegistry>,
 }
 
 impl<Payload, Stats, DeviceRegistry, Builder> DeviceManager<Payload, Stats, DeviceRegistry, Builder>
@@ -79,7 +79,7 @@ where
         }
     }
 
-    pub fn selection(&self) -> &Selection {
+    pub(crate) fn selection(&self) -> &Selection {
         &self.current
     }
 
@@ -185,9 +185,9 @@ impl<Payload, Stats, DeviceRegistry, Builder> Clone
         }
     }
 }
-pub type DeviceList = Vec<(String, String)>;
+type DeviceList = Vec<(String, String)>;
 
-pub fn device_lists() -> (DeviceList, DeviceList) {
+fn device_lists() -> (DeviceList, DeviceList) {
     (
         CpalInputDeviceRegistry::list_devices()
             .iter()
@@ -200,7 +200,7 @@ pub fn device_lists() -> (DeviceList, DeviceList) {
     )
 }
 
-pub fn refresh_device_events(input: &InputManager, output: &OutputManager) -> Vec<AppEvent> {
+pub(crate) fn refresh_device_events(input: &InputManager, output: &OutputManager) -> Vec<AppEvent> {
     let (inputs, outputs) = device_lists();
     vec![
         AppEvent::SetInputDevices(inputs),
@@ -226,7 +226,7 @@ fn send_refresh(
     }
 }
 
-pub async fn run_device_supervisor(
+pub(crate) async fn run_device_supervisor(
     mut input: InputManager,
     mut output: OutputManager,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,

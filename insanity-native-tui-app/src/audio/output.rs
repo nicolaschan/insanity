@@ -35,7 +35,7 @@ use super::stream_errors::{FatalReporter, FatalSignal};
 pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 const PREFILL_BOUND: usize = 8;
 
-pub struct OutputStats {
+pub(crate) struct OutputStats {
     underruns: AtomicUsize,
     overruns: AtomicUsize,
     total_nanos: AtomicU64,
@@ -60,21 +60,21 @@ impl OutputStats {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
     }
 
-    pub fn underruns(&self) -> usize {
+    pub(crate) fn underruns(&self) -> usize {
         self.underruns.load(Ordering::Relaxed)
     }
 
-    pub fn overruns(&self) -> usize {
+    pub(crate) fn overruns(&self) -> usize {
         self.overruns.load(Ordering::Relaxed)
     }
 
-    pub fn record(&self, elapsed: std::time::Duration) {
+    pub(crate) fn record(&self, elapsed: std::time::Duration) {
         self.fills.fetch_add(1, Ordering::Relaxed);
         self.total_nanos
             .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
     }
 
-    pub fn avg_nanos(&self) -> u64 {
+    pub(crate) fn avg_nanos(&self) -> u64 {
         let fills = self.fills.load(Ordering::Relaxed) as u64;
         if fills == 0 {
             return 0;
@@ -95,7 +95,7 @@ pub(crate) struct AudioOutput {
     pub(crate) manager: OutputManager,
 }
 
-pub struct Sink {
+pub(crate) struct Sink {
     producer: Producer<f32>,
     stream: Option<send_safe::SendWrapperThread<Option<Stream>>>,
     converter: FormatConverter<StreamResampler>,
@@ -146,7 +146,7 @@ impl Sink {
     }
 }
 
-pub struct SinkBuilder;
+pub(crate) struct SinkBuilder;
 
 impl PayloadBuilder for SinkBuilder {
     type Payload = Sink;
@@ -242,7 +242,8 @@ impl PayloadBuilder for SinkBuilder {
     }
 }
 
-pub type OutputManager = DeviceManager<Sink, OutputStats, CpalOutputDeviceRegistry, SinkBuilder>;
+pub(crate) type OutputManager =
+    DeviceManager<Sink, OutputStats, CpalOutputDeviceRegistry, SinkBuilder>;
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let stats = Arc::new(OutputStats::new());
@@ -345,7 +346,7 @@ fn adopt_sink(
     tokio::task::spawn_blocking(move || drop(evicted));
 }
 
-pub(crate) async fn run_output_owner(
+async fn run_output_owner(
     mut mixer: AppMixer,
     mut sink: Sink,
     stats: Arc<OutputStats>,
@@ -489,11 +490,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::device_supervisor::PayloadBuilder;
-    use crate::audio::output::{OutputStats, SinkBuilder};
+    use super::super::device_supervisor::{DeviceInfo, PayloadBuilder};
 
     use super::super::handoff::{HandoffRequest, Selection};
-    use super::OutputManager;
+    use super::{OutputManager, OutputStats, SinkBuilder};
     use super::{activate_sink, adopt_sink};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::config::AudioPipelineConfig;
@@ -570,8 +570,8 @@ mod tests {
         assert_eq!(info_rx.borrow().name, name);
     }
 
-    fn test_info() -> super::DeviceInfo {
-        super::DeviceInfo {
+    fn test_info() -> DeviceInfo {
+        DeviceInfo {
             name: "initial".into(),
             format: AudioFormat::new(2, 48000),
             selection: Selection::FollowDefault,

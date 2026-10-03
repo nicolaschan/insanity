@@ -5,20 +5,20 @@ use cpal::ErrorKind;
 use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct StreamErrorCounts {
-    pub xruns: usize,
-    pub other: usize,
+pub(crate) struct StreamErrorCounts {
+    pub(crate) xruns: usize,
+    pub(crate) other: usize,
 }
 
 impl StreamErrorCounts {
-    pub fn since(self, earlier: StreamErrorCounts) -> StreamErrorCounts {
+    pub(crate) fn since(self, earlier: StreamErrorCounts) -> StreamErrorCounts {
         StreamErrorCounts {
             xruns: self.xruns.saturating_sub(earlier.xruns),
             other: self.other.saturating_sub(earlier.other),
         }
     }
 
-    pub fn is_zero(self) -> bool {
+    pub(crate) fn is_zero(self) -> bool {
         self.xruns == 0 && self.other == 0
     }
 }
@@ -54,36 +54,36 @@ impl Counters {
 static INPUT: Counters = Counters::new();
 static OUTPUT: Counters = Counters::new();
 
-pub fn is_fatal(kind: ErrorKind) -> bool {
+fn is_fatal(kind: ErrorKind) -> bool {
     !matches!(
         kind,
         ErrorKind::Xrun | ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied
     )
 }
 
-pub struct FatalSignal {
+pub(crate) struct FatalSignal {
     generation: AtomicU64,
     notify: Notify,
 }
 
 impl FatalSignal {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         FatalSignal {
             generation: AtomicU64::new(0),
             notify: Notify::new(),
         }
     }
 
-    pub fn signal(&self, generation: u64) {
+    pub(crate) fn signal(&self, generation: u64) {
         self.generation.store(generation, Ordering::Relaxed);
         self.notify.notify_one();
     }
 
-    pub fn notified(&self) -> impl Future<Output = ()> + '_ {
+    pub(crate) fn notified(&self) -> impl Future<Output = ()> + '_ {
         self.notify.notified()
     }
 
-    pub fn generation(&self) -> u64 {
+    pub(crate) fn generation(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
     }
 }
@@ -95,27 +95,27 @@ impl Default for FatalSignal {
 }
 
 #[derive(Clone)]
-pub struct FatalReporter {
+pub(crate) struct FatalReporter {
     fatal: Arc<FatalSignal>,
     generation: u64,
 }
 
 impl FatalReporter {
-    pub fn new(fatal: Arc<FatalSignal>, generation: u64) -> Self {
+    pub(crate) fn new(fatal: Arc<FatalSignal>, generation: u64) -> Self {
         FatalReporter { fatal, generation }
     }
 
-    pub fn report_input(&self, kind: ErrorKind) {
+    pub(crate) fn report_input(&self, kind: ErrorKind) {
         note_input_error(kind, &self.fatal, self.generation);
     }
 
-    pub fn report_output(&self, kind: ErrorKind) {
+    pub(crate) fn report_output(&self, kind: ErrorKind) {
         note_output_error(kind, &self.fatal, self.generation);
     }
 }
 
 /// Safe on a real-time audio thread
-pub fn note_input_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
+fn note_input_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
     INPUT.note(kind);
     if is_fatal(kind) {
         fatal.signal(generation);
@@ -123,18 +123,18 @@ pub fn note_input_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u
 }
 
 /// Safe on a real-time audio thread
-pub fn note_output_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
+fn note_output_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
     OUTPUT.note(kind);
     if is_fatal(kind) {
         fatal.signal(generation);
     }
 }
 
-pub fn input_errors() -> StreamErrorCounts {
+pub(crate) fn input_errors() -> StreamErrorCounts {
     INPUT.snapshot()
 }
 
-pub fn output_errors() -> StreamErrorCounts {
+pub(crate) fn output_errors() -> StreamErrorCounts {
     OUTPUT.snapshot()
 }
 
