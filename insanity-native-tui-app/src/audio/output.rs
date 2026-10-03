@@ -9,8 +9,8 @@ use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::converter::FormatConverter;
+use insanity_core::audio::device::AudioDevice;
 use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
-use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
@@ -252,37 +252,30 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     debug_assert!(logical_block > 0);
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
     let mixer = Mixer::new(audio_config, bus);
-    let (initial_sink, initial_info, generation) = match CpalOutputDeviceRegistry::default_device()
-    {
-        Some(device) => {
-            let reporter = FatalReporter::new(Arc::clone(&fatal), 1);
-            match SinkBuilder::build(device, &audio_config, &stats, reporter) {
-                Some(built) => (built.0, built.1, 1),
-                None => {
-                    let (sink, info) = SinkBuilder::build_dummy(&audio_config);
-                    (sink, info, 0)
-                }
-            }
-        }
-        None => {
-            log::warn!("No output device available, falling back to dummy");
-            let (sink, info) = SinkBuilder::build_dummy(&audio_config);
-            (sink, info, 0)
-        }
-    };
-    let initial_format = initial_info.format.clone();
-    let (info_tx, info_rx) = watch::channel(initial_info);
+    let (dummy_sink, dummy_info) = SinkBuilder::build_dummy(&audio_config);
+    let initial_format = dummy_info.format.clone();
+    let (info_tx, info_rx) = watch::channel(dummy_info);
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
     let task_stats = Arc::clone(&stats);
     tokio::spawn(run_output_owner(
         mixer,
-        initial_sink,
+        dummy_sink,
         task_stats,
         op_rx,
         swap_rx,
         info_tx,
         logical_block,
     ));
+    let mut manager = OutputManager::new(
+        audio_config,
+        switch_tx,
+        fatal,
+        Arc::clone(&stats),
+        info_rx,
+        Arc::new(AtomicU64::new(0)),
+    );
+    // Request starting the actual output device
+    manager.follow_default();
     AudioOutput {
         handle: OutputHandle {
             client: MixerClient {
@@ -292,14 +285,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
             format: initial_format,
             stats: Arc::clone(&stats),
         },
-        manager: OutputManager::new(
-            audio_config,
-            switch_tx,
-            fatal,
-            stats,
-            info_rx,
-            Arc::new(AtomicU64::new(generation)),
-        ),
+        manager,
     }
 }
 
