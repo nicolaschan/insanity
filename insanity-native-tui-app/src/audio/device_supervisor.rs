@@ -1,13 +1,190 @@
+use insanity_core::audio::AudioFormat;
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 use insanity_tui_adapter::AppEvent;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::audio::cpal_registry::{CpalInputDeviceRegistry, CpalOutputDeviceRegistry};
+use crate::audio::cpal_registry::{
+    CpalAudioDevice, CpalInputDeviceRegistry, CpalOutputDeviceRegistry,
+};
 
 use super::input::InputManager;
 use super::output::OutputManager;
 
+use super::handoff::{HandoffRequest, Selection};
+use super::stream_errors::{FatalReporter, FatalSignal};
+use insanity_core::audio::config::AudioPipelineConfig;
+use std::marker::PhantomData;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[derive(Clone, Debug)]
+pub struct DeviceInfo {
+    pub name: String,
+    pub format: AudioFormat,
+    pub selection: Selection,
+}
+
+pub trait PayloadBuilder {
+    type Payload;
+    type Stats;
+
+    fn build(
+        device: CpalAudioDevice,
+        config: &AudioPipelineConfig,
+        stats: &Arc<Self::Stats>,
+        reporter: FatalReporter,
+        selection: &Selection,
+    ) -> Option<(Self::Payload, DeviceInfo)>;
+
+    fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo);
+}
+
+pub struct DeviceManager<Payload, Stats, DeviceRegistry, Builder> {
+    pub(crate) config: AudioPipelineConfig,
+    pub(crate) switch_tx: mpsc::Sender<HandoffRequest<Payload, DeviceInfo>>,
+    pub(crate) fatal: Arc<FatalSignal>,
+    pub(crate) stats: Arc<Stats>,
+    pub(crate) info: watch::Receiver<DeviceInfo>,
+    pub(crate) generation: Arc<AtomicU64>,
+    pub(crate) current: Selection,
+    pub(crate) _payload_builder: PhantomData<Builder>,
+    pub(crate) _device_registry: PhantomData<DeviceRegistry>,
+}
+
+impl<Payload, Stats, DeviceRegistry, Builder> DeviceManager<Payload, Stats, DeviceRegistry, Builder>
+where
+    DeviceRegistry: AudioDeviceRegistry<CpalAudioDevice>,
+    Builder: PayloadBuilder<Payload = Payload, Stats = Stats>,
+{
+    pub(crate) fn new(
+        config: AudioPipelineConfig,
+        switch_tx: mpsc::Sender<HandoffRequest<Payload, DeviceInfo>>,
+        fatal: Arc<FatalSignal>,
+        stats: Arc<Stats>,
+        info: watch::Receiver<DeviceInfo>,
+        generation: Arc<AtomicU64>,
+        current: Selection,
+    ) -> Self {
+        Self {
+            config,
+            switch_tx,
+            fatal,
+            stats,
+            info,
+            generation,
+            current,
+            _payload_builder: PhantomData,
+            _device_registry: PhantomData,
+        }
+    }
+
+    pub fn selection(&self) -> &Selection {
+        &self.current
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<DeviceInfo> {
+        self.info.clone()
+    }
+
+    pub(crate) fn current_name(&self) -> String {
+        self.info.borrow().name.clone()
+    }
+
+    pub(crate) fn stats(&self) -> Arc<Stats> {
+        Arc::clone(&self.stats)
+    }
+
+    pub(crate) fn fatal_signal(&self) -> Arc<FatalSignal> {
+        Arc::clone(&self.fatal)
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn switch_to(&mut self, id: &str, name: &str) {
+        let Some(device) = DeviceRegistry::find(id, name) else {
+            log::warn!("Requested output device not found: {name}");
+            return;
+        };
+        self.adopt(
+            Selection::Explicit {
+                id: id.to_owned(),
+                name: name.to_owned(),
+            },
+            device,
+        );
+    }
+
+    pub(crate) fn follow_default(&mut self) {
+        let Some(device) = DeviceRegistry::default_device() else {
+            log::warn!("No output device available, falling back to dummy");
+            self.adopt_dummy();
+            return;
+        };
+        if !self.adopt(Selection::FollowDefault, device) {
+            self.adopt_dummy();
+        }
+    }
+
+    fn adopt(&mut self, selection: Selection, device: CpalAudioDevice) -> bool {
+        let next = self.generation.load(Ordering::Relaxed) + 1;
+        let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
+        if let Some((payload, info)) =
+            Builder::build(device, &self.config, &self.stats, reporter, &selection)
+            && self.send(payload, info, next)
+        {
+            self.generation.store(next, Ordering::Relaxed);
+            self.current = selection;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn adopt_dummy(&mut self) {
+        let (payload, info) = Builder::build_dummy(&self.config);
+        let next = self.generation.load(Ordering::Relaxed) + 1;
+        if self.send(payload, info, next) {
+            self.generation.store(next, Ordering::Relaxed);
+            self.current = Selection::FollowDefault;
+        }
+    }
+
+    fn send(&self, payload: Payload, info: DeviceInfo, generation: u64) -> bool {
+        let name = info.name.clone();
+        let request = HandoffRequest {
+            payload,
+            info,
+            generation,
+        };
+        if self.switch_tx.try_send(request).is_err() {
+            log::warn!("Switch channel full, dropping switch to {name}");
+            false
+        } else {
+            true
+        }
+    }
+}
+
+impl<Payload, Stats, DeviceRegistry, Builder> Clone
+    for DeviceManager<Payload, Stats, DeviceRegistry, Builder>
+{
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config,
+            switch_tx: self.switch_tx.clone(),
+            fatal: Arc::clone(&self.fatal),
+            stats: Arc::clone(&self.stats),
+            info: self.info.clone(),
+            generation: Arc::clone(&self.generation),
+            current: self.current.clone(),
+            _payload_builder: PhantomData,
+            _device_registry: PhantomData,
+        }
+    }
+}
 pub type DeviceList = Vec<(String, String)>;
 
 pub fn device_lists() -> (DeviceList, DeviceList) {
