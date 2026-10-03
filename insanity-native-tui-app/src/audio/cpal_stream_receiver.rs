@@ -112,7 +112,7 @@ pub(crate) fn make_single_input(
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
     let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
         return Err(anyhow!(
-            "Failed to get input config falling back to silence"
+            "Failed to get input config, parking input until a device appears"
         ));
     };
     let format = AudioFormat::new(cfg.channels, cfg.sample_rate);
@@ -134,7 +134,7 @@ pub(crate) fn make_single_input(
         ) {
             Ok(stream) => Some(stream),
             Err(e) => {
-                log::warn!("Failed to build input stream, falling back to silence: {e:?}");
+                log::warn!("Failed to build input stream, parking input: {e:?}");
                 None
             }
         }
@@ -144,7 +144,7 @@ pub(crate) fn make_single_input(
         .unwrap_or(false);
     if !playing {
         return Err(anyhow!(
-            "Failed to start input stream, falling back to silence"
+            "Failed to start input stream, parking input until a device appears"
         ));
     }
     Ok(CpalStreamReceiver {

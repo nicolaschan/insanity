@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry, UNKNOWN_DEVICE_NAME};
@@ -16,46 +15,18 @@ use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_in
 use super::handoff::{HANDOFF_BOUND, HandoffRequest};
 use super::stream_errors::{FatalReporter, FatalSignal};
 
-pub(crate) struct SilentChunkSource {
-    format: AudioFormat,
-    frames: usize,
-    next_sequence: u128,
-}
-
-impl SilentChunkSource {
-    fn new(format: AudioFormat, frames: usize) -> Self {
-        Self {
-            format,
-            frames,
-            next_sequence: 0,
-        }
-    }
-}
-
-impl ChunkSource for SilentChunkSource {
-    async fn next_chunk(&mut self) -> Option<AudioChunk> {
-        let sequence_number = self.next_sequence;
-        self.next_sequence += 1;
-        Some(AudioChunk::new(
-            sequence_number,
-            self.format.clone(),
-            vec![0.0; self.frames * self.format.channel_count as usize],
-        ))
-    }
-}
-
 pub(crate) type LiveChain = SampleChunker<RubatoResampler<CpalStreamReceiver>>;
 
 pub(crate) enum InputChain {
     Live(Box<LiveChain>),
-    Silent(SilentChunkSource),
+    Idle,
 }
 
 impl ChunkSource for InputChain {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         match self {
             Self::Live(chain) => chain.next_chunk().await,
-            Self::Silent(chain) => chain.next_chunk().await,
+            Self::Idle => std::future::pending().await,
         }
     }
 }
@@ -145,7 +116,7 @@ impl PayloadBuilder for InputChainBuilder {
 
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
         let format = config.audio_format();
-        let chain = InputChain::Silent(SilentChunkSource::new(format.clone(), config.frames()));
+        let chain = InputChain::Idle;
         let info = DeviceInfo {
             name: UNKNOWN_DEVICE_NAME.into(),
             format,
@@ -179,7 +150,7 @@ pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
             }
         }
         None => {
-            log::warn!("No input device available, starting silent");
+            log::warn!("No input device available, parking input until a device appears");
             let (chain, info) = InputChainBuilder::build_dummy(&config);
             (Some(chain), info, 0)
         }
@@ -207,7 +178,7 @@ mod tests {
     use super::super::device_supervisor::PayloadBuilder;
     use super::InputChainBuilder;
 
-    use super::{DeviceInfo, InputChain, SilentChunkSource, SwitchingInputSource};
+    use super::{DeviceInfo, InputChain, SwitchingInputSource};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
     use insanity_core::audio::config::AudioPipelineConfig;
@@ -217,19 +188,7 @@ mod tests {
     use super::super::handoff::HandoffRequest;
 
     #[tokio::test]
-    async fn silent_source_emits_zeros_in_pipeline_format() {
-        let format = AudioFormat::new(2, 48000);
-        let mut silent = SilentChunkSource::new(format.clone(), 2);
-        for expected_seq in 0..3 {
-            let chunk = silent.next_chunk().await.unwrap();
-            assert_eq!(chunk.sequence_number, expected_seq);
-            assert_eq!(chunk.format, format);
-            assert_eq!(chunk.audio_data, vec![0.0; 4]);
-        }
-    }
-
-    #[tokio::test]
-    async fn silent_payload_flows_through_switching_source_with_rewritten_sequence() {
+    async fn idle_payload_parks_switching_source() {
         let format = AudioFormat::new(2, 48000);
         let (_switch_tx, swap_rx) = mpsc::channel(8);
         let (info_tx, _info_rx) = watch::channel(DeviceInfo {
@@ -237,18 +196,16 @@ mod tests {
             format: format.clone(),
         });
         let mut source: SwitchingInputSource<InputChain> = SwitchingInputSource {
-            current: Some(InputChain::Silent(SilentChunkSource::new(
-                format.clone(),
-                2,
-            ))),
+            current: Some(InputChain::Idle),
             next_sequence: 41,
             swap_rx,
             info_tx,
         };
-        let chunk = source.next_chunk().await.unwrap();
-        assert_eq!(chunk.sequence_number, 41);
-        assert_eq!(chunk.format, format);
-        assert_eq!(chunk.audio_data, vec![0.0; 4]);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), source.next_chunk())
+                .await
+                .is_err()
+        );
     }
 
     struct Script {
@@ -349,7 +306,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn silent_start_waits_for_first_switch() {
+    async fn parked_start_waits_for_first_switch() {
         let (mut source, switch_tx, _info_rx) = script_source(None);
         // Keep a sender alive: a closed swap channel means shutdown.
         let _live = switch_tx.clone();
@@ -366,6 +323,15 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_idle_matches_pipeline_format() {
+        let config = AudioPipelineConfig::default();
+        let (chain, info) = InputChainBuilder::build_dummy(&config);
+        assert!(matches!(chain, InputChain::Idle));
+        assert_eq!(info.format, config.audio_format());
+        assert_eq!(info.name, insanity_core::audio::device::UNKNOWN_DEVICE_NAME);
+    }
+
+    #[tokio::test]
     async fn last_pending_swap_wins() {
         let (mut source, switch_tx, mut info_rx) = script_source(Some(Script::new(2, 8, 2)));
         switch_tx
@@ -378,18 +344,5 @@ mod tests {
             .unwrap();
         let _ = source.next_chunk().await.unwrap();
         assert_eq!(info_rx.borrow_and_update().name, "second");
-    }
-
-    #[tokio::test]
-    async fn build_silent_matches_pipeline_format() {
-        let config = AudioPipelineConfig::default();
-        let (chain, info) = InputChainBuilder::build_dummy(&config);
-        let InputChain::Silent(mut silent) = chain else {
-            panic!("expected silent chain");
-        };
-        let chunk = silent.next_chunk().await.unwrap();
-        assert_eq!(chunk.audio_data, vec![0.0; config.block_samples()]);
-        assert_eq!(info.format, config.audio_format());
-        assert_eq!(info.name, insanity_core::audio::device::UNKNOWN_DEVICE_NAME);
     }
 }
