@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicU64;
 
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry, UNKNOWN_DEVICE_NAME};
+use insanity_core::audio::device::{AudioDevice, UNKNOWN_DEVICE_NAME};
 use insanity_core::audio::sample::SampleSource;
 use rubato_audio_source::RubatoResampler;
 use tokio::sync::{mpsc, watch};
@@ -134,42 +134,25 @@ pub(crate) struct AudioInput {
 }
 
 pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
-    let stats = Arc::new(InputStats::default());
-    let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
-    let (initial_chain, initial_info, generation) = match CpalInputDeviceRegistry::default_device()
-    {
-        Some(device) => {
-            let reporter = FatalReporter::new(Arc::clone(&fatal), 1);
-            match InputChainBuilder::build(device, &config, &stats, reporter) {
-                Some(built) => (Some(built.0), built.1, 1),
-                None => {
-                    let (chain, info) = InputChainBuilder::build_dummy(&config);
-                    (Some(chain), info, 0)
-                }
-            }
-        }
-        None => {
-            log::warn!("No input device available, parking input until a device appears");
-            let (chain, info) = InputChainBuilder::build_dummy(&config);
-            (Some(chain), info, 0)
-        }
-    };
-    let (info_tx, info_rx) = watch::channel(initial_info);
+    let (dummy_chain, dummy_info) = InputChainBuilder::build_dummy(&config);
+    let (info_tx, info_rx) = watch::channel(dummy_info);
     let source = SwitchingInputSource {
-        current: initial_chain,
+        current: Some(dummy_chain),
         next_sequence: 0,
         swap_rx,
-        info_tx: info_tx.clone(),
+        info_tx,
     };
-    let manager = InputManager::new(
+    let mut manager = InputManager::new(
         config,
         switch_tx,
-        fatal,
-        stats,
+        Arc::new(FatalSignal::new()),
+        Arc::new(InputStats::default()),
         info_rx,
-        Arc::new(AtomicU64::new(generation)),
+        Arc::new(AtomicU64::new(0)),
     );
+    // Request starting the actual input device
+    manager.follow_default();
     AudioInput { manager, source }
 }
 

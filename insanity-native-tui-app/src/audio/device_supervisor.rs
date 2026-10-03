@@ -96,7 +96,7 @@ where
 
     pub(crate) fn switch_to(&mut self, id: &str, name: &str) {
         let Some(device) = DeviceRegistry::find(id, name) else {
-            log::warn!("Requested output device not found: {name}");
+            log::warn!("Requested device not found: {name}");
             return;
         };
         self.adopt(device);
@@ -104,7 +104,7 @@ where
 
     pub(crate) fn follow_default(&mut self) {
         let Some(device) = DeviceRegistry::default_device() else {
-            log::warn!("No output device available, falling back to dummy");
+            log::warn!("No device available, falling back to dummy");
             self.adopt_dummy();
             return;
         };
