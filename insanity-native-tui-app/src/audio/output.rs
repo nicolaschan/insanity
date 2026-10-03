@@ -25,7 +25,7 @@ use crate::audio::{
 
 use super::config::get_output_config;
 use super::cpal_stream::sample_format_dispatch;
-use super::handoff::{HANDOFF_BOUND, HandoffRequest, Selection};
+use super::handoff::{HANDOFF_BOUND, HandoffRequest};
 use super::mixer::{
     AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, SubscribeRequest,
     TARGET_RING_BLOCKS, demand_sleep,
@@ -35,7 +35,7 @@ use super::stream_errors::{FatalReporter, FatalSignal};
 pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 const PREFILL_BOUND: usize = 8;
 
-pub struct OutputStats {
+pub(crate) struct OutputStats {
     underruns: AtomicUsize,
     overruns: AtomicUsize,
     total_nanos: AtomicU64,
@@ -60,21 +60,21 @@ impl OutputStats {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
     }
 
-    pub fn underruns(&self) -> usize {
+    pub(crate) fn underruns(&self) -> usize {
         self.underruns.load(Ordering::Relaxed)
     }
 
-    pub fn overruns(&self) -> usize {
+    pub(crate) fn overruns(&self) -> usize {
         self.overruns.load(Ordering::Relaxed)
     }
 
-    pub fn record(&self, elapsed: std::time::Duration) {
+    pub(crate) fn record(&self, elapsed: std::time::Duration) {
         self.fills.fetch_add(1, Ordering::Relaxed);
         self.total_nanos
             .fetch_add(elapsed.as_nanos() as u64, Ordering::Relaxed);
     }
 
-    pub fn avg_nanos(&self) -> u64 {
+    pub(crate) fn avg_nanos(&self) -> u64 {
         let fills = self.fills.load(Ordering::Relaxed) as u64;
         if fills == 0 {
             return 0;
@@ -95,7 +95,7 @@ pub(crate) struct AudioOutput {
     pub(crate) manager: OutputManager,
 }
 
-pub struct Sink {
+pub(crate) struct Sink {
     producer: Producer<f32>,
     stream: Option<send_safe::SendWrapperThread<Option<Stream>>>,
     converter: FormatConverter<StreamResampler>,
@@ -146,7 +146,7 @@ impl Sink {
     }
 }
 
-pub struct SinkBuilder;
+pub(crate) struct SinkBuilder;
 
 impl PayloadBuilder for SinkBuilder {
     type Payload = Sink;
@@ -157,7 +157,6 @@ impl PayloadBuilder for SinkBuilder {
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
-        selection: &Selection,
     ) -> Option<(Self::Payload, DeviceInfo)> {
         let name = device.name();
         let Ok((sample_format, cfg)) = get_output_config(&device.0, config) else {
@@ -201,7 +200,6 @@ impl PayloadBuilder for SinkBuilder {
         let info = DeviceInfo {
             name: name.clone(),
             format: device_format.clone(),
-            selection: selection.clone(),
         };
         let sink = Sink {
             producer,
@@ -228,7 +226,6 @@ impl PayloadBuilder for SinkBuilder {
         let info = DeviceInfo {
             name: UNKNOWN_DEVICE_NAME.into(),
             format: format.clone(),
-            selection: Selection::FollowDefault,
         };
         let sink = Sink {
             producer,
@@ -242,13 +239,13 @@ impl PayloadBuilder for SinkBuilder {
     }
 }
 
-pub type OutputManager = DeviceManager<Sink, OutputStats, CpalOutputDeviceRegistry, SinkBuilder>;
+pub(crate) type OutputManager =
+    DeviceManager<Sink, OutputStats, CpalOutputDeviceRegistry, SinkBuilder>;
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let stats = Arc::new(OutputStats::new());
     let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
-    let selection = Selection::FollowDefault;
     let logical = AudioFormat::new(audio_config.channels(), audio_config.sample_rate());
     debug_assert!(logical.channel_count > 0);
     let logical_block = logical.channel_count as usize * audio_config.frames();
@@ -259,7 +256,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     {
         Some(device) => {
             let reporter = FatalReporter::new(Arc::clone(&fatal), 1);
-            match SinkBuilder::build(device, &audio_config, &stats, reporter, &selection) {
+            match SinkBuilder::build(device, &audio_config, &stats, reporter) {
                 Some(built) => (built.0, built.1, 1),
                 None => {
                     let (sink, info) = SinkBuilder::build_dummy(&audio_config);
@@ -302,7 +299,6 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
             stats,
             info_rx,
             Arc::new(AtomicU64::new(generation)),
-            selection,
         ),
     }
 }
@@ -345,7 +341,7 @@ fn adopt_sink(
     tokio::task::spawn_blocking(move || drop(evicted));
 }
 
-pub(crate) async fn run_output_owner(
+async fn run_output_owner(
     mut mixer: AppMixer,
     mut sink: Sink,
     stats: Arc<OutputStats>,
@@ -489,11 +485,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::device_supervisor::PayloadBuilder;
-    use crate::audio::output::{OutputStats, SinkBuilder};
+    use super::super::device_supervisor::{DeviceInfo, PayloadBuilder};
 
-    use super::super::handoff::{HandoffRequest, Selection};
-    use super::OutputManager;
+    use super::super::handoff::HandoffRequest;
+    use super::SinkBuilder;
     use super::{activate_sink, adopt_sink};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::config::AudioPipelineConfig;
@@ -501,11 +496,9 @@ mod tests {
     use insanity_core::audio::mixer::Mixer;
     use insanity_core::audio::transform::Gain;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
-    use tokio::sync::{mpsc, watch};
+    use tokio::sync::watch;
 
     use super::super::mixer::{AppMixer, MAX_VOLUME};
-    use super::super::stream_errors::FatalSignal;
 
     fn pipeline_config() -> AudioPipelineConfig {
         AudioPipelineConfig::default()
@@ -530,7 +523,6 @@ mod tests {
         assert_eq!(sink.device_block, config.block_samples());
         assert_eq!(info.format, config.audio_format());
         assert_eq!(info.name, UNKNOWN_DEVICE_NAME);
-        assert!(matches!(info.selection, Selection::FollowDefault));
     }
 
     #[tokio::test]
@@ -570,39 +562,10 @@ mod tests {
         assert_eq!(info_rx.borrow().name, name);
     }
 
-    fn test_info() -> super::DeviceInfo {
-        super::DeviceInfo {
+    fn test_info() -> DeviceInfo {
+        DeviceInfo {
             name: "initial".into(),
             format: AudioFormat::new(2, 48000),
-            selection: Selection::FollowDefault,
         }
-    }
-
-    fn test_manager() -> OutputManager {
-        let (switch_tx, _) = mpsc::channel(8);
-        let (_, info_rx) = watch::channel(test_info());
-        OutputManager::new(
-            pipeline_config(),
-            switch_tx,
-            Arc::new(FatalSignal::new()),
-            Arc::new(OutputStats::new()),
-            info_rx,
-            Arc::new(AtomicU64::new(0)),
-            Selection::FollowDefault,
-        )
-    }
-
-    #[test]
-    fn unknown_device_switch_warns_and_keeps_selection() {
-        let mut manager = test_manager();
-        manager.switch_to("no-such-id", "no-such-device");
-        assert!(matches!(manager.selection(), Selection::FollowDefault));
-    }
-
-    #[test]
-    fn follow_default_never_panics_without_devices() {
-        let mut manager = test_manager();
-        manager.follow_default();
-        assert!(matches!(manager.selection(), Selection::FollowDefault));
     }
 }

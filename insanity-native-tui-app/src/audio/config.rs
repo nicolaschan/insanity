@@ -4,7 +4,7 @@ use cpal::traits::DeviceTrait;
 use cpal::{BufferSize, Device, SampleFormat, StreamConfig};
 use insanity_core::audio::config::AudioPipelineConfig;
 
-pub const AUDIO_CALLBACK_FRAMES: u32 = 480;
+pub(crate) const AUDIO_CALLBACK_FRAMES: u32 = 480;
 
 const PULSEAUDIO_HOST: &str = "PulseAudio";
 

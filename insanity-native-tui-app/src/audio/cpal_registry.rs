@@ -9,7 +9,7 @@ use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 
 const SYNTHETIC_DEVICE_NAMES: [&str; 3] = ["default_input", "default_output", "default_sink"];
 
-pub struct CpalAudioDevice(pub Device);
+pub(crate) struct CpalAudioDevice(pub(crate) Device);
 
 impl Debug for CpalAudioDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -67,8 +67,8 @@ fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> 
         .collect()
 }
 
-pub struct CpalInputDeviceRegistry;
-pub struct CpalOutputDeviceRegistry;
+pub(crate) struct CpalInputDeviceRegistry;
+pub(crate) struct CpalOutputDeviceRegistry;
 
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {

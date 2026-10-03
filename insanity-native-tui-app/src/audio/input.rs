@@ -13,17 +13,17 @@ use crate::audio::cpal_registry::{CpalAudioDevice, CpalInputDeviceRegistry};
 use crate::audio::device_supervisor::{DeviceInfo, DeviceManager, PayloadBuilder};
 
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
-use super::handoff::{HANDOFF_BOUND, HandoffRequest, Selection};
+use super::handoff::{HANDOFF_BOUND, HandoffRequest};
 use super::stream_errors::{FatalReporter, FatalSignal};
 
-pub struct SilentChunkSource {
+pub(crate) struct SilentChunkSource {
     format: AudioFormat,
     frames: usize,
     next_sequence: u128,
 }
 
 impl SilentChunkSource {
-    pub fn new(format: AudioFormat, frames: usize) -> Self {
+    fn new(format: AudioFormat, frames: usize) -> Self {
         Self {
             format,
             frames,
@@ -44,9 +44,9 @@ impl ChunkSource for SilentChunkSource {
     }
 }
 
-pub type LiveChain = SampleChunker<RubatoResampler<CpalStreamReceiver>>;
+pub(crate) type LiveChain = SampleChunker<RubatoResampler<CpalStreamReceiver>>;
 
-pub enum InputChain {
+pub(crate) enum InputChain {
     Live(Box<LiveChain>),
     Silent(SilentChunkSource),
 }
@@ -60,7 +60,7 @@ impl ChunkSource for InputChain {
     }
 }
 
-pub struct SwitchingInputSource<ChainT> {
+pub(crate) struct SwitchingInputSource<ChainT> {
     current: Option<ChainT>,
     next_sequence: u128,
     swap_rx: mpsc::Receiver<HandoffRequest<ChainT, DeviceInfo>>,
@@ -113,7 +113,7 @@ impl<ChainT: ChunkSource + Send> ChunkSource for SwitchingInputSource<ChainT> {
     }
 }
 
-pub struct InputChainBuilder;
+pub(crate) struct InputChainBuilder;
 
 impl PayloadBuilder for InputChainBuilder {
     type Payload = InputChain;
@@ -124,7 +124,6 @@ impl PayloadBuilder for InputChainBuilder {
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
-        selection: &Selection,
     ) -> Option<(Self::Payload, DeviceInfo)> {
         let name = device.name();
         match make_single_input(device.0, config, reporter, stats) {
@@ -134,11 +133,7 @@ impl PayloadBuilder for InputChainBuilder {
                     RubatoResampler::new(receiver, config.sample_rate(), config.frames());
                 let chain =
                     InputChain::Live(Box::new(SampleChunker::new(resampled, config.frames())));
-                let info = DeviceInfo {
-                    name,
-                    format,
-                    selection: selection.clone(),
-                };
+                let info = DeviceInfo { name, format };
                 Some((chain, info))
             }
             Err(e) => {
@@ -154,30 +149,28 @@ impl PayloadBuilder for InputChainBuilder {
         let info = DeviceInfo {
             name: UNKNOWN_DEVICE_NAME.into(),
             format,
-            selection: Selection::FollowDefault,
         };
         (chain, info)
     }
 }
 
-pub type InputManager =
+pub(crate) type InputManager =
     DeviceManager<InputChain, InputStats, CpalInputDeviceRegistry, InputChainBuilder>;
 
-pub struct AudioInput {
-    pub manager: InputManager,
-    pub source: SwitchingInputSource<InputChain>,
+pub(crate) struct AudioInput {
+    pub(crate) manager: InputManager,
+    pub(crate) source: SwitchingInputSource<InputChain>,
 }
 
-pub fn start_input(config: AudioPipelineConfig) -> AudioInput {
+pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
     let stats = Arc::new(InputStats::default());
     let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
     let (initial_chain, initial_info, generation) = match CpalInputDeviceRegistry::default_device()
     {
         Some(device) => {
-            let selection = Selection::FollowDefault;
             let reporter = FatalReporter::new(Arc::clone(&fatal), 1);
-            match InputChainBuilder::build(device, &config, &stats, reporter, &selection) {
+            match InputChainBuilder::build(device, &config, &stats, reporter) {
                 Some(built) => (Some(built.0), built.1, 1),
                 None => {
                     let (chain, info) = InputChainBuilder::build_dummy(&config);
@@ -205,27 +198,23 @@ pub fn start_input(config: AudioPipelineConfig) -> AudioInput {
         stats,
         info_rx,
         Arc::new(AtomicU64::new(generation)),
-        Selection::FollowDefault,
     );
     AudioInput { manager, source }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::device_supervisor::PayloadBuilder;
-    use crate::audio::input::InputChainBuilder;
+    use super::super::device_supervisor::PayloadBuilder;
+    use super::InputChainBuilder;
 
-    use super::{DeviceInfo, InputChain, InputManager, SilentChunkSource, SwitchingInputSource};
+    use super::{DeviceInfo, InputChain, SilentChunkSource, SwitchingInputSource};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
     use insanity_core::audio::config::AudioPipelineConfig;
     use std::collections::VecDeque;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
     use tokio::sync::{mpsc, watch};
 
-    use super::super::handoff::{HandoffRequest, Selection};
-    use super::super::stream_errors::FatalSignal;
+    use super::super::handoff::HandoffRequest;
 
     #[tokio::test]
     async fn silent_source_emits_zeros_in_pipeline_format() {
@@ -246,7 +235,6 @@ mod tests {
         let (info_tx, _info_rx) = watch::channel(DeviceInfo {
             name: "test".into(),
             format: format.clone(),
-            selection: Selection::FollowDefault,
         });
         let mut source: SwitchingInputSource<InputChain> = SwitchingInputSource {
             current: Some(InputChain::Silent(SilentChunkSource::new(
@@ -298,7 +286,6 @@ mod tests {
         DeviceInfo {
             name: name.into(),
             format: AudioFormat::new(channels, 48000),
-            selection: Selection::FollowDefault,
         }
     }
 
@@ -393,34 +380,6 @@ mod tests {
         assert_eq!(info_rx.borrow_and_update().name, "second");
     }
 
-    fn test_manager() -> InputManager {
-        let (switch_tx, _) = mpsc::channel(8);
-        let (_, info_rx) = watch::channel(info("test", 2));
-        InputManager::new(
-            AudioPipelineConfig::default(),
-            switch_tx,
-            Arc::new(FatalSignal::new()),
-            Default::default(),
-            info_rx,
-            Arc::new(AtomicU64::new(0)),
-            Selection::FollowDefault,
-        )
-    }
-
-    #[test]
-    fn unknown_device_switch_warns_and_keeps_selection() {
-        let mut manager = test_manager();
-        manager.switch_to("no-such-id", "no-such-device");
-        assert!(matches!(manager.selection(), Selection::FollowDefault));
-    }
-
-    #[test]
-    fn follow_default_never_panics_without_devices() {
-        let mut manager = test_manager();
-        manager.follow_default();
-        assert!(matches!(manager.selection(), Selection::FollowDefault));
-    }
-
     #[tokio::test]
     async fn build_silent_matches_pipeline_format() {
         let config = AudioPipelineConfig::default();
@@ -432,6 +391,5 @@ mod tests {
         assert_eq!(chunk.audio_data, vec![0.0; config.block_samples()]);
         assert_eq!(info.format, config.audio_format());
         assert_eq!(info.name, insanity_core::audio::device::UNKNOWN_DEVICE_NAME);
-        assert!(matches!(info.selection, Selection::FollowDefault));
     }
 }

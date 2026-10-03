@@ -1,18 +1,18 @@
 use std::sync::{Mutex, MutexGuard};
 
 pub mod codec;
-pub mod config;
-pub mod cpal_registry;
-pub mod cpal_stream;
-pub mod cpal_stream_receiver;
+pub(crate) mod config;
+pub(crate) mod cpal_registry;
+pub(crate) mod cpal_stream;
+pub(crate) mod cpal_stream_receiver;
 pub mod denoise;
-pub mod device_supervisor;
-pub mod handoff;
+pub(crate) mod device_supervisor;
+pub(crate) mod handoff;
 pub mod hub;
-pub mod input;
+pub(crate) mod input;
 pub mod mixer;
-pub mod output;
-pub mod stream_errors;
+pub(crate) mod output;
+pub(crate) mod stream_errors;
 
 /// Lock a mutex, recovering from poisoning with an error log instead of
 /// panicking. Audio must stay alive: a poisoned lock means a previous holder

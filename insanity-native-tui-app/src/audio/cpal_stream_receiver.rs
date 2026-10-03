@@ -19,7 +19,7 @@ use super::output::RING_CAPACITY_BLOCKS;
 use super::stream_errors::FatalReporter;
 
 #[derive(Default)]
-pub struct InputStats {
+pub(crate) struct InputStats {
     overruns: AtomicUsize,
 }
 
@@ -28,7 +28,7 @@ impl InputStats {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
     }
 
-    pub fn overruns(&self) -> usize {
+    pub(crate) fn overruns(&self) -> usize {
         self.overruns.load(Ordering::Relaxed)
     }
 }
@@ -51,18 +51,11 @@ impl Drop for NotifyingProducer {
     }
 }
 
-pub struct CpalStreamReceiver {
+pub(crate) struct CpalStreamReceiver {
     _stream: send_safe::SendWrapperThread<Option<Stream>>,
     consumer: rtrb::Consumer<f32>,
     wake: Arc<tokio::sync::Notify>,
-    stats: Arc<InputStats>,
     format: AudioFormat,
-}
-
-impl CpalStreamReceiver {
-    pub fn stats(&self) -> Arc<InputStats> {
-        Arc::clone(&self.stats)
-    }
 }
 
 impl SampleSource for CpalStreamReceiver {
@@ -111,7 +104,7 @@ fn publish_samples(
     }
 }
 
-pub fn make_single_input(
+pub(crate) fn make_single_input(
     device: Device,
     audio_config: &AudioPipelineConfig,
     reporter: FatalReporter,
@@ -158,7 +151,6 @@ pub fn make_single_input(
         _stream: wrapper,
         consumer,
         wake,
-        stats: Arc::clone(stats),
         format,
     })
 }
