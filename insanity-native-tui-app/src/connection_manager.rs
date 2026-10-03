@@ -407,7 +407,7 @@ fn manage_peers(
                         let line = format_audio_interval(
                             &prev,
                             &current,
-                            metrics_audio.output.handle.timing.avg_nanos(),
+                            metrics_audio.output.handle.stats.avg_nanos(),
                             peers,
                             dropped.saturating_sub(prev_dropped),
                             ring_underruns.saturating_sub(prev_underruns),

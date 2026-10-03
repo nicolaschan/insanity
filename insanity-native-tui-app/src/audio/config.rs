@@ -88,7 +88,7 @@ pub(crate) fn find_output(
 fn stream_config(
     direction: &str,
     cfg_range: cpal::SupportedStreamConfigRange,
-    audio_config: AudioPipelineConfig,
+    audio_config: &AudioPipelineConfig,
 ) -> (SampleFormat, StreamConfig) {
     let sample_rate = stream_sample_rate(&cfg_range, audio_config.sample_rate());
     let cfg = StreamConfig {
@@ -109,7 +109,7 @@ fn stream_config(
 
 pub(crate) fn get_input_config(
     device: &Device,
-    audio_config: AudioPipelineConfig,
+    audio_config: &AudioPipelineConfig,
 ) -> anyhow::Result<(SampleFormat, StreamConfig)> {
     let range = device
         .supported_input_configs()
@@ -127,7 +127,7 @@ pub(crate) fn get_input_config(
 
 pub(crate) fn get_output_config(
     device: &Device,
-    audio_config: AudioPipelineConfig,
+    audio_config: &AudioPipelineConfig,
 ) -> anyhow::Result<(SampleFormat, StreamConfig)> {
     let range = device
         .supported_output_configs()

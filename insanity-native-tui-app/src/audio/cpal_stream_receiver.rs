@@ -113,7 +113,7 @@ fn publish_samples(
 
 pub fn make_single_input(
     device: Device,
-    audio_config: AudioPipelineConfig,
+    audio_config: &AudioPipelineConfig,
     reporter: FatalReporter,
     stats: &Arc<InputStats>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
