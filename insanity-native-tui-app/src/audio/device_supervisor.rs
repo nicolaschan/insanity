@@ -11,7 +11,7 @@ use crate::audio::cpal_registry::{
 use super::input::InputManager;
 use super::output::OutputManager;
 
-use super::handoff::{HandoffRequest, Selection};
+use super::handoff::HandoffRequest;
 use super::stream_errors::{FatalReporter, FatalSignal};
 use insanity_core::audio::config::AudioPipelineConfig;
 use std::marker::PhantomData;
@@ -22,7 +22,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) struct DeviceInfo {
     pub(crate) name: String,
     pub(crate) format: AudioFormat,
-    pub(crate) selection: Selection,
 }
 
 pub(crate) trait PayloadBuilder {
@@ -34,7 +33,6 @@ pub(crate) trait PayloadBuilder {
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
-        selection: &Selection,
     ) -> Option<(Self::Payload, DeviceInfo)>;
 
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo);
@@ -47,7 +45,6 @@ pub(crate) struct DeviceManager<Payload, Stats, DeviceRegistry, Builder> {
     stats: Arc<Stats>,
     info: watch::Receiver<DeviceInfo>,
     generation: Arc<AtomicU64>,
-    current: Selection,
     _payload_builder: PhantomData<Builder>,
     _device_registry: PhantomData<DeviceRegistry>,
 }
@@ -64,7 +61,6 @@ where
         stats: Arc<Stats>,
         info: watch::Receiver<DeviceInfo>,
         generation: Arc<AtomicU64>,
-        current: Selection,
     ) -> Self {
         Self {
             config,
@@ -73,14 +69,9 @@ where
             stats,
             info,
             generation,
-            current,
             _payload_builder: PhantomData,
             _device_registry: PhantomData,
         }
-    }
-
-    pub(crate) fn selection(&self) -> &Selection {
-        &self.current
     }
 
     pub(crate) fn subscribe(&self) -> watch::Receiver<DeviceInfo> {
@@ -108,13 +99,7 @@ where
             log::warn!("Requested output device not found: {name}");
             return;
         };
-        self.adopt(
-            Selection::Explicit {
-                id: id.to_owned(),
-                name: name.to_owned(),
-            },
-            device,
-        );
+        self.adopt(device);
     }
 
     pub(crate) fn follow_default(&mut self) {
@@ -123,20 +108,18 @@ where
             self.adopt_dummy();
             return;
         };
-        if !self.adopt(Selection::FollowDefault, device) {
+        if !self.adopt(device) {
             self.adopt_dummy();
         }
     }
 
-    fn adopt(&mut self, selection: Selection, device: CpalAudioDevice) -> bool {
+    fn adopt(&mut self, device: CpalAudioDevice) -> bool {
         let next = self.generation.load(Ordering::Relaxed) + 1;
         let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
-        if let Some((payload, info)) =
-            Builder::build(device, &self.config, &self.stats, reporter, &selection)
+        if let Some((payload, info)) = Builder::build(device, &self.config, &self.stats, reporter)
             && self.send(payload, info, next)
         {
             self.generation.store(next, Ordering::Relaxed);
-            self.current = selection;
             true
         } else {
             false
@@ -148,7 +131,6 @@ where
         let next = self.generation.load(Ordering::Relaxed) + 1;
         if self.send(payload, info, next) {
             self.generation.store(next, Ordering::Relaxed);
-            self.current = Selection::FollowDefault;
         }
     }
 
@@ -179,7 +161,6 @@ impl<Payload, Stats, DeviceRegistry, Builder> Clone
             stats: Arc::clone(&self.stats),
             info: self.info.clone(),
             generation: Arc::clone(&self.generation),
-            current: self.current.clone(),
             _payload_builder: PhantomData,
             _device_registry: PhantomData,
         }
