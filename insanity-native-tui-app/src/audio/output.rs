@@ -84,14 +84,8 @@ impl OutputStats {
 }
 
 #[derive(Clone)]
-pub(crate) struct OutputHandle {
-    pub(crate) client: MixerClient,
-    pub(crate) format: AudioFormat,
-    pub(crate) stats: Arc<OutputStats>,
-}
-
 pub(crate) struct AudioOutput {
-    pub(crate) handle: OutputHandle,
+    pub(crate) client: MixerClient,
     pub(crate) manager: OutputManager,
 }
 
@@ -101,7 +95,6 @@ pub(crate) struct Sink {
     converter: FormatConverter<StreamResampler>,
     device_format: AudioFormat,
     device_block: usize,
-    name: String,
 }
 
 impl Sink {
@@ -198,7 +191,7 @@ impl PayloadBuilder for SinkBuilder {
             return None;
         }
         let info = DeviceInfo {
-            name: name.clone(),
+            name,
             format: device_format.clone(),
         };
         let sink = Sink {
@@ -207,7 +200,6 @@ impl PayloadBuilder for SinkBuilder {
             converter,
             device_format,
             device_block,
-            name,
         };
         Some((sink, info))
     }
@@ -233,7 +225,6 @@ impl PayloadBuilder for SinkBuilder {
             converter,
             device_format: format,
             device_block,
-            name: UNKNOWN_DEVICE_NAME.into(),
         };
         (sink, info)
     }
@@ -253,7 +244,6 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let (bus, _) = Gain::shared(100, MAX_VOLUME);
     let mixer = Mixer::new(audio_config, bus);
     let (dummy_sink, dummy_info) = SinkBuilder::build_dummy(&audio_config);
-    let initial_format = dummy_info.format.clone();
     let (info_tx, info_rx) = watch::channel(dummy_info);
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
     let task_stats = Arc::clone(&stats);
@@ -270,20 +260,16 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
         audio_config,
         switch_tx,
         fatal,
-        Arc::clone(&stats),
+        stats,
         info_rx,
         Arc::new(AtomicU64::new(0)),
     );
     // Request starting the actual output device
     manager.follow_default();
     AudioOutput {
-        handle: OutputHandle {
-            client: MixerClient {
-                tx: op_tx,
-                dropped: Arc::new(AtomicUsize::new(0)),
-            },
-            format: initial_format,
-            stats: Arc::clone(&stats),
+        client: MixerClient {
+            tx: op_tx,
+            dropped: Arc::new(AtomicUsize::new(0)),
         },
         manager,
     }
@@ -318,12 +304,14 @@ fn adopt_sink(
     let mut fresh = request.payload;
     activate_sink(&mut fresh, mixer, logical_block, stats);
     let evicted = std::mem::replace(sink, fresh);
-    info_tx.send_replace(request.info);
     log::info!(
-        "Output device switched to {} (generation {})",
-        sink.name,
-        request.generation
+        "Output device switched to {} (generation {} channels={} rate={})",
+        request.info.name,
+        request.generation,
+        request.info.format.channel_count,
+        request.info.format.sample_rate,
     );
+    info_tx.send_replace(request.info);
     tokio::task::spawn_blocking(move || drop(evicted));
 }
 
@@ -528,7 +516,7 @@ mod tests {
         let config = pipeline_config();
         let (mut sink, _) = SinkBuilder::build_dummy(&config);
         let (fresh, fresh_info) = SinkBuilder::build_dummy(&config);
-        let name = fresh.name.clone();
+        let fresh_name = fresh_info.name.clone();
         let (info_tx, info_rx) = watch::channel(test_info());
         let mut mixer = empty_mixer();
         let stats = Arc::new(super::OutputStats::new());
@@ -544,8 +532,7 @@ mod tests {
             &stats,
             &info_tx,
         );
-        assert_eq!(sink.name, name);
-        assert_eq!(info_rx.borrow().name, name);
+        assert_eq!(info_rx.borrow().name, fresh_name);
     }
 
     fn test_info() -> DeviceInfo {
