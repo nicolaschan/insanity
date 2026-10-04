@@ -226,36 +226,30 @@ pub(crate) type OutputManager =
     DeviceManager<Sink, OutputStats, CpalOutputDeviceRegistry, SinkBuilder>;
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
-    let stats = Arc::new(OutputStats::default());
-    let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
-    let logical = AudioFormat::new(audio_config.channels(), audio_config.sample_rate());
-    debug_assert!(logical.channel_count > 0);
-    let logical_block = logical.channel_count as usize * audio_config.frames();
-    debug_assert!(logical_block > 0);
-    let (bus, _) = Gain::shared(100, MAX_VOLUME);
-    let mixer = Mixer::new(audio_config, bus);
     let (dummy_sink, dummy_info) = SinkBuilder::build_dummy(&audio_config);
     let (info_tx, info_rx) = watch::channel(dummy_info);
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
-    let task_stats = Arc::clone(&stats);
-    tokio::spawn(run_output_owner(
-        mixer,
-        dummy_sink,
-        task_stats,
-        op_rx,
-        swap_rx,
-        info_tx,
-        logical_block,
-    ));
+
     let mut manager = OutputManager::new(
         audio_config,
         switch_tx,
-        fatal,
-        stats,
+        Arc::new(FatalSignal::new()),
+        Arc::new(OutputStats::default()),
         info_rx,
         Arc::new(AtomicU64::new(0)),
     );
+
+    tokio::spawn(run_output_owner(
+        Mixer::new(audio_config, Gain::shared(100, MAX_VOLUME).0),
+        dummy_sink,
+        manager.stats(),
+        op_rx,
+        swap_rx,
+        info_tx,
+        audio_config.block_samples(),
+    ));
+
     // Request starting the actual output device
     manager.follow_default();
     AudioOutput {
