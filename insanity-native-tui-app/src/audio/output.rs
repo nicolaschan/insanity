@@ -27,12 +27,11 @@ use super::config::get_output_config;
 use super::cpal_stream::sample_format_dispatch;
 use super::handoff::{HANDOFF_BOUND, HandoffRequest};
 use super::mixer::{
-    AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, SubscribeRequest,
-    TARGET_RING_BLOCKS, demand_sleep,
+    AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, RING_CAPACITY_BLOCKS,
+    SubscribeRequest, TARGET_RING_BLOCKS, demand_sleep,
 };
 use super::stream_errors::{FatalReporter, FatalSignal};
 
-pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 const PREFILL_BOUND: usize = 8;
 
 #[derive(Default)]

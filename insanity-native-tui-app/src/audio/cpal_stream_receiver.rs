@@ -15,7 +15,7 @@ use insanity_core::audio::sample::SampleSource;
 
 use super::config::get_input_config;
 use super::cpal_stream::sample_format_dispatch;
-use super::output::RING_CAPACITY_BLOCKS;
+use super::mixer::RING_CAPACITY_BLOCKS;
 use super::stream_errors::FatalReporter;
 
 #[derive(Default)]

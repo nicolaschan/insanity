@@ -75,6 +75,7 @@ pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
 }
 
 pub(crate) const MIXER_OPS_BOUND: usize = 64;
+pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 pub(crate) const TARGET_RING_BLOCKS: usize = 2;
 const MIN_FILL_SLEEP: Duration = Duration::from_millis(2);
 const MAX_FILL_SLEEP: Duration = Duration::from_millis(30);
