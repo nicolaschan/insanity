@@ -35,6 +35,7 @@ use super::stream_errors::{FatalReporter, FatalSignal};
 pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 const PREFILL_BOUND: usize = 8;
 
+#[derive(Default)]
 pub(crate) struct OutputStats {
     underruns: AtomicUsize,
     overruns: AtomicUsize,
@@ -43,15 +44,6 @@ pub(crate) struct OutputStats {
 }
 
 impl OutputStats {
-    fn new() -> Self {
-        OutputStats {
-            underruns: AtomicUsize::new(0),
-            overruns: AtomicUsize::new(0),
-            total_nanos: AtomicU64::new(0),
-            fills: AtomicUsize::new(0),
-        }
-    }
-
     fn note_underruns(&self, samples: usize) {
         self.underruns.fetch_add(samples, Ordering::Relaxed);
     }
@@ -234,7 +226,7 @@ pub(crate) type OutputManager =
     DeviceManager<Sink, OutputStats, CpalOutputDeviceRegistry, SinkBuilder>;
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
-    let stats = Arc::new(OutputStats::new());
+    let stats = Arc::new(OutputStats::default());
     let fatal = Arc::new(FatalSignal::new());
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
     let logical = AudioFormat::new(audio_config.channels(), audio_config.sample_rate());
@@ -504,7 +496,7 @@ mod tests {
         let config = pipeline_config();
         let (mut sink, _) = SinkBuilder::build_dummy(&config);
         let mut mixer = empty_mixer();
-        let stats = Arc::new(super::OutputStats::new());
+        let stats = Arc::new(super::OutputStats::default());
         assert_eq!(sink.buffered_samples(), 0);
         activate_sink(&mut sink, &mut mixer, logical_block(), &stats);
         assert!(sink.buffered_samples() >= sink.device_block);
@@ -519,7 +511,7 @@ mod tests {
         let fresh_name = fresh_info.name.clone();
         let (info_tx, info_rx) = watch::channel(test_info());
         let mut mixer = empty_mixer();
-        let stats = Arc::new(super::OutputStats::new());
+        let stats = Arc::new(super::OutputStats::default());
         adopt_sink(
             &mut sink,
             HandoffRequest {
