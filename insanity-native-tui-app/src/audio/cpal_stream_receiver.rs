@@ -13,7 +13,7 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
 
-use super::config::get_input_config;
+use super::config::{STREAM_BUILD_TIMEOUT, get_input_config};
 use super::cpal_stream::sample_format_dispatch;
 use super::mixer::RING_CAPACITY_BLOCKS;
 use super::stream_errors::FatalReporter;
@@ -201,7 +201,7 @@ where
                 );
             },
             err_fn,
-            None,
+            Some(STREAM_BUILD_TIMEOUT),
         )
         .map_err(|e| anyhow::anyhow!("build input stream: {e}"))
 }

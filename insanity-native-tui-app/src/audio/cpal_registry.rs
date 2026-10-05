@@ -48,22 +48,15 @@ pub(crate) fn shared_host() -> &'static cpal::Host {
     HOST.get_or_init(cpal::default_host)
 }
 
-fn raw_devices() -> Vec<Device> {
-    shared_host()
-        .devices()
-        .map(|d| d.into_iter().collect::<Vec<_>>())
-        .unwrap_or_default()
-}
-
-fn filtered_devices(supports: impl Fn(&Device) -> bool) -> Vec<CpalAudioDevice> {
+fn filtered_devices(devices: impl IntoIterator<Item = Device>) -> Vec<CpalAudioDevice> {
     let mut seen = HashSet::new();
-    raw_devices()
+    devices
         .into_iter()
         .map(CpalAudioDevice)
         .filter_map(|device| {
             let name = device.try_name()?;
             let id = device.try_id()?;
-            if !supports(&device.0) || !keep_device(&name) || !seen.insert((name, id)) {
+            if !keep_device(&name) || !seen.insert((name, id)) {
                 None
             } else {
                 Some(device)
@@ -77,7 +70,13 @@ pub(crate) struct CpalOutputDeviceRegistry;
 
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        filtered_devices(|device| device.supports_input())
+        match shared_host().input_devices() {
+            Ok(devices) => filtered_devices(devices),
+            Err(error) => {
+                log::warn!("Failed to enumerate input devices: {error}");
+                Vec::new()
+            }
+        }
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
@@ -95,7 +94,13 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
 
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        filtered_devices(|device| device.supports_output())
+        match shared_host().output_devices() {
+            Ok(devices) => filtered_devices(devices),
+            Err(error) => {
+                log::warn!("Failed to enumerate output devices: {error}");
+                Vec::new()
+            }
+        }
     }
 
     fn default_device() -> Option<CpalAudioDevice> {

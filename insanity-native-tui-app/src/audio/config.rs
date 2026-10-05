@@ -1,10 +1,13 @@
 use std::cmp::Reverse;
+use std::time::Duration;
 
 use cpal::traits::DeviceTrait;
 use cpal::{BufferSize, Device, SampleFormat, StreamConfig};
 use insanity_core::audio::config::AudioPipelineConfig;
 
 pub(crate) const AUDIO_CALLBACK_FRAMES: u32 = 480;
+
+pub(crate) const STREAM_BUILD_TIMEOUT: Duration = Duration::from_secs(5);
 
 const PULSEAUDIO_HOST: &str = "PulseAudio";
 
