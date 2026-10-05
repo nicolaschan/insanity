@@ -20,7 +20,7 @@ fn callback_buffer_size(host: &str, supported: &cpal::SupportedBufferSize) -> Bu
 }
 
 fn host_name() -> &'static str {
-    cpal::default_host().id().name()
+    super::cpal_registry::shared_host().id().name()
 }
 
 // shared config helpers
