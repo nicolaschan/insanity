@@ -428,6 +428,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_device_adopts_usable_host_default() {
+        use super::super::cpal_registry::{
+            CpalInputDeviceRegistry, CpalOutputDeviceRegistry, is_monitor_name, shared_host,
+        };
+        use cpal::traits::{DeviceTrait, HostTrait};
+        use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
+        let host = shared_host();
+        let pairs = [
+            (
+                host.default_input_device(),
+                CpalInputDeviceRegistry::default_device(),
+                true,
+            ),
+            (
+                host.default_output_device(),
+                CpalOutputDeviceRegistry::default_device(),
+                false,
+            ),
+        ];
+        for (host_default, adopted, is_input) in pairs {
+            let Some(host_default) = host_default else {
+                continue;
+            };
+            let Ok(description) = host_default.description() else {
+                continue;
+            };
+            let supports = if is_input {
+                host_default.supports_input()
+            } else {
+                host_default.supports_output()
+            };
+            if !supports || is_monitor_name(description.name()) {
+                continue;
+            }
+            let adopted = adopted.expect("usable host default must be adopted");
+            let expected = host_default
+                .id()
+                .expect("host default has an id")
+                .to_string();
+            assert_eq!(adopted.try_id().as_deref(), Some(expected.as_str()));
+        }
+    }
+
+    #[tokio::test]
     async fn managers_start_following_default_or_dummy() {
         let (input, output) = managers();
         for name in [input.current_name(), output.current_name()] {

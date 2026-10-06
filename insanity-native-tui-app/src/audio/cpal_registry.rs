@@ -31,11 +31,11 @@ fn device_name_opt(device: &Device) -> Option<String> {
     device.description().ok().map(|d| d.name().to_owned())
 }
 
-fn is_synthetic_name(name: &str) -> bool {
+pub(crate) fn is_synthetic_name(name: &str) -> bool {
     SYNTHETIC_DEVICE_NAMES.contains(&name)
 }
 
-fn is_monitor_name(name: &str) -> bool {
+pub(crate) fn is_monitor_name(name: &str) -> bool {
     name.to_lowercase().contains("monitor")
 }
 
@@ -83,7 +83,7 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
         if let Some(device) = shared_host().default_input_device()
             && let Some(name) = device_name_opt(&device)
             && device.supports_input()
-            && keep_device(&name)
+            && (keep_device(&name) || is_synthetic_name(&name))
         {
             Some(CpalAudioDevice(device))
         } else {
@@ -107,7 +107,7 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
         if let Some(device) = shared_host().default_output_device()
             && let Some(name) = device_name_opt(&device)
             && device.supports_output()
-            && keep_device(&name)
+            && (keep_device(&name) || is_synthetic_name(&name))
         {
             Some(CpalAudioDevice(device))
         } else {
