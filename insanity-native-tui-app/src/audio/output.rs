@@ -59,6 +59,10 @@ impl OutputStats {
         self.overruns.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn fills(&self) -> usize {
+        self.fills.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn record(&self, elapsed: std::time::Duration) {
         self.fills.fetch_add(1, Ordering::Relaxed);
         self.total_nanos
@@ -227,7 +231,7 @@ pub(crate) type OutputManager =
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
     let (dummy_sink, dummy_info) = SinkBuilder::build_dummy(&audio_config);
-    let (info_tx, info_rx) = watch::channel(dummy_info);
+    let (info_tx, _) = watch::channel(dummy_info);
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
 
     let mut manager = OutputManager::new(
@@ -235,7 +239,6 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
         switch_tx,
         Arc::new(FatalSignal::new()),
         Arc::new(OutputStats::default()),
-        info_rx,
         Arc::new(AtomicU64::new(0)),
     );
 

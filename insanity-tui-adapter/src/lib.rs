@@ -128,6 +128,8 @@ pub enum AppEvent {
     Loudness(String, f64),
     SetInputDeviceName(String),
     SetOutputDeviceName(String),
+    SetDefaultInputDeviceName(String),
+    SetDefaultOutputDeviceName(String),
     SetInputDevices(Vec<(String, String)>),
     SetOutputDevices(Vec<(String, String)>),
 }
@@ -157,6 +159,8 @@ pub struct App {
     pub mute_self: bool,
     pub input_device_name: String,
     pub output_device_name: String,
+    pub default_input_device_name: String,
+    pub default_output_device_name: String,
     pub input_devices: Vec<(String, String)>, // (Device ID, Device Name)
     pub output_devices: Vec<(String, String)>, // (Device ID, Device Name)
     pub device_cursor: DeviceCursor,
@@ -189,6 +193,8 @@ impl App {
             mute_self: false,
             input_device_name: "".into(),
             output_device_name: "".into(),
+            default_input_device_name: "".into(),
+            default_output_device_name: "".into(),
             input_devices: vec![],
             output_devices: vec![],
             device_cursor: DeviceCursor::Input(0),
@@ -433,6 +439,16 @@ impl App {
             AppEvent::SetOutputDeviceName(output_device_name) => {
                 self.output_device_name = output_device_name;
                 true
+            }
+            AppEvent::SetDefaultInputDeviceName(default_device_name) => {
+                let changed = self.default_input_device_name != default_device_name;
+                self.default_input_device_name = default_device_name;
+                changed
+            }
+            AppEvent::SetDefaultOutputDeviceName(default_device_name) => {
+                let changed = self.default_output_device_name != default_device_name;
+                self.default_output_device_name = default_device_name;
+                changed
             }
             AppEvent::SetInputDevices(devices) => {
                 let changed = self.input_devices != devices;
@@ -1207,6 +1223,26 @@ mod render_scaling_tests {
         assert_eq!(marked, 1, "Mic 1 must render exactly once");
     }
 
+    #[test]
+    fn settings_titles_show_resolved_default() {
+        let mut app = test_settings_app(2, 1);
+        assert!(app.process_event(AppEvent::SetDefaultInputDeviceName("Mic 0".to_string())));
+        assert!(app.process_event(AppEvent::SetDefaultOutputDeviceName(
+            "Speakers 0".to_string()
+        )));
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let text = buffer_text(&terminal).join("\n");
+        assert!(
+            text.contains("Input devices (default: Mic 0)"),
+            "input title must show resolved default"
+        );
+        assert!(
+            text.contains("Output devices (default: Speakers 0)"),
+            "output title must show resolved default"
+        );
+    }
+
     fn expected_low_priority(event: &AppEvent) -> bool {
         match event {
             AppEvent::Loudness(..) | AppEvent::AddPeer(_) => true,
@@ -1241,6 +1277,8 @@ mod render_scaling_tests {
             | AppEvent::MuteSelf(_)
             | AppEvent::SetInputDeviceName(_)
             | AppEvent::SetOutputDeviceName(_)
+            | AppEvent::SetDefaultInputDeviceName(_)
+            | AppEvent::SetDefaultOutputDeviceName(_)
             | AppEvent::SetInputDevices(_)
             | AppEvent::SetOutputDevices(_) => false,
         }
@@ -1289,6 +1327,8 @@ mod render_scaling_tests {
             AppEvent::Loudness("id".to_string(), 0.5),
             AppEvent::SetInputDeviceName("i".to_string()),
             AppEvent::SetOutputDeviceName("o".to_string()),
+            AppEvent::SetDefaultInputDeviceName("di".to_string()),
+            AppEvent::SetDefaultOutputDeviceName("do".to_string()),
             AppEvent::SetInputDevices(vec![]),
             AppEvent::SetOutputDevices(vec![]),
         ];

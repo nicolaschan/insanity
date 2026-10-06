@@ -136,7 +136,7 @@ pub(crate) struct AudioInput {
 pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
     let (switch_tx, swap_rx) = mpsc::channel(HANDOFF_BOUND);
     let (dummy_chain, dummy_info) = InputChainBuilder::build_dummy(&config);
-    let (info_tx, info_rx) = watch::channel(dummy_info);
+    let (info_tx, _) = watch::channel(dummy_info);
     let source = SwitchingInputSource {
         current: Some(dummy_chain),
         next_sequence: 0,
@@ -148,7 +148,6 @@ pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
         switch_tx,
         Arc::new(FatalSignal::new()),
         Arc::new(InputStats::default()),
-        info_rx,
         Arc::new(AtomicU64::new(0)),
     );
     // Request starting the actual input device

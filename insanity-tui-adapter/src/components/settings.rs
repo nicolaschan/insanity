@@ -95,7 +95,7 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     };
     f.render_widget(
         device_widget(
-            "Input devices",
+            section_title("Input devices", &app.default_input_device_name),
             &app.input_devices,
             &app.input_device_name,
             input_cursor,
@@ -104,7 +104,7 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     );
     f.render_widget(
         device_widget(
-            "Output devices",
+            section_title("Output devices", &app.default_output_device_name),
             &app.output_devices,
             &app.output_device_name,
             output_cursor,
@@ -114,12 +114,20 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(hints_line(), chunks[4]);
 }
 
+fn section_title(base: &str, default_name: &str) -> String {
+    if default_name.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base} (default: {default_name})")
+    }
+}
+
 fn section_height(devices: usize) -> u16 {
     devices.max(1) as u16 + 2
 }
 
 fn device_widget<'a>(
-    title: &'static str,
+    title: String,
     devices: &'a [(String, String)],
     current_name: &str,
     cursor: Option<usize>,
@@ -144,7 +152,12 @@ fn device_widget<'a>(
                     }
                     style
                 };
-                Line::from(vec![Span::styled(name, row_style)])
+                let label = if name == current_name {
+                    format!("{name} (current)")
+                } else {
+                    name.clone()
+                };
+                Line::from(vec![Span::styled(label, row_style)])
             })
             .collect()
     };

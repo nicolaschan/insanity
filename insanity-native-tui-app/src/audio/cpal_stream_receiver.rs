@@ -1,7 +1,7 @@
 use std::iter::ExactSizeIterator;
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use anyhow::anyhow;
@@ -21,6 +21,7 @@ use super::stream_errors::FatalReporter;
 #[derive(Default)]
 pub(crate) struct InputStats {
     overruns: AtomicUsize,
+    fills: AtomicU64,
 }
 
 impl InputStats {
@@ -28,8 +29,16 @@ impl InputStats {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
     }
 
+    fn note_fill(&self) {
+        self.fills.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn overruns(&self) -> usize {
         self.overruns.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn fills(&self) -> u64 {
+        self.fills.load(Ordering::Relaxed)
     }
 }
 
@@ -194,6 +203,7 @@ where
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
+                stats.note_fill();
                 publish_samples(
                     &mut producer,
                     &stats,

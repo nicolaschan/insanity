@@ -309,12 +309,12 @@ fn manage_peers(
             }
         }
         let name_tx = app_event_tx.clone();
-        let mut input_info = input.subscribe();
+        let mut input_selection = input.subscribe_selection();
         tokio::spawn(async move {
-            while input_info.changed().await.is_ok() {
+            while input_selection.changed().await.is_ok() {
                 if name_tx
                     .send(AppEvent::SetInputDeviceName(
-                        input_info.borrow().name.clone(),
+                        input_selection.borrow().display_name(),
                     ))
                     .is_err()
                 {
@@ -326,12 +326,12 @@ fn manage_peers(
 
     if let Some(app_event_tx) = &app_event_tx {
         let name_tx = app_event_tx.clone();
-        let mut output_info = output.manager.subscribe();
+        let mut output_selection = output.manager.subscribe_selection();
         tokio::spawn(async move {
-            while output_info.changed().await.is_ok() {
+            while output_selection.changed().await.is_ok() {
                 if name_tx
                     .send(AppEvent::SetOutputDeviceName(
-                        output_info.borrow().name.clone(),
+                        output_selection.borrow().display_name(),
                     ))
                     .is_err()
                 {
@@ -574,17 +574,29 @@ async fn handle_user_action(
             }
         }
         UserInputEvent::SetInputDevice(id, name) => {
-            audio.input.manager.switch_to(&id, &name);
-            log::debug!("Switched input device to {name}");
+            if id == device_supervisor::DEFAULT_DEVICE_ID {
+                audio.input.manager.follow_default();
+                log::debug!("Switched input device to default");
+            } else {
+                audio.input.manager.switch_to(&id, &name);
+                log::debug!("Switched input device to {name}");
+            }
         }
         UserInputEvent::SetOutputDevice(id, name) => {
-            audio.output.manager.switch_to(&id, &name);
-            log::debug!("Switched output device to {name}");
+            if id == device_supervisor::DEFAULT_DEVICE_ID {
+                audio.output.manager.follow_default();
+                log::debug!("Switched output device to default");
+            } else {
+                audio.output.manager.switch_to(&id, &name);
+                log::debug!("Switched output device to {name}");
+            }
         }
         UserInputEvent::RefreshDevices => {
             let Some(app_event_tx) = app_event_tx else {
                 return Ok(());
             };
+            audio.input.manager.recover_if_dummy();
+            audio.output.manager.recover_if_dummy();
             for event in device_supervisor::refresh_device_events(
                 &audio.input.manager,
                 &audio.output.manager,

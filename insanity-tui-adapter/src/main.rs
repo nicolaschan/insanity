@@ -93,15 +93,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 UserInputEvent::RefreshDevices => {
                     sender
                         .send(AppEvent::SetInputDevices(vec![
+                            ("default".to_string(), "default".to_string()),
                             ("mic-id".to_string(), "Demo Mic".to_string()),
                             ("cam-id".to_string(), "Demo Cam".to_string()),
                         ]))
                         .unwrap();
                     sender
-                        .send(AppEvent::SetOutputDevices(vec![(
-                            "spk-id".to_string(),
+                        .send(AppEvent::SetOutputDevices(vec![
+                            ("default".to_string(), "default".to_string()),
+                            ("spk-id".to_string(), "Demo Speakers".to_string()),
+                        ]))
+                        .unwrap();
+                    sender
+                        .send(AppEvent::SetInputDeviceName("default".to_string()))
+                        .unwrap();
+                    sender
+                        .send(AppEvent::SetOutputDeviceName("default".to_string()))
+                        .unwrap();
+                    sender
+                        .send(AppEvent::SetDefaultInputDeviceName("Demo Mic".to_string()))
+                        .unwrap();
+                    sender
+                        .send(AppEvent::SetDefaultOutputDeviceName(
                             "Demo Speakers".to_string(),
-                        )]))
+                        ))
                         .unwrap();
                 }
             }
