@@ -23,7 +23,7 @@ use crate::audio::{
     device_supervisor::{DeviceInfo, DeviceManager, PayloadBuilder},
 };
 
-use super::config::get_output_config;
+use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
 use super::cpal_stream::sample_format_dispatch;
 use super::handoff::{HANDOFF_BOUND, HandoffRequest};
 use super::mixer::{
@@ -437,7 +437,7 @@ where
                 stats.record(start.elapsed());
             },
             err_fn,
-            None,
+            Some(STREAM_BUILD_TIMEOUT),
         )
         .map_err(|e| anyhow::anyhow!("build output stream: {e}"))
 }
