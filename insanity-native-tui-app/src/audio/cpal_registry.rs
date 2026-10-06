@@ -43,8 +43,13 @@ fn keep_device(name: &str) -> bool {
     !is_synthetic_name(name) && !is_monitor_name(name)
 }
 
+pub(crate) fn shared_host() -> &'static cpal::Host {
+    static HOST: std::sync::OnceLock<cpal::Host> = std::sync::OnceLock::new();
+    HOST.get_or_init(cpal::default_host)
+}
+
 fn raw_devices() -> Vec<Device> {
-    cpal::default_host()
+    shared_host()
         .devices()
         .map(|d| d.into_iter().collect::<Vec<_>>())
         .unwrap_or_default()
@@ -76,7 +81,7 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        if let Some(device) = cpal::default_host().default_input_device()
+        if let Some(device) = shared_host().default_input_device()
             && let Some(name) = device_name_opt(&device)
             && device.supports_input()
             && keep_device(&name)
@@ -94,7 +99,7 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        if let Some(device) = cpal::default_host().default_output_device()
+        if let Some(device) = shared_host().default_output_device()
             && let Some(name) = device_name_opt(&device)
             && device.supports_output()
             && keep_device(&name)
