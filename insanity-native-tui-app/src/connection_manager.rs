@@ -20,11 +20,10 @@ use crate::audio::hub::AudioInputHub;
 use crate::{
     audio::{
         codec::rebuild_opus_encoder,
-        config::AUDIO_CALLBACK_FRAMES,
         device_supervisor,
         input::{AudioInput, InputManager, start_input},
         mixer::format_audio_interval,
-        output::{AudioOutput, OutputHandle, OutputManager, start_output},
+        output::{AudioOutput, start_output},
         stream_errors,
     },
     managed_peer::{ConnectionStatus, ManagedPeer},
@@ -64,15 +63,9 @@ struct InputSide {
 }
 
 #[derive(Clone)]
-struct OutputSide {
-    handle: OutputHandle,
-    manager: OutputManager,
-}
-
-#[derive(Clone)]
 struct SharedAudio {
     input: InputSide,
-    output: OutputSide,
+    output: AudioOutput,
 }
 
 impl ConnectionManager {
@@ -352,10 +345,7 @@ fn manage_peers(
             hub: hub.clone(),
             manager: input,
         },
-        output: OutputSide {
-            handle: output.handle.clone(),
-            manager: output.manager.clone(),
-        },
+        output: output.clone(),
     };
     {
         let supervisor_input = audio.input.manager.clone();
@@ -375,24 +365,16 @@ fn manage_peers(
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
-        log::info!(
-            "Audio formats: output channels={} output rate={} buffer_frames={AUDIO_CALLBACK_FRAMES} input={} output={}",
-            metrics_audio.output.handle.format.channel_count,
-            metrics_audio.output.handle.format.sample_rate,
-            metrics_audio.input.manager.current_name(),
-            metrics_audio.output.manager.current_name(),
-        );
         let mut prev = metrics_audio
             .output
-            .handle
             .client
             .snapshot()
             .await
             .map(|(snapshot, _)| snapshot)
             .unwrap_or_default();
-        let mut prev_dropped = metrics_audio.output.handle.client.dropped();
-        let mut prev_underruns = metrics_audio.output.handle.stats.underruns();
-        let mut prev_overruns = metrics_audio.output.handle.stats.overruns();
+        let mut prev_dropped = metrics_audio.output.client.dropped();
+        let mut prev_underruns = metrics_audio.output.manager.stats().underruns();
+        let mut prev_overruns = metrics_audio.output.manager.stats().overruns();
         let mut prev_input_errors = stream_errors::input_errors();
         let mut prev_output_errors = stream_errors::output_errors();
         let mut prev_input_overruns = metrics_audio.input.manager.stats().overruns();
@@ -400,14 +382,14 @@ fn manage_peers(
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
-                    if let Some((current, peers)) = metrics_audio.output.handle.client.snapshot().await {
-                        let dropped = metrics_audio.output.handle.client.dropped();
-                        let ring_underruns = metrics_audio.output.handle.stats.underruns();
-                        let ring_overruns = metrics_audio.output.handle.stats.overruns();
+                    if let Some((current, peers)) = metrics_audio.output.client.snapshot().await {
+                        let dropped = metrics_audio.output.client.dropped();
+                        let ring_underruns = metrics_audio.output.manager.stats().underruns();
+                        let ring_overruns = metrics_audio.output.manager.stats().overruns();
                         let line = format_audio_interval(
                             &prev,
                             &current,
-                            metrics_audio.output.handle.stats.avg_nanos(),
+                            metrics_audio.output.manager.stats().avg_nanos(),
                             peers,
                             dropped.saturating_sub(prev_dropped),
                             ring_underruns.saturating_sub(prev_underruns),
@@ -537,7 +519,7 @@ fn update_peer_info(
                 .denoise(DenoiseSelection::default())
                 .volume(100)
                 .hub(audio.input.hub)
-                .client(audio.output.handle.client.clone())
+                .client(audio.output.client.clone())
                 .build();
             managed_peers.insert(id, managed_peer.clone());
             Some(managed_peer)
