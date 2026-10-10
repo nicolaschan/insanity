@@ -125,10 +125,17 @@ fn device_widget<'a>(
     cursor: Option<usize>,
 ) -> Paragraph<'a> {
     let lines = if devices.is_empty() {
-        vec![Line::from(Span::styled(
-            "(no devices found)",
-            Style::default().fg(Color::DarkGray),
-        ))]
+        if current_name.is_empty() {
+            vec![Line::from(Span::styled(
+                "(no devices found)",
+                Style::default().fg(Color::DarkGray),
+            ))]
+        } else {
+            vec![Line::from(Span::styled(
+                current_name.to_string(),
+                Style::default().fg(Color::LightBlue),
+            ))]
+        }
     } else {
         devices
             .iter()

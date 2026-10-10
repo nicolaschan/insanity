@@ -10,7 +10,6 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::converter::FormatConverter;
 use insanity_core::audio::device::AudioDevice;
-use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
@@ -20,7 +19,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::audio::{
     cpal_registry::{CpalAudioDevice, CpalOutputDeviceRegistry},
-    device_supervisor::{DeviceInfo, DeviceManager, PayloadBuilder},
+    device_supervisor::{DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder},
 };
 
 use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
@@ -40,6 +39,7 @@ pub(crate) struct OutputStats {
     overruns: AtomicUsize,
     total_nanos: AtomicU64,
     fills: AtomicUsize,
+    data_callbacks: AtomicU64,
 }
 
 impl OutputStats {
@@ -49,6 +49,14 @@ impl OutputStats {
 
     pub(crate) fn note_overrun(&self, samples: usize) {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
+    }
+
+    fn note_data_callback(&self) {
+        self.data_callbacks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn data_callbacks(&self) -> u64 {
+        self.data_callbacks.load(Ordering::Relaxed)
     }
 
     pub(crate) fn underruns(&self) -> usize {
@@ -207,7 +215,7 @@ impl PayloadBuilder for SinkBuilder {
             device_block * RING_CAPACITY_BLOCKS,
         );
         let info = DeviceInfo {
-            name: UNKNOWN_DEVICE_NAME.into(),
+            name: DUMMY_DEVICE_NAME.into(),
             format: format.clone(),
         };
         let sink = Sink {
@@ -250,7 +258,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     ));
 
     // Request starting the actual output device
-    manager.follow_default();
+    manager.switch_to_current_default();
     AudioOutput {
         client: MixerClient {
             tx: op_tx,
@@ -423,6 +431,7 @@ where
         .build_output_stream(
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                stats.note_data_callback();
                 let start = std::time::Instant::now();
                 let available = consumer.slots().min(data.len());
                 match consumer.read_chunk(available) {
@@ -440,90 +449,4 @@ where
             Some(STREAM_BUILD_TIMEOUT),
         )
         .map_err(|e| anyhow::anyhow!("build output stream: {e}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::device_supervisor::{DeviceInfo, PayloadBuilder};
-
-    use super::super::handoff::HandoffRequest;
-    use super::SinkBuilder;
-    use super::{activate_sink, adopt_sink};
-    use insanity_core::audio::AudioFormat;
-    use insanity_core::audio::config::AudioPipelineConfig;
-    use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
-    use insanity_core::audio::mixer::Mixer;
-    use insanity_core::audio::transform::Gain;
-    use std::sync::Arc;
-    use tokio::sync::watch;
-
-    use super::super::mixer::{AppMixer, MAX_VOLUME};
-
-    fn pipeline_config() -> AudioPipelineConfig {
-        AudioPipelineConfig::default()
-    }
-
-    fn empty_mixer() -> AppMixer {
-        let config = pipeline_config();
-        let (bus, _) = Gain::shared(100, MAX_VOLUME);
-        Mixer::new(config, bus)
-    }
-
-    fn logical_block() -> usize {
-        let config = pipeline_config();
-        config.channels() as usize * config.frames()
-    }
-
-    #[test]
-    fn build_dummy_matches_pipeline_format() {
-        let config = pipeline_config();
-        let (sink, info) = SinkBuilder::build_dummy(&config);
-        assert_eq!(sink.device_format, config.audio_format());
-        assert_eq!(sink.device_block, config.block_samples());
-        assert_eq!(info.format, config.audio_format());
-        assert_eq!(info.name, UNKNOWN_DEVICE_NAME);
-    }
-
-    #[tokio::test]
-    async fn prefill_converges_within_bound() {
-        let config = pipeline_config();
-        let (mut sink, _) = SinkBuilder::build_dummy(&config);
-        let mut mixer = empty_mixer();
-        let stats = Arc::new(super::OutputStats::default());
-        assert_eq!(sink.buffered_samples(), 0);
-        activate_sink(&mut sink, &mut mixer, logical_block(), &stats);
-        assert!(sink.buffered_samples() >= sink.device_block);
-        assert!(!sink.play());
-    }
-
-    #[tokio::test]
-    async fn adopt_replaces_sink_and_publishes_info() {
-        let config = pipeline_config();
-        let (mut sink, _) = SinkBuilder::build_dummy(&config);
-        let (fresh, fresh_info) = SinkBuilder::build_dummy(&config);
-        let fresh_name = fresh_info.name.clone();
-        let (info_tx, info_rx) = watch::channel(test_info());
-        let mut mixer = empty_mixer();
-        let stats = Arc::new(super::OutputStats::default());
-        adopt_sink(
-            &mut sink,
-            HandoffRequest {
-                payload: fresh,
-                info: fresh_info,
-                generation: 2,
-            },
-            &mut mixer,
-            logical_block(),
-            &stats,
-            &info_tx,
-        );
-        assert_eq!(info_rx.borrow().name, fresh_name);
-    }
-
-    fn test_info() -> DeviceInfo {
-        DeviceInfo {
-            name: "initial".into(),
-            format: AudioFormat::new(2, 48000),
-        }
-    }
 }

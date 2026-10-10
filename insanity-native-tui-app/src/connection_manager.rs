@@ -582,16 +582,15 @@ async fn handle_user_action(
             log::debug!("Switched output device to {name}");
         }
         UserInputEvent::RefreshDevices => {
-            let Some(app_event_tx) = app_event_tx else {
-                return Ok(());
-            };
-            for event in device_supervisor::refresh_device_events(
+            let events = device_supervisor::refresh_device_events(
                 &audio.input.manager,
                 &audio.output.manager,
-            ) {
-                if app_event_tx.send(event).is_err() {
-                    log::debug!("Failed to resend device list to UI");
-                    break;
+            );
+            if let Some(app_event_tx) = app_event_tx {
+                for event in events {
+                    if app_event_tx.send(event).is_err() {
+                        log::debug!("Failed to resend device list to UI");
+                    }
                 }
             }
         }

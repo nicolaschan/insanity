@@ -16,4 +16,5 @@ debug = true
 strip = false
 
 [patch.crates-io]
+cpal = { git = "https://github.com/neelayjunnarkar/cpal", rev = "81c03cf51b0f7535fdf32af348279d0ab98bd8ea" }
 pulseaudio = { git = "https://github.com/neelayjunnarkar/pulseaudio-rs", rev = "9cbea6a600c5e8eea4b44f86c77a562b1c4035f8" }

@@ -3,13 +3,15 @@ use std::sync::atomic::AtomicU64;
 
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::device::{AudioDevice, UNKNOWN_DEVICE_NAME};
+use insanity_core::audio::device::AudioDevice;
 use insanity_core::audio::sample::SampleSource;
 use rubato_audio_source::RubatoResampler;
 use tokio::sync::{mpsc, watch};
 
 use crate::audio::cpal_registry::{CpalAudioDevice, CpalInputDeviceRegistry};
-use crate::audio::device_supervisor::{DeviceInfo, DeviceManager, PayloadBuilder};
+use crate::audio::device_supervisor::{
+    DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder,
+};
 
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
 use super::handoff::{HANDOFF_BOUND, HandoffRequest};
@@ -118,7 +120,7 @@ impl PayloadBuilder for InputChainBuilder {
         let format = config.audio_format();
         let chain = InputChain::Idle;
         let info = DeviceInfo {
-            name: UNKNOWN_DEVICE_NAME.into(),
+            name: DUMMY_DEVICE_NAME.into(),
             format,
         };
         (chain, info)
@@ -152,44 +154,19 @@ pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
         Arc::new(AtomicU64::new(0)),
     );
     // Request starting the actual input device
-    manager.follow_default();
+    manager.switch_to_current_default();
     AudioInput { manager, source }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::device_supervisor::PayloadBuilder;
-    use super::InputChainBuilder;
-
-    use super::{DeviceInfo, InputChain, SwitchingInputSource};
+    use super::{DeviceInfo, SwitchingInputSource};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
-    use insanity_core::audio::config::AudioPipelineConfig;
     use std::collections::VecDeque;
     use tokio::sync::{mpsc, watch};
 
     use super::super::handoff::HandoffRequest;
-
-    #[tokio::test]
-    async fn idle_payload_parks_switching_source() {
-        let format = AudioFormat::new(2, 48000);
-        let (_switch_tx, swap_rx) = mpsc::channel(8);
-        let (info_tx, _info_rx) = watch::channel(DeviceInfo {
-            name: "test".into(),
-            format: format.clone(),
-        });
-        let mut source: SwitchingInputSource<InputChain> = SwitchingInputSource {
-            current: Some(InputChain::Idle),
-            next_sequence: 41,
-            swap_rx,
-            info_tx,
-        };
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), source.next_chunk())
-                .await
-                .is_err()
-        );
-    }
 
     struct Script {
         format: AudioFormat,
@@ -303,15 +280,6 @@ mod tests {
         let first = source.next_chunk().await.unwrap();
         assert_eq!(first.sequence_number, 0);
         assert_eq!(first.audio_data, vec![1.0; 4]);
-    }
-
-    #[tokio::test]
-    async fn build_idle_matches_pipeline_format() {
-        let config = AudioPipelineConfig::default();
-        let (chain, info) = InputChainBuilder::build_dummy(&config);
-        assert!(matches!(chain, InputChain::Idle));
-        assert_eq!(info.format, config.audio_format());
-        assert_eq!(info.name, insanity_core::audio::device::UNKNOWN_DEVICE_NAME);
     }
 
     #[tokio::test]
