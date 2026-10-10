@@ -111,7 +111,7 @@ where
     /// Makes no change if fails to build or adopt new device.
     pub(crate) fn switch_to(&mut self, id: &str, name: &str) {
         if let Err(e) = self._switch_to(id, name) {
-            log::warn!("Failed to switch to specified device{:#}", e);
+            log::warn!("Failed to switch to specified device: {:#}", e);
         }
     }
 
