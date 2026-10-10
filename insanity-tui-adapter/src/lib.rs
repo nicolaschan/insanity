@@ -427,12 +427,14 @@ impl App {
                 changed
             }
             AppEvent::SetInputDeviceName(input_device_name) => {
+                let changed = self.input_device_name != input_device_name;
                 self.input_device_name = input_device_name;
-                true
+                changed
             }
             AppEvent::SetOutputDeviceName(output_device_name) => {
+                let changed = self.output_device_name != output_device_name;
                 self.output_device_name = output_device_name;
-                true
+                changed
             }
             AppEvent::SetInputDevices(devices) => {
                 let changed = self.input_devices != devices;

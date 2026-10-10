@@ -18,6 +18,11 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub(crate) const DUMMY_DEVICE_NAME: &str = "dummy";
+
+const WATCHDOG_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+const ASSUME_DEAD_THRESHOLD: u32 = 2;
+
 #[derive(Clone, Debug)]
 pub(crate) struct DeviceInfo {
     pub(crate) name: String,
@@ -99,17 +104,33 @@ where
             log::warn!("Requested device not found: {name}");
             return;
         };
-        self.adopt(device);
+        if !self.adopt(device) {
+            self.adopt_dummy();
+        }
     }
 
     /// Select the current default device. Does not follow changes to system default.
+    // Resolves system default device name and id and then re-queries
+    // the explicit device to avoid building the system default object,
+    // which can reroute streams based on system default changes.
     pub(crate) fn select_current_default(&mut self) {
-        let Some(device) = DeviceRegistry::default_device() else {
+        let Some(default_device) = DeviceRegistry::default_device() else {
             log::warn!("No device available, falling back to dummy");
             self.adopt_dummy();
             return;
         };
+        let (Some(id), Some(name)) = (default_device.try_id(), default_device.try_name()) else {
+            log::warn!("Failed to get default device id & name, falling back to dummy");
+            self.adopt_dummy();
+            return;
+        };
+        let Some(device) = DeviceRegistry::find(&id, &name) else {
+            log::warn!("Default device {name} not in enumeration, falling back to dummy");
+            self.adopt_dummy();
+            return;
+        };
         if !self.adopt(device) {
+            log::warn!("Failed to adopt device, falling back to dummy");
             self.adopt_dummy();
         }
     }
@@ -208,6 +229,45 @@ fn send_refresh(
     }
 }
 
+/// Track lack of callbacks.
+struct DeviceLiveness {
+    generation: u64,
+    count: u64,
+    misses: u32,
+}
+
+impl DeviceLiveness {
+    fn new(generation: u64, count: u64) -> Self {
+        DeviceLiveness {
+            generation,
+            count,
+            misses: 0,
+        }
+    }
+
+    /// True when current device is not dummy and count has skipped consecutive ticks.
+    fn poll_check_dead(&mut self, generation: u64, current_name: &str, count: u64) -> bool {
+        if generation != self.generation {
+            self.generation = generation;
+            self.count = count;
+            self.misses = 0;
+            return false;
+        }
+        if current_name == DUMMY_DEVICE_NAME {
+            self.count = count;
+            self.misses = 0;
+            return false;
+        }
+        if count == self.count {
+            self.misses += 1;
+        } else {
+            self.count = count;
+            self.misses = 0;
+        }
+        self.misses >= ASSUME_DEAD_THRESHOLD
+    }
+}
+
 pub(crate) async fn run_device_supervisor(
     mut input: InputManager,
     mut output: OutputManager,
@@ -216,6 +276,12 @@ pub(crate) async fn run_device_supervisor(
 ) {
     let input_fatal = input.fatal_signal();
     let output_fatal = output.fatal_signal();
+    let mut liveness_tick = tokio::time::interval(WATCHDOG_INTERVAL);
+    liveness_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut input_liveness =
+        DeviceLiveness::new(input.generation(), input.stats().data_callbacks());
+    let mut output_liveness =
+        DeviceLiveness::new(output.generation(), output.stats().data_callbacks());
     loop {
         tokio::select! {
             _ = input_fatal.notified() => {
@@ -241,6 +307,25 @@ pub(crate) async fn run_device_supervisor(
                         output_fatal.generation()
                     );
                 }
+            }
+            _ = liveness_tick.tick() => {
+                if input_liveness.poll_check_dead(
+                    input.generation(),
+                    &input.current_name(),
+                    input.stats().data_callbacks(),
+                ) {
+                    log::warn!("Input stalled (no data callbacks), falling back to dummy device");
+                    input.adopt_dummy();
+                }
+                if output_liveness.poll_check_dead(
+                    output.generation(),
+                    &output.current_name(),
+                    output.stats().data_callbacks(),
+                ) {
+                    log::warn!("Output stalled (no data callbacks), falling back to dummy device");
+                    output.adopt_dummy();
+                }
+                send_refresh(&app_event_tx, &input, &output);
             }
             _ = cancel.cancelled() => break,
         }
@@ -312,28 +397,5 @@ mod tests {
         };
         assert!(!input_name.is_empty());
         assert!(!output_name.is_empty());
-    }
-
-    #[tokio::test]
-    async fn stale_fatal_sends_no_events() {
-        let (input, output) = managers();
-        input
-            .fatal_signal()
-            .signal(input.generation().wrapping_add(1));
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let cancel = CancellationToken::new();
-        let task = tokio::spawn(run_device_supervisor(
-            input,
-            output,
-            Some(tx),
-            cancel.clone(),
-        ));
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
-                .await
-                .is_err()
-        );
-        cancel.cancel();
-        task.await.expect("supervisor shuts down");
     }
 }

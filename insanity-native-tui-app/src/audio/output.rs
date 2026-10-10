@@ -10,7 +10,6 @@ use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::converter::FormatConverter;
 use insanity_core::audio::device::AudioDevice;
-use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::Gain;
@@ -20,7 +19,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::audio::{
     cpal_registry::{CpalAudioDevice, CpalOutputDeviceRegistry},
-    device_supervisor::{DeviceInfo, DeviceManager, PayloadBuilder},
+    device_supervisor::{DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder},
 };
 
 use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
@@ -40,6 +39,7 @@ pub(crate) struct OutputStats {
     overruns: AtomicUsize,
     total_nanos: AtomicU64,
     fills: AtomicUsize,
+    data_callbacks: AtomicU64,
 }
 
 impl OutputStats {
@@ -49,6 +49,14 @@ impl OutputStats {
 
     pub(crate) fn note_overrun(&self, samples: usize) {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
+    }
+
+    fn note_data_callback(&self) {
+        self.data_callbacks.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn data_callbacks(&self) -> u64 {
+        self.data_callbacks.load(Ordering::Relaxed)
     }
 
     pub(crate) fn underruns(&self) -> usize {
@@ -207,7 +215,7 @@ impl PayloadBuilder for SinkBuilder {
             device_block * RING_CAPACITY_BLOCKS,
         );
         let info = DeviceInfo {
-            name: UNKNOWN_DEVICE_NAME.into(),
+            name: DUMMY_DEVICE_NAME.into(),
             format: format.clone(),
         };
         let sink = Sink {
@@ -423,6 +431,7 @@ where
         .build_output_stream(
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                stats.note_data_callback();
                 let start = std::time::Instant::now();
                 let available = consumer.slots().min(data.len());
                 match consumer.read_chunk(available) {
@@ -449,9 +458,9 @@ mod tests {
     use super::super::handoff::HandoffRequest;
     use super::SinkBuilder;
     use super::{activate_sink, adopt_sink};
+    use crate::audio::device_supervisor::DUMMY_DEVICE_NAME;
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::config::AudioPipelineConfig;
-    use insanity_core::audio::device::UNKNOWN_DEVICE_NAME;
     use insanity_core::audio::mixer::Mixer;
     use insanity_core::audio::transform::Gain;
     use std::sync::Arc;
@@ -481,7 +490,7 @@ mod tests {
         assert_eq!(sink.device_format, config.audio_format());
         assert_eq!(sink.device_block, config.block_samples());
         assert_eq!(info.format, config.audio_format());
-        assert_eq!(info.name, UNKNOWN_DEVICE_NAME);
+        assert_eq!(info.name, DUMMY_DEVICE_NAME);
     }
 
     #[tokio::test]

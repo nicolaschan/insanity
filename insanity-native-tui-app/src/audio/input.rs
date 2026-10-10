@@ -3,13 +3,15 @@ use std::sync::atomic::AtomicU64;
 
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::device::{AudioDevice, UNKNOWN_DEVICE_NAME};
+use insanity_core::audio::device::AudioDevice;
 use insanity_core::audio::sample::SampleSource;
 use rubato_audio_source::RubatoResampler;
 use tokio::sync::{mpsc, watch};
 
 use crate::audio::cpal_registry::{CpalAudioDevice, CpalInputDeviceRegistry};
-use crate::audio::device_supervisor::{DeviceInfo, DeviceManager, PayloadBuilder};
+use crate::audio::device_supervisor::{
+    DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder,
+};
 
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
 use super::handoff::{HANDOFF_BOUND, HandoffRequest};
@@ -118,7 +120,7 @@ impl PayloadBuilder for InputChainBuilder {
         let format = config.audio_format();
         let chain = InputChain::Idle;
         let info = DeviceInfo {
-            name: UNKNOWN_DEVICE_NAME.into(),
+            name: DUMMY_DEVICE_NAME.into(),
             format,
         };
         (chain, info)
@@ -311,7 +313,10 @@ mod tests {
         let (chain, info) = InputChainBuilder::build_dummy(&config);
         assert!(matches!(chain, InputChain::Idle));
         assert_eq!(info.format, config.audio_format());
-        assert_eq!(info.name, insanity_core::audio::device::UNKNOWN_DEVICE_NAME);
+        assert_eq!(
+            info.name,
+            crate::audio::device_supervisor::DUMMY_DEVICE_NAME
+        );
     }
 
     #[tokio::test]
