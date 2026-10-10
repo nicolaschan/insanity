@@ -250,7 +250,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     ));
 
     // Request starting the actual output device
-    manager.follow_default();
+    manager.select_current_default();
     AudioOutput {
         client: MixerClient {
             tx: op_tx,

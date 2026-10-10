@@ -102,7 +102,8 @@ where
         self.adopt(device);
     }
 
-    pub(crate) fn follow_default(&mut self) {
+    /// Select the current default device. Does not follow changes to system default.
+    pub(crate) fn select_current_default(&mut self) {
         let Some(device) = DeviceRegistry::default_device() else {
             log::warn!("No device available, falling back to dummy");
             self.adopt_dummy();
@@ -126,7 +127,7 @@ where
         }
     }
 
-    fn adopt_dummy(&mut self) {
+    pub(crate) fn adopt_dummy(&mut self) {
         let (payload, info) = Builder::build_dummy(&self.config);
         let next = self.generation.load(Ordering::Relaxed) + 1;
         if self.send(payload, info, next) {
@@ -219,8 +220,8 @@ pub(crate) async fn run_device_supervisor(
         tokio::select! {
             _ = input_fatal.notified() => {
                 if input_fatal.generation() == input.generation() {
-                    log::info!("Input stream failed, following default device");
-                    input.follow_default();
+                    log::info!("Input stream failed, falling back to dummy device");
+                    input.adopt_dummy();
                     send_refresh(&app_event_tx, &input, &output);
                 } else {
                     log::debug!(
@@ -231,8 +232,8 @@ pub(crate) async fn run_device_supervisor(
             }
             _ = output_fatal.notified() => {
                 if output_fatal.generation() == output.generation() {
-                    log::info!("Output stream failed, following default device");
-                    output.follow_default();
+                    log::info!("Output stream failed, falling back to dummy device");
+                    output.adopt_dummy();
                     send_refresh(&app_event_tx, &input, &output);
                 } else {
                     log::debug!(
