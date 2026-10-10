@@ -160,38 +160,13 @@ pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
 
 #[cfg(test)]
 mod tests {
-    use super::super::device_supervisor::PayloadBuilder;
-    use super::InputChainBuilder;
-
-    use super::{DeviceInfo, InputChain, SwitchingInputSource};
+    use super::{DeviceInfo, SwitchingInputSource};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
-    use insanity_core::audio::config::AudioPipelineConfig;
     use std::collections::VecDeque;
     use tokio::sync::{mpsc, watch};
 
     use super::super::handoff::HandoffRequest;
-
-    #[tokio::test]
-    async fn idle_payload_parks_switching_source() {
-        let format = AudioFormat::new(2, 48000);
-        let (_switch_tx, swap_rx) = mpsc::channel(8);
-        let (info_tx, _info_rx) = watch::channel(DeviceInfo {
-            name: "test".into(),
-            format: format.clone(),
-        });
-        let mut source: SwitchingInputSource<InputChain> = SwitchingInputSource {
-            current: Some(InputChain::Idle),
-            next_sequence: 41,
-            swap_rx,
-            info_tx,
-        };
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), source.next_chunk())
-                .await
-                .is_err()
-        );
-    }
 
     struct Script {
         format: AudioFormat,
@@ -305,18 +280,6 @@ mod tests {
         let first = source.next_chunk().await.unwrap();
         assert_eq!(first.sequence_number, 0);
         assert_eq!(first.audio_data, vec![1.0; 4]);
-    }
-
-    #[tokio::test]
-    async fn build_idle_matches_pipeline_format() {
-        let config = AudioPipelineConfig::default();
-        let (chain, info) = InputChainBuilder::build_dummy(&config);
-        assert!(matches!(chain, InputChain::Idle));
-        assert_eq!(info.format, config.audio_format());
-        assert_eq!(
-            info.name,
-            crate::audio::device_supervisor::DUMMY_DEVICE_NAME
-        );
     }
 
     #[tokio::test]

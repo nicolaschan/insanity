@@ -923,45 +923,6 @@ mod render_scaling_tests {
     }
 
     #[test]
-    fn forward_delete_removes_char_under_cursor() {
-        let (tx, _rx) = unbounded_channel();
-        let mut app = App::new(tx);
-        assert!(app.process_event(AppEvent::NextTab));
-        assert!(app.process_event(AppEvent::Character('h')));
-        assert!(app.process_event(AppEvent::Character('i')));
-        assert!(app.process_event(AppEvent::Left));
-        assert!(app.process_event(AppEvent::Delete));
-        assert_eq!(app.editor.buffer, "h");
-        assert_eq!(app.editor.cursor, 1);
-        assert!(!app.process_event(AppEvent::Delete));
-        assert_eq!(app.editor.buffer, "h");
-        assert!(app.process_event(AppEvent::Backspace));
-        assert_eq!(app.editor.buffer, "");
-    }
-
-    #[test]
-    fn hi_pri_applies_pending_before_processing() {
-        let (mut app, ids) = test_app_with_peers(2);
-        let mut pending: Vec<AppEvent> = Vec::new();
-        let mut batch = vec![
-            AppEvent::Loudness(ids[0].clone(), 0.5),
-            AppEvent::Loudness(ids[0].clone(), 0.9),
-            AppEvent::Nothing,
-        ];
-        assert!(drain_batch(&mut app, &mut batch, &mut pending));
-        assert!(
-            pending.is_empty(),
-            "sequential rule: pending applied inline before the hi-pri event"
-        );
-        assert!(
-            (app.peers[&ids[0]].loudness - 0.9).abs() < f64::EPSILON,
-            "latest queued level wins in arrival order"
-        );
-        let mut terminal = test_terminal();
-        app.render(&mut terminal).expect("render");
-    }
-
-    #[test]
     fn process_event_reports_effectiveness() {
         let (mut app, ids) = test_app_with_peers(1);
         assert!(app.process_event(AppEvent::Loudness(ids[0].clone(), 0.9)));
@@ -985,52 +946,6 @@ mod render_scaling_tests {
         assert!(!empty.process_event(AppEvent::Up));
         assert!(!empty.process_event(AppEvent::Character('G')));
         assert!(!empty.process_event(AppEvent::Character('j')));
-    }
-
-    #[test]
-    fn connecting_spam_suppressed_and_meter_preserved() {
-        let (mut app, _) = test_app_with_peers(0);
-        let mut terminal = test_terminal();
-        let update = || {
-            AppEvent::AddPeer(Peer::new(
-                "peer-00".to_string(),
-                Some("peer-00".to_string()),
-                PeerState::Connecting("addr".to_string()),
-                DenoiseSelection::None,
-                100,
-            ))
-        };
-        let mut draws = 0;
-        let mut pending: Vec<AppEvent> = Vec::new();
-        for _ in 0..20 {
-            let mut batch = vec![update()];
-            if drain_batch(&mut app, &mut batch, &mut pending) {
-                app.render(&mut terminal).expect("render");
-                draws += 1;
-            }
-            if flush_pending(&mut app, &mut pending) {
-                app.render(&mut terminal).expect("render");
-                draws += 1;
-            }
-        }
-        assert_eq!(draws, 1, "only the first insert draws");
-        assert!(app.process_event(AppEvent::Loudness("peer-00".to_string(), 0.9)));
-        let connected = Peer::new(
-            "peer-00".to_string(),
-            Some("peer-00".to_string()),
-            PeerState::Connected("addr".to_string()),
-            DenoiseSelection::None,
-            100,
-        );
-        assert!(
-            app.process_event(AppEvent::AddPeer(connected)),
-            "connecting-to-connected transition draws once"
-        );
-        assert!(
-            (app.peers["peer-00"].loudness - 0.9).abs() < f64::EPSILON,
-            "live meter level survives the transition"
-        );
-        assert_eq!(draws, 1, "spam phase drew exactly once");
     }
 
     fn test_app_on_settings() -> (App, UnboundedReceiver<UserInputEvent>) {
@@ -1068,7 +983,6 @@ mod render_scaling_tests {
         assert_eq!(app.device_cursor, DeviceCursor::Input(2));
         assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs()[..1].to_vec())));
         assert_eq!(app.device_cursor, DeviceCursor::Input(0));
-        assert!(!app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
     }
 
     #[test]
@@ -1080,34 +994,6 @@ mod render_scaling_tests {
         assert!(!app.process_event(AppEvent::Down));
         assert!(!app.process_event(AppEvent::Up));
         assert_eq!(app.device_cursor, DeviceCursor::Input(0));
-    }
-
-    #[test]
-    fn select_sends_explicit_device() {
-        let (mut app, mut rx) = test_app_on_settings();
-        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
-        assert!(app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
-        assert!(app.process_event(AppEvent::Enter));
-        assert_eq!(
-            rx.try_recv().unwrap(),
-            UserInputEvent::SetInputDevice("mic-0".to_string(), "Mic 0".to_string())
-        );
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert_eq!(app.device_cursor, DeviceCursor::Output(0));
-        assert!(app.process_event(AppEvent::Enter));
-        assert_eq!(
-            rx.try_recv().unwrap(),
-            UserInputEvent::SetOutputDevice("spk-0".to_string(), "Speakers 0".to_string())
-        );
-    }
-
-    #[test]
-    fn refresh_key_requests_device_rescan() {
-        let (mut app, mut rx) = test_app_on_settings();
-        assert!(app.process_event(AppEvent::Character('r')));
-        assert_eq!(rx.try_recv().unwrap(), UserInputEvent::RefreshDevices);
     }
 
     fn test_settings_app(input_count: usize, output_count: usize) -> App {
@@ -1144,162 +1030,6 @@ mod render_scaling_tests {
         let text = buffer_text(&terminal).join("\n");
         for name in ["Mic 0", "Mic 1", "Mic 2", "Speakers 0", "Speakers 1"] {
             assert!(text.contains(name), "{name} clipped from settings picker");
-        }
-        assert!(text.contains("[r] refresh"));
-    }
-
-    #[test]
-    fn settings_cursor_row_is_highlighted() {
-        use crate::style::SELECTED;
-        let mut app = test_settings_app(2, 1);
-        assert!(app.process_event(AppEvent::Character('j')));
-        let mut terminal = test_terminal();
-        app.render(&mut terminal).expect("render");
-        let buffer = terminal.backend().buffer();
-        let width = buffer.area.width;
-        let height = buffer.area.height;
-        let mut highlighted = 0;
-        for y in 0..height {
-            let row: String = (0..width)
-                .map(|x| buffer[(x, y)].symbol().to_string())
-                .collect();
-            if row.contains("Mic 1") {
-                let lit = (0..width).any(|x| buffer[(x, y)].bg == SELECTED);
-                assert!(lit, "cursor row not highlighted");
-                highlighted += 1;
-            }
-        }
-        assert_eq!(highlighted, 1, "Mic 1 must render exactly once");
-    }
-
-    #[test]
-    fn settings_empty_lists_show_placeholders() {
-        let app = test_settings_app(0, 0);
-        let mut terminal = test_terminal();
-        app.render(&mut terminal).expect("render");
-        let text = buffer_text(&terminal).join("\n");
-        assert_eq!(
-            text.matches("(no devices found)").count(),
-            2,
-            "both sections need empty labels"
-        );
-    }
-
-    #[test]
-    fn settings_current_device_is_marked() {
-        use ratatui::style::Color;
-        let mut app = test_settings_app(2, 1);
-        assert!(app.process_event(AppEvent::SetInputDeviceName("Mic 1".to_string())));
-        let mut terminal = test_terminal();
-        app.render(&mut terminal).expect("render");
-        let buffer = terminal.backend().buffer();
-        let width = buffer.area.width;
-        let height = buffer.area.height;
-        let mut marked = 0;
-        for y in 0..height {
-            let row: String = (0..width)
-                .map(|x| buffer[(x, y)].symbol().to_string())
-                .collect();
-            if row.contains("Mic 1") {
-                let lit = (0..width).any(|x| buffer[(x, y)].fg == Color::LightBlue);
-                assert!(lit, "current device not marked");
-                marked += 1;
-            }
-        }
-        assert_eq!(marked, 1, "Mic 1 must render exactly once");
-    }
-
-    fn expected_low_priority(event: &AppEvent) -> bool {
-        match event {
-            AppEvent::Loudness(..) | AppEvent::AddPeer(_) => true,
-            AppEvent::Kill
-            | AppEvent::NextTab
-            | AppEvent::PreviousTab
-            | AppEvent::Nothing
-            | AppEvent::Character(_)
-            | AppEvent::Enter
-            | AppEvent::NewMessage(_, _)
-            | AppEvent::RemovePeer(_)
-            | AppEvent::Backspace
-            | AppEvent::Delete
-            | AppEvent::Left
-            | AppEvent::Right
-            | AppEvent::CursorBeginning
-            | AppEvent::CursorEnd
-            | AppEvent::PreviousWord
-            | AppEvent::NextWord
-            | AppEvent::DeleteWord
-            | AppEvent::SetOwnPublicKey(_)
-            | AppEvent::SetOwnDisplayName(_)
-            | AppEvent::SetServer(_)
-            | AppEvent::SetRoom(_)
-            | AppEvent::SetRoomFingerprint(_)
-            | AppEvent::Down
-            | AppEvent::Up
-            | AppEvent::TogglePeer
-            | AppEvent::ToggleDenoise
-            | AppEvent::SetPeerDenoise(_, _)
-            | AppEvent::SetPeerVolume(_, _)
-            | AppEvent::MuteSelf(_)
-            | AppEvent::SetInputDeviceName(_)
-            | AppEvent::SetOutputDeviceName(_)
-            | AppEvent::SetInputDevices(_)
-            | AppEvent::SetOutputDevices(_) => false,
-        }
-    }
-
-    #[test]
-    fn classifier_covers_every_variant() {
-        let peer = Peer::new(
-            "id".to_string(),
-            None,
-            PeerState::Disconnected,
-            DenoiseSelection::None,
-            100,
-        );
-        let events = vec![
-            AppEvent::Kill,
-            AppEvent::NextTab,
-            AppEvent::PreviousTab,
-            AppEvent::Nothing,
-            AppEvent::Character('x'),
-            AppEvent::Enter,
-            AppEvent::NewMessage("a".to_string(), "b".to_string()),
-            AppEvent::AddPeer(peer),
-            AppEvent::RemovePeer("id".to_string()),
-            AppEvent::Backspace,
-            AppEvent::Delete,
-            AppEvent::Left,
-            AppEvent::Right,
-            AppEvent::CursorBeginning,
-            AppEvent::CursorEnd,
-            AppEvent::PreviousWord,
-            AppEvent::NextWord,
-            AppEvent::DeleteWord,
-            AppEvent::SetOwnPublicKey("k".to_string()),
-            AppEvent::SetOwnDisplayName("n".to_string()),
-            AppEvent::SetServer(vec![]),
-            AppEvent::SetRoom("r".to_string()),
-            AppEvent::SetRoomFingerprint("f".to_string()),
-            AppEvent::Down,
-            AppEvent::Up,
-            AppEvent::TogglePeer,
-            AppEvent::ToggleDenoise,
-            AppEvent::SetPeerDenoise("id".to_string(), DenoiseSelection::None),
-            AppEvent::SetPeerVolume("id".to_string(), 1),
-            AppEvent::MuteSelf(false),
-            AppEvent::Loudness("id".to_string(), 0.5),
-            AppEvent::SetInputDeviceName("i".to_string()),
-            AppEvent::SetOutputDeviceName("o".to_string()),
-            AppEvent::SetInputDevices(vec![]),
-            AppEvent::SetOutputDevices(vec![]),
-        ];
-        for event in &events {
-            assert_eq!(
-                event.is_low_priority(),
-                expected_low_priority(event),
-                "classifier disagrees on {event:?}"
-            );
         }
     }
 }

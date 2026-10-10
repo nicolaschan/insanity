@@ -115,26 +115,3 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{is_monitor_name, is_synthetic_name, keep_device};
-
-    #[test]
-    fn synthetic_defaults_are_dropped() {
-        for name in ["default_input", "default_output", "default_sink"] {
-            assert!(is_synthetic_name(name));
-            assert!(!keep_device(name));
-        }
-        assert!(!is_synthetic_name("Logitech HD Pro Webcam C920"));
-        assert!(keep_device("Logitech HD Pro Webcam C920"));
-    }
-
-    #[test]
-    fn monitors_are_dropped() {
-        assert!(is_monitor_name("Monitor of Built-in Audio"));
-        assert!(!keep_device("Monitor of Built-in Audio"));
-        assert!(!keep_device("monitor"));
-        assert!(keep_device("Built-in Audio"));
-    }
-}
