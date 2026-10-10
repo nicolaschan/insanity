@@ -154,7 +154,7 @@ pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
         Arc::new(AtomicU64::new(0)),
     );
     // Request starting the actual input device
-    manager.select_current_default();
+    manager.switch_to_current_default();
     AudioInput { manager, source }
 }
 

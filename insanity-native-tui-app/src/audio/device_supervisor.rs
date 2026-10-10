@@ -1,22 +1,23 @@
-use insanity_core::audio::AudioFormat;
-use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
-use insanity_tui_adapter::AppEvent;
-use tokio::sync::{mpsc, watch};
-use tokio_util::sync::CancellationToken;
+use super::handoff::HandoffRequest;
+use super::input::InputManager;
+use super::output::OutputManager;
+use super::stream_errors::{FatalReporter, FatalSignal};
 
 use crate::audio::cpal_registry::{
     CpalAudioDevice, CpalInputDeviceRegistry, CpalOutputDeviceRegistry,
 };
 
-use super::input::InputManager;
-use super::output::OutputManager;
-
-use super::handoff::HandoffRequest;
-use super::stream_errors::{FatalReporter, FatalSignal};
+use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
+use insanity_tui_adapter::AppEvent;
+
+use anyhow::Context;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
 
 pub(crate) const DUMMY_DEVICE_NAME: &str = "dummy";
 
@@ -99,75 +100,72 @@ where
         self.generation.load(Ordering::Relaxed)
     }
 
+    fn _switch_to(&mut self, id: &str, name: &str) -> anyhow::Result<()> {
+        let device = DeviceRegistry::find(id, name).context("Requested device not found")?;
+        self.adopt(device)?;
+        Ok(())
+    }
+
+    /// Switch to the specified device.
+    /// Does not follow changes to system default.
+    /// Makes no change if fails to build or adopt new device.
     pub(crate) fn switch_to(&mut self, id: &str, name: &str) {
-        let Some(device) = DeviceRegistry::find(id, name) else {
-            log::warn!("Requested device not found: {name}");
-            return;
-        };
-        if !self.adopt(device) {
-            self.adopt_dummy();
+        if let Err(e) = self._switch_to(id, name) {
+            log::warn!("Failed to switch to specified device{:#}", e);
         }
     }
 
-    /// Select the current default device. Does not follow changes to system default.
+    fn _switch_to_current_default(&mut self) -> anyhow::Result<()> {
+        let default_device = DeviceRegistry::default_device().context("No device available")?;
+        let id = default_device
+            .try_id()
+            .context("Failed to get default device id")?;
+        let name = default_device
+            .try_name()
+            .context("Failed to get default device name")?;
+        self._switch_to(&id, &name)
+    }
+
+    /// Switch to the current default device.
+    /// Does not follow changes to system default.
+    /// Makes no change if fails to build or adopt new device.
     // Resolves system default device name and id and then re-queries
     // the explicit device to avoid building the system default object,
     // which can reroute streams based on system default changes.
-    pub(crate) fn select_current_default(&mut self) {
-        let Some(default_device) = DeviceRegistry::default_device() else {
-            log::warn!("No device available, falling back to dummy");
-            self.adopt_dummy();
-            return;
-        };
-        let (Some(id), Some(name)) = (default_device.try_id(), default_device.try_name()) else {
-            log::warn!("Failed to get default device id & name, falling back to dummy");
-            self.adopt_dummy();
-            return;
-        };
-        let Some(device) = DeviceRegistry::find(&id, &name) else {
-            log::warn!("Default device {name} not in enumeration, falling back to dummy");
-            self.adopt_dummy();
-            return;
-        };
-        if !self.adopt(device) {
-            log::warn!("Failed to adopt device, falling back to dummy");
-            self.adopt_dummy();
+    pub(crate) fn switch_to_current_default(&mut self) {
+        if let Err(e) = self._switch_to_current_default() {
+            log::warn!("Failed to switch to current default: {:#}", e);
         }
     }
 
-    fn adopt(&mut self, device: CpalAudioDevice) -> bool {
+    fn adopt(&mut self, device: CpalAudioDevice) -> anyhow::Result<()> {
         let next = self.generation.load(Ordering::Relaxed) + 1;
         let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
-        if let Some((payload, info)) = Builder::build(device, &self.config, &self.stats, reporter)
-            && self.send(payload, info, next)
-        {
-            self.generation.store(next, Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
+        let (payload, info) = Builder::build(device, &self.config, &self.stats, reporter)
+            .context("Failed to build device")?;
+        self.send(payload, info, next)?;
+        self.generation.store(next, Ordering::Relaxed);
+        Ok(())
     }
 
     pub(crate) fn adopt_dummy(&mut self) {
         let (payload, info) = Builder::build_dummy(&self.config);
         let next = self.generation.load(Ordering::Relaxed) + 1;
-        if self.send(payload, info, next) {
-            self.generation.store(next, Ordering::Relaxed);
+        match self.send(payload, info, next) {
+            Ok(_) => self.generation.store(next, Ordering::Relaxed),
+            Err(e) => log::warn!("{:#}", e),
         }
     }
 
-    fn send(&self, payload: Payload, info: DeviceInfo, generation: u64) -> bool {
-        let name = info.name.clone();
+    fn send(&self, payload: Payload, info: DeviceInfo, generation: u64) -> anyhow::Result<()> {
         let request = HandoffRequest {
             payload,
             info,
             generation,
         };
-        if self.switch_tx.try_send(request).is_err() {
-            log::warn!("Switch channel full, dropping switch to {name}");
-            false
-        } else {
-            true
+        match self.switch_tx.try_send(request) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(anyhow::anyhow!("Failed to send switch request")),
         }
     }
 }
@@ -222,10 +220,7 @@ fn send_refresh(
         return;
     };
     for event in refresh_device_events(input, output) {
-        if tx.send(event).is_err() {
-            log::warn!("Could not send device refresh to UI");
-            break;
-        }
+        let _ = tx.send(event);
     }
 }
 
