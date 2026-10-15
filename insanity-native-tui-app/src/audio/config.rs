@@ -27,8 +27,6 @@ fn host_name() -> &'static str {
     super::cpal_registry::shared_host().id().name()
 }
 
-// shared config helpers
-
 pub(crate) fn sample_format_rank(format: SampleFormat) -> Option<u8> {
     match format {
         SampleFormat::F32 => Some(100),
