@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use tokio::sync::broadcast;
+
+#[cfg(feature = "encode-silence")]
+use super::mixer::{QUIET_HANGOVER_CHUNKS, QUIET_RMS_THRESHOLD};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::ChunkSource;
 use insanity_core::audio::codec::ChunkEncoder;
@@ -7,10 +11,6 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 #[cfg(feature = "encode-silence")]
 use insanity_core::audio::transform::{Hysteresis, RmsDetector, SilenceGate};
-use tokio::sync::broadcast;
-
-#[cfg(feature = "encode-silence")]
-use super::mixer::{QUIET_HANGOVER_CHUNKS, QUIET_RMS_THRESHOLD};
 
 /// Broadcasts chunks
 pub struct AudioInputHub<OutputT> {
@@ -30,17 +30,14 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
         F: FnMut(&AudioFormat) -> Option<E> + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
+        let base = mute.chain(ChannelMap::capped(audio_config.channels()));
         #[cfg(feature = "encode-silence")]
-        let mut transform = mute
-            .chain(ChannelMap::capped(audio_config.channels()))
-            .chain(SilenceGate::new(
-                ChunkEncoder::new(rebuild, audio_config.frames()),
-                Hysteresis::new(RmsDetector::new(QUIET_RMS_THRESHOLD), QUIET_HANGOVER_CHUNKS),
-            ));
+        let mut transform = base.chain(SilenceGate::new(
+            ChunkEncoder::new(rebuild, audio_config.frames()),
+            Hysteresis::new(RmsDetector::new(QUIET_RMS_THRESHOLD), QUIET_HANGOVER_CHUNKS),
+        ));
         #[cfg(not(feature = "encode-silence"))]
-        let mut transform = mute
-            .chain(ChannelMap::capped(audio_config.channels()))
-            .chain(ChunkEncoder::new(rebuild, audio_config.frames()));
+        let mut transform = base.chain(ChunkEncoder::new(rebuild, audio_config.frames()));
         let (tx, _) = broadcast::channel(32);
         let hub = Self {
             tx: tx.clone(),

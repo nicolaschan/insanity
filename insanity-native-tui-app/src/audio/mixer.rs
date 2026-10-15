@@ -4,6 +4,10 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use tokio::sync::{mpsc, oneshot};
+
+use super::codec::OpusDecoder;
+use super::denoise::NnnoiselessDenoiser;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
@@ -13,10 +17,6 @@ use insanity_core::audio::transform::{
 #[cfg(feature = "denoise-passthrough")]
 use insanity_core::audio::transform::{Hysteresis, PassthroughGate, RmsDetector};
 use insanity_core::user_input_event::DenoiseSelection;
-use tokio::sync::{mpsc, oneshot};
-
-use super::codec::OpusDecoder;
-use super::denoise::NnnoiselessDenoiser;
 
 pub const MAX_VOLUME: usize = 500;
 #[cfg(any(feature = "encode-silence", feature = "denoise-passthrough"))]
@@ -70,10 +70,6 @@ pub fn chain_from_controls(controls: &PeerControls) -> PeerChain {
     )
 }
 
-pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
-    OpusDecoder::new(format.sample_rate, format.channel_count)
-}
-
 pub(crate) const MIXER_OPS_BOUND: usize = 64;
 pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 pub(crate) const TARGET_RING_BLOCKS: usize = 2;
@@ -122,11 +118,12 @@ pub(crate) struct MixerClient {
 
 impl MixerClient {
     pub(crate) fn push_frame(&self, slot: SlotId, chunk: EncodedChunk) -> bool {
-        if self.tx.try_send(MixerOp::Push { slot, chunk }).is_err() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return false;
-        }
-        true
+        self.tx
+            .try_send(MixerOp::Push { slot, chunk })
+            .inspect_err(|_| {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            })
+            .is_ok()
     }
 
     pub(crate) fn dropped(&self) -> usize {
@@ -192,8 +189,9 @@ pub fn format_audio_interval(
 
 #[cfg(test)]
 mod demand_sleep_tests {
-    use super::{MAX_FILL_SLEEP, MIN_FILL_SLEEP, TARGET_RING_BLOCKS, demand_sleep};
     use std::time::Duration;
+
+    use super::{MAX_FILL_SLEEP, MIN_FILL_SLEEP, TARGET_RING_BLOCKS, demand_sleep};
 
     const BLOCK: usize = 960;
     const CAPACITY: usize = BLOCK * 8;

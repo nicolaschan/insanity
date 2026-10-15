@@ -5,6 +5,7 @@ use cpal::{
     Device,
     traits::{DeviceTrait, HostTrait},
 };
+
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 
 const SYNTHETIC_DEVICE_NAMES: [&str; 3] = ["default_input", "default_output", "default_sink"];
@@ -68,50 +69,49 @@ fn filtered_devices(devices: impl IntoIterator<Item = Device>) -> Vec<CpalAudioD
 pub(crate) struct CpalInputDeviceRegistry;
 pub(crate) struct CpalOutputDeviceRegistry;
 
+impl CpalInputDeviceRegistry {
+    fn _default_device() -> Option<CpalAudioDevice> {
+        let device = shared_host().default_input_device()?;
+        let name = device_name_opt(&device)?;
+        (device.supports_input() && keep_device(&name)).then(|| CpalAudioDevice(device))
+    }
+}
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        match shared_host().input_devices() {
-            Ok(devices) => filtered_devices(devices),
-            Err(error) => {
-                log::warn!("Failed to enumerate input devices: {error}");
+        shared_host()
+            .input_devices()
+            .map(filtered_devices)
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to enumerate input devices: {e:#}");
                 Vec::new()
-            }
-        }
+            })
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        if let Some(device) = shared_host().default_input_device()
-            && let Some(name) = device_name_opt(&device)
-            && device.supports_input()
-            && keep_device(&name)
-        {
-            Some(CpalAudioDevice(device))
-        } else {
-            Self::list_devices().into_iter().next()
-        }
+        Self::_default_device().or_else(|| Self::list_devices().into_iter().next())
+    }
+}
+
+impl CpalOutputDeviceRegistry {
+    fn _default_device() -> Option<CpalAudioDevice> {
+        let device = shared_host().default_output_device()?;
+        let name = device_name_opt(&device)?;
+        (device.supports_output() && keep_device(&name)).then(|| CpalAudioDevice(device))
     }
 }
 
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        match shared_host().output_devices() {
-            Ok(devices) => filtered_devices(devices),
-            Err(error) => {
-                log::warn!("Failed to enumerate output devices: {error}");
+        shared_host()
+            .output_devices()
+            .map(filtered_devices)
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to enumerate output devices: {e:#}");
                 Vec::new()
-            }
-        }
+            })
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        if let Some(device) = shared_host().default_output_device()
-            && let Some(name) = device_name_opt(&device)
-            && device.supports_output()
-            && keep_device(&name)
-        {
-            Some(CpalAudioDevice(device))
-        } else {
-            Self::list_devices().into_iter().next()
-        }
+        Self::_default_device().or_else(|| Self::list_devices().into_iter().next())
     }
 }

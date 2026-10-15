@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+use std::sync::Arc;
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
@@ -10,7 +12,6 @@ use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::mixer::{
     MAX_VOLUME, PeerChain, PeerControls, chain_from_controls,
 };
-use std::sync::Arc;
 
 pub struct PassthroughEncoder;
 

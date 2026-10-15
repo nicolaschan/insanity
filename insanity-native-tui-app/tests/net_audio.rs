@@ -3,23 +3,24 @@ mod audio_math;
 #[path = "common/sine.rs"]
 mod sine;
 
+use std::future::Ready;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tokio::sync::broadcast;
+use veq::veq::VeqSocket;
+
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr};
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::mixer::SlotId;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::MetricsState;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::mixer::{
-    AppMixer, PeerControls, chain_from_controls, rebuild_opus_decoder,
-};
+use insanity_native_tui_app::audio::codec::rebuild_opus_decoder;
+use insanity_native_tui_app::audio::mixer::{AppMixer, PeerControls, chain_from_controls};
 use insanity_native_tui_app::clerver::run_clerver;
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use sine::{SineSource, hub_from_source, new_no_device_mixer};
-use std::future::Ready;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::broadcast;
-use veq::veq::VeqSocket;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const AUDIO_SECS: u64 = 10;

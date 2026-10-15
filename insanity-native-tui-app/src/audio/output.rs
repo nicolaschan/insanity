@@ -6,21 +6,8 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
-use insanity_core::audio::AudioFormat;
-use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::converter::FormatConverter;
-use insanity_core::audio::device::AudioDevice;
-use insanity_core::audio::mixer::Mixer;
-use insanity_core::audio::sample::SyncSampleSource;
-use insanity_core::audio::transform::Gain;
 use rtrb::{Consumer, Producer, RingBuffer};
-use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, watch};
-
-use crate::audio::{
-    cpal_registry::{CpalAudioDevice, CpalOutputDeviceRegistry},
-    device_supervisor::{DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder},
-};
 
 use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
 use super::cpal_stream::sample_format_dispatch;
@@ -30,6 +17,18 @@ use super::mixer::{
     SubscribeRequest, TARGET_RING_BLOCKS, demand_sleep,
 };
 use super::stream_errors::{FatalReporter, FatalSignal};
+use crate::audio::{
+    cpal_registry::{CpalAudioDevice, CpalOutputDeviceRegistry},
+    device_supervisor::{DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder},
+};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::FormatConverter;
+use insanity_core::audio::device::AudioDevice;
+use insanity_core::audio::mixer::Mixer;
+use insanity_core::audio::sample::SyncSampleSource;
+use insanity_core::audio::transform::Gain;
+use rubato_audio_source::StreamResampler;
 
 const PREFILL_BOUND: usize = 8;
 
@@ -124,16 +123,12 @@ impl Sink {
                 debug_assert!(false, "pending samples imply a full block");
                 break;
             };
-            match self.producer.write_chunk_uninit(block.len()) {
-                Ok(chunk) => {
-                    chunk.fill_from_iter(block);
-                }
-                Err(_) => {
-                    debug_assert!(false, "ring slots were checked");
-                    stats.note_overrun(block.len());
-                    break;
-                }
-            }
+            let Ok(chunk) = self.producer.write_chunk_uninit(block.len()) else {
+                debug_assert!(false, "ring slots were checked");
+                stats.note_overrun(block.len());
+                break;
+            };
+            chunk.fill_from_iter(block);
         }
     }
 }
@@ -149,12 +144,9 @@ impl PayloadBuilder for SinkBuilder {
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
-    ) -> Option<(Self::Payload, DeviceInfo)> {
+    ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
         let name = device.name();
-        let Ok((sample_format, cfg)) = get_output_config(&device.0, config) else {
-            log::warn!("Failed to get output config for {name}, falling back to dummy");
-            return None;
-        };
+        let (sample_format, cfg) = get_output_config(&device.0, config)?;
         let device_format = AudioFormat::new(cfg.channels, cfg.sample_rate);
         let device_block = cfg.channels as usize * config.frames();
         assert!(device_block > 0);
@@ -167,28 +159,21 @@ impl PayloadBuilder for SinkBuilder {
         );
         let build_stats = Arc::clone(stats);
         let mut wrapper = send_safe::SendWrapperThread::new(move || {
-            match build_output_stream(
+            build_output_stream(
                 sample_format,
                 cfg,
                 &device.0,
                 consumer,
                 build_stats,
                 reporter,
-            ) {
-                Ok(stream) => Some(stream),
-                Err(e) => {
-                    log::warn!("Failed to build output stream, falling back to dummy: {e:?}");
-                    None
-                }
-            }
+            )
+            .inspect_err(|e| log::warn!("Failed to build output stream: {e:#}"))
+            .ok()
         });
         let playing = wrapper
             .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
             .unwrap_or(false);
-        if !playing {
-            log::warn!("Failed to start output stream, falling back to dummy");
-            return None;
-        }
+        anyhow::ensure!(playing, "Failed to start output stream");
         let info = DeviceInfo {
             name,
             format: device_format.clone(),
@@ -200,7 +185,7 @@ impl PayloadBuilder for SinkBuilder {
             device_format,
             device_block,
         };
-        Some((sink, info))
+        Ok((sink, info))
     }
 
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {

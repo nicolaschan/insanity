@@ -3,6 +3,10 @@ mod sine;
 #[path = "common/unit_mixer.rs"]
 mod unit_mixer;
 
+use std::sync::Arc;
+
+use opus::Decoder;
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource};
 use insanity_core::audio::config::AudioPipelineConfig;
@@ -13,9 +17,7 @@ use insanity_native_tui_app::audio::{
     codec::rebuild_opus_encoder,
     mixer::{PeerControls, chain_from_controls},
 };
-use opus::Decoder;
 use sine::{SineSource, decode_frame_to_chunk, hub_from_source, opus_channels};
-use std::sync::Arc;
 use unit_mixer::{
     UnitMixer, add_unit_peer, push_chunk, push_value, rebuild_passthrough, render, unit_mixer,
 };

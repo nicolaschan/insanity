@@ -1,5 +1,6 @@
-use insanity_core::audio::denoiser::Denoiser;
 use nnnoiseless::DenoiseState;
+
+use insanity_core::audio::denoiser::Denoiser;
 
 pub struct NnnoiselessDenoiser {
     inner: Box<DenoiseState<'static>>,

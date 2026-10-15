@@ -18,11 +18,8 @@ pub(crate) mod stream_errors;
 /// panicking. Audio must stay alive: a poisoned lock means a previous holder
 /// panicked, so we reclaim the guard and keep going.
 pub(crate) fn lock<'a, T>(m: &'a Mutex<T>, what: &str) -> MutexGuard<'a, T> {
-    match m.lock() {
-        Ok(g) => g,
-        Err(poisoned) => {
-            log::error!("{what} mutex poisoned, recovering");
-            poisoned.into_inner()
-        }
-    }
+    m.lock().unwrap_or_else(|poisoned| {
+        log::error!("{what} mutex poisoned, recovering");
+        poisoned.into_inner()
+    })
 }

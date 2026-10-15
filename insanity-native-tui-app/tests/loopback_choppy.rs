@@ -7,6 +7,12 @@ mod sine;
 #[path = "common/unit_mixer.rs"]
 mod unit_mixer;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use opus::{Channels, Decoder};
+
 use audio_math::{energy_ratio, loudness, max_normalized_xcorr, tail};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
@@ -18,12 +24,8 @@ use insanity_core::audio::transform::ChunkTransform;
 use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::codec::OpusEncoder;
 use mesh::{VirtualNode, render_tick, run_mesh, transfer_tick_timeout};
-use opus::{Channels, Decoder};
 use rubato_audio_source::StreamResampler;
 use sine::{SineSource, decode_frame_to_chunk, hub_from_source};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 use unit_mixer::{add_unit_peer, push_value, unit_mixer};
 
 struct ChirpSource {
@@ -325,7 +327,8 @@ async fn burst_loss_still_realtime() {
 
 #[test]
 fn opus_stereo_frame_roundtrip_shape() {
-    let mut enc = OpusEncoder::new(48000, 2).expect("encoder");
+    let format = AudioFormat::new(2, 48000);
+    let mut enc = OpusEncoder::new(&format).expect("encoder");
     let mut dec = Decoder::new(48000, Channels::Stereo).expect("decoder");
     let mut out = None;
     for seq in 0..6u128 {

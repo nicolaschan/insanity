@@ -15,8 +15,9 @@ use veq::veq::VeqSocket;
 
 use crate::{
     audio::{
+        codec::rebuild_opus_decoder,
         lock,
-        mixer::{MixerClient, PeerControls, chain_from_controls, rebuild_opus_decoder},
+        mixer::{MixerClient, PeerControls, chain_from_controls},
     },
     clerver::run_clerver,
     connection_manager::AugmentedInfo,

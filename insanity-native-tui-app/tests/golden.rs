@@ -3,12 +3,13 @@ mod audio_math;
 #[path = "common/unit_mixer.rs"]
 mod unit_mixer;
 
+use std::path::Path;
+
 use audio_math::{sine, snr};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::loudness::calculate_loudness;
 use insanity_core::user_input_event::DenoiseSelection;
-use std::path::Path;
 use unit_mixer::{add_unit_peer, push_chunk, render, unit_mixer};
 
 fn read_f32_le(path: &Path) -> Vec<f32> {

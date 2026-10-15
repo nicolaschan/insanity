@@ -1,8 +1,10 @@
+use anyhow::Context;
+use opus::{Application, Channels, Decoder, Encoder};
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
 use insanity_core::audio::transform::ChunkTransform;
-use opus::{Application, Channels, Decoder, Encoder};
 
 pub(crate) fn u16_to_channels(n: u16) -> Channels {
     match n {
@@ -17,12 +19,14 @@ pub struct OpusEncoder {
 }
 
 impl OpusEncoder {
-    pub fn new(sample_rate: u32, channels: u16) -> Option<Self> {
-        let Ok(inner) = Encoder::new(sample_rate, u16_to_channels(channels), Application::Audio)
-        else {
-            return None;
-        };
-        Some(OpusEncoder { inner })
+    pub fn new(format: &AudioFormat) -> Option<Self> {
+        Encoder::new(
+            format.sample_rate,
+            u16_to_channels(format.channel_count),
+            Application::Audio,
+        )
+        .ok()
+        .map(|inner| OpusEncoder { inner })
     }
 }
 
@@ -30,23 +34,21 @@ impl ChunkTransform for OpusEncoder {
     type OutputT = Option<EncodedChunk>;
 
     fn transform(&mut self, chunk: AudioChunk) -> Option<EncodedChunk> {
-        match self.inner.encode_vec_float(&chunk.audio_data, 65535) {
-            Ok(payload) => Some(EncodedChunk {
+        self.inner
+            .encode_vec_float(&chunk.audio_data, 65535)
+            .map(|payload| EncodedChunk {
                 sequence_number: chunk.sequence_number,
                 codec: AudioCodec::Opus,
                 payload,
                 format: chunk.format,
-            }),
-            Err(e) => {
-                log::warn!("Opus encode failed: {e:?}");
-                None
-            }
-        }
+            })
+            .inspect_err(|e| log::warn!("Opus encode failed: {e:?}"))
+            .ok()
     }
 }
 
 pub fn rebuild_opus_encoder(format: &AudioFormat) -> Option<OpusEncoder> {
-    OpusEncoder::new(format.sample_rate, format.channel_count)
+    OpusEncoder::new(format)
 }
 
 pub struct OpusDecoder {
@@ -55,41 +57,34 @@ pub struct OpusDecoder {
 }
 
 impl OpusDecoder {
-    pub fn new(sample_rate: u32, channels: u16) -> Option<Self> {
-        let Ok(inner) = Decoder::new(sample_rate, u16_to_channels(channels)) else {
-            return None;
-        };
-        Some(OpusDecoder {
-            inner,
-            format: AudioFormat::new(channels, sample_rate),
-        })
+    pub fn new(format: AudioFormat) -> Option<Self> {
+        Decoder::new(format.sample_rate, u16_to_channels(format.channel_count))
+            .ok()
+            .map(|inner| OpusDecoder { inner, format })
     }
 
-    fn set_format(&mut self, format: AudioFormat) -> bool {
+    fn set_format(&mut self, format: AudioFormat) -> anyhow::Result<()> {
         if self.format == format {
-            return true;
-        }
-        let channels = format.channel_count;
-        let sample_rate = format.sample_rate;
-        match Decoder::new(sample_rate, u16_to_channels(channels)) {
-            Ok(inner) => {
-                self.inner = inner;
-                self.format = format;
-                true
-            }
-            Err(e) => {
-                log::warn!("Opus decoder rebuild failed: {e:?}");
-                false
-            }
+            Ok(())
+        } else {
+            let decoder = Decoder::new(format.sample_rate, u16_to_channels(format.channel_count))
+                .context("Opus decoder rebuild failed")?;
+            self.inner = decoder;
+            self.format = format;
+            Ok(())
         }
     }
 }
 
 impl AudioDecoder for OpusDecoder {
     fn decode(&mut self, frame: &EncodedChunk) -> Option<AudioChunk> {
-        if frame.codec != AudioCodec::Opus || !self.set_format(frame.format.clone()) {
+        if frame.codec != AudioCodec::Opus {
             return None;
         };
+        if let Err(e) = self.set_format(frame.format.clone()) {
+            log::debug!("{:#}", e);
+            return None;
+        }
         let Ok(nb) = self.inner.get_nb_samples(&frame.payload[..]) else {
             return None;
         };
@@ -109,18 +104,24 @@ impl AudioDecoder for OpusDecoder {
     }
 }
 
+pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
+    OpusDecoder::new(format.clone())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{OpusDecoder, OpusEncoder};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::AudioChunk;
     use insanity_core::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
     use insanity_core::audio::transform::ChunkTransform;
 
+    use super::{OpusDecoder, OpusEncoder};
+
     #[test]
     fn opus_roundtrip_preserves_shape() {
-        let mut encoder = OpusEncoder::new(48000, 2).expect("encoder");
-        let mut decoder = OpusDecoder::new(48000, 2).expect("decoder");
+        let format = AudioFormat::new(2, 48000);
+        let mut encoder = OpusEncoder::new(&format).expect("encoder");
+        let mut decoder = OpusDecoder::new(format).expect("decoder");
         let chunk = AudioChunk::new(5, AudioFormat::new(2, 48000), vec![0.4f32; 960]);
         let frame = encoder.transform(chunk).expect("encode");
         assert_eq!(frame.sequence_number, 5);
@@ -135,7 +136,8 @@ mod tests {
 
     #[test]
     fn opus_decoder_rejects_garbage() {
-        let mut decoder = OpusDecoder::new(48000, 2).expect("decoder");
+        let format = AudioFormat::new(2, 48000);
+        let mut decoder = OpusDecoder::new(format).expect("decoder");
         let frame = EncodedChunk {
             sequence_number: 0,
             codec: AudioCodec::Opus,
@@ -147,8 +149,10 @@ mod tests {
 
     #[test]
     fn opus_decoder_rebuilds_on_format_change() {
-        let mut decoder = OpusDecoder::new(48000, 2).expect("decoder");
-        let mut encoder = OpusEncoder::new(48000, 1).expect("encoder");
+        let decoder_format = AudioFormat::new(2, 48000);
+        let encoder_format = AudioFormat::new(1, 48000);
+        let mut decoder = OpusDecoder::new(decoder_format).expect("decoder");
+        let mut encoder = OpusEncoder::new(&encoder_format).expect("encoder");
         let chunk = AudioChunk::new(0, AudioFormat::new(1, 48000), vec![0.4f32; 480]);
         let frame = encoder.transform(chunk).expect("encode");
         let out = decoder.decode(&frame).expect("decode");

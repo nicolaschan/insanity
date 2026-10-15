@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use cpal::traits::DeviceTrait;
 use cpal::{BufferSize, Device, SampleFormat, StreamConfig};
+
 use insanity_core::audio::config::AudioPipelineConfig;
 
 pub(crate) const AUDIO_CALLBACK_FRAMES: u32 = 480;
@@ -25,8 +26,6 @@ fn callback_buffer_size(host: &str, supported: &cpal::SupportedBufferSize) -> Bu
 fn host_name() -> &'static str {
     super::cpal_registry::shared_host().id().name()
 }
-
-// shared config helpers
 
 pub(crate) fn sample_format_rank(format: SampleFormat) -> Option<u8> {
     match format {
@@ -148,8 +147,9 @@ pub(crate) fn get_output_config(
 
 #[cfg(test)]
 mod buffer_size_tests {
-    use super::{AUDIO_CALLBACK_FRAMES, callback_buffer_size};
     use cpal::{BufferSize, SupportedBufferSize};
+
+    use super::{AUDIO_CALLBACK_FRAMES, callback_buffer_size};
 
     #[test]
     fn pulseaudio_requests_callback_frames_within_range() {
@@ -194,8 +194,9 @@ mod buffer_size_tests {
 
 #[cfg(test)]
 mod format_selection_tests {
-    use super::{find_input, find_output, sample_format_rank, stream_sample_rate};
     use cpal::SampleFormat;
+
+    use super::{find_input, find_output, sample_format_rank, stream_sample_rate};
 
     fn range(channels: u16, format: cpal::SampleFormat) -> cpal::SupportedStreamConfigRange {
         cpal::SupportedStreamConfigRange::new(

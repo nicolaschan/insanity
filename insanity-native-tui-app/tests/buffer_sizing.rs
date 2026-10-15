@@ -1,12 +1,13 @@
 #[path = "common/unit_mixer.rs"]
 mod unit_mixer;
 
+use opus::{Application, Channels, Decoder, Encoder};
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::SlotId;
 use insanity_native_tui_app::audio::mixer::format_audio_interval;
-use opus::{Application, Channels, Decoder, Encoder};
 use unit_mixer::{
     add_peer, assert_all_finite, feed, fill, mixer_with_capacity, plc_hold, push_chunk, underruns,
     unit_mixer,

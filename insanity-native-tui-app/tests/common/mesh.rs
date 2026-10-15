@@ -1,4 +1,11 @@
 #![allow(dead_code)]
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use opus::Decoder;
+use tokio::sync::broadcast;
+
 use crate::sine::{decode_frame_to_chunk, hub_from_source, new_no_device_mixer, opus_channels};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
@@ -6,16 +13,10 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
+use insanity_native_tui_app::audio::codec::rebuild_opus_decoder;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
-use insanity_native_tui_app::audio::mixer::{
-    AppMixer, PeerControls, chain_from_controls, rebuild_opus_decoder,
-};
+use insanity_native_tui_app::audio::mixer::{AppMixer, PeerControls, chain_from_controls};
 use insanity_native_tui_app::protocol::ProtocolMessage;
-use opus::Decoder;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::broadcast;
 
 pub const PULL_TIMEOUT: Duration = Duration::from_millis(200);
 pub const TRANSFER_TIMEOUT: Duration = Duration::from_millis(500);
