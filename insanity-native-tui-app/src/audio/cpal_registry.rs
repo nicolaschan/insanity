@@ -69,6 +69,13 @@ fn filtered_devices(devices: impl IntoIterator<Item = Device>) -> Vec<CpalAudioD
 pub(crate) struct CpalInputDeviceRegistry;
 pub(crate) struct CpalOutputDeviceRegistry;
 
+impl CpalInputDeviceRegistry {
+    fn _default_device() -> Option<CpalAudioDevice> {
+        let device = shared_host().default_input_device()?;
+        let name = device_name_opt(&device)?;
+        (device.supports_input() && keep_device(&name)).then(|| CpalAudioDevice(device))
+    }
+}
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
         match shared_host().input_devices() {
@@ -81,15 +88,15 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        if let Some(device) = shared_host().default_input_device()
-            && let Some(name) = device_name_opt(&device)
-            && device.supports_input()
-            && keep_device(&name)
-        {
-            Some(CpalAudioDevice(device))
-        } else {
-            Self::list_devices().into_iter().next()
-        }
+        Self::_default_device().or_else(|| Self::list_devices().into_iter().next())
+    }
+}
+
+impl CpalOutputDeviceRegistry {
+    fn _default_device() -> Option<CpalAudioDevice> {
+        let device = shared_host().default_output_device()?;
+        let name = device_name_opt(&device)?;
+        (device.supports_output() && keep_device(&name)).then(|| CpalAudioDevice(device))
     }
 }
 
@@ -105,14 +112,6 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        if let Some(device) = shared_host().default_output_device()
-            && let Some(name) = device_name_opt(&device)
-            && device.supports_output()
-            && keep_device(&name)
-        {
-            Some(CpalAudioDevice(device))
-        } else {
-            Self::list_devices().into_iter().next()
-        }
+        Self::_default_device().or_else(|| Self::list_devices().into_iter().next())
     }
 }
