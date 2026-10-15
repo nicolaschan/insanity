@@ -96,14 +96,10 @@ fn publish_samples(
     }
     let mut iter = samples.into_iter();
     let writable = producer.inner.slots().min(len);
-    let written = if writable > 0 {
-        match producer.inner.write_chunk_uninit(writable) {
-            Ok(chunk) => chunk.fill_from_iter(&mut iter),
-            Err(_) => 0,
-        }
-    } else {
-        0
-    };
+    let written = (writable > 0)
+        .then(|| producer.inner.write_chunk_uninit(writable).ok())
+        .flatten()
+        .map_or(0, |chunk| chunk.fill_from_iter(&mut iter));
     let dropped = len.saturating_sub(written);
     if dropped > 0 {
         stats.note_overrun(dropped);
@@ -152,9 +148,7 @@ pub(crate) fn make_single_input(
         .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
         .unwrap_or(false);
     if !playing {
-        return Err(anyhow!(
-            "Failed to start input stream, parking input until a device appears"
-        ));
+        anyhow::bail!("Failed to start input stream, parking input until a device appears");
     }
     Ok(CpalStreamReceiver {
         _stream: wrapper,
