@@ -162,10 +162,9 @@ where
             info,
             generation,
         };
-        match self.switch_tx.try_send(request) {
-            Ok(_) => Ok(()),
-            Err(_) => Err(anyhow::anyhow!("Failed to send switch request")),
-        }
+        self.switch_tx
+            .try_send(request)
+            .map_err(|_| anyhow::anyhow!("Failed to send switch request"))
     }
 }
 

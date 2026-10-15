@@ -61,6 +61,7 @@ fn is_fatal(kind: ErrorKind) -> bool {
     )
 }
 
+#[derive(Default)]
 pub(crate) struct FatalSignal {
     generation: AtomicU64,
     notify: Notify,
@@ -85,12 +86,6 @@ impl FatalSignal {
 
     pub(crate) fn generation(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
-    }
-}
-
-impl Default for FatalSignal {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

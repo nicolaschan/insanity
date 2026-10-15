@@ -34,18 +34,16 @@ impl ChunkTransform for OpusEncoder {
     type OutputT = Option<EncodedChunk>;
 
     fn transform(&mut self, chunk: AudioChunk) -> Option<EncodedChunk> {
-        match self.inner.encode_vec_float(&chunk.audio_data, 65535) {
-            Ok(payload) => Some(EncodedChunk {
+        self.inner
+            .encode_vec_float(&chunk.audio_data, 65535)
+            .map(|payload| EncodedChunk {
                 sequence_number: chunk.sequence_number,
                 codec: AudioCodec::Opus,
                 payload,
                 format: chunk.format,
-            }),
-            Err(e) => {
-                log::warn!("Opus encode failed: {e:?}");
-                None
-            }
-        }
+            })
+            .inspect_err(|e| log::warn!("Opus encode failed: {e:?}"))
+            .ok()
     }
 }
 

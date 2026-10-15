@@ -30,17 +30,14 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
         F: FnMut(&AudioFormat) -> Option<E> + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
+        let base = mute.chain(ChannelMap::capped(audio_config.channels()));
         #[cfg(feature = "encode-silence")]
-        let mut transform = mute
-            .chain(ChannelMap::capped(audio_config.channels()))
-            .chain(SilenceGate::new(
-                ChunkEncoder::new(rebuild, audio_config.frames()),
-                Hysteresis::new(RmsDetector::new(QUIET_RMS_THRESHOLD), QUIET_HANGOVER_CHUNKS),
-            ));
+        let mut transform = base.chain(SilenceGate::new(
+            ChunkEncoder::new(rebuild, audio_config.frames()),
+            Hysteresis::new(RmsDetector::new(QUIET_RMS_THRESHOLD), QUIET_HANGOVER_CHUNKS),
+        ));
         #[cfg(not(feature = "encode-silence"))]
-        let mut transform = mute
-            .chain(ChannelMap::capped(audio_config.channels()))
-            .chain(ChunkEncoder::new(rebuild, audio_config.frames()));
+        let mut transform = base.chain(ChunkEncoder::new(rebuild, audio_config.frames()));
         let (tx, _) = broadcast::channel(32);
         let hub = Self {
             tx: tx.clone(),

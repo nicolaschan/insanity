@@ -118,11 +118,12 @@ pub(crate) struct MixerClient {
 
 impl MixerClient {
     pub(crate) fn push_frame(&self, slot: SlotId, chunk: EncodedChunk) -> bool {
-        if self.tx.try_send(MixerOp::Push { slot, chunk }).is_err() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-            return false;
-        }
-        true
+        self.tx
+            .try_send(MixerOp::Push { slot, chunk })
+            .inspect_err(|_| {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            })
+            .is_ok()
     }
 
     pub(crate) fn dropped(&self) -> usize {
