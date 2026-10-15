@@ -38,7 +38,7 @@ pub(crate) trait PayloadBuilder {
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
-    ) -> Option<(Self::Payload, DeviceInfo)>;
+    ) -> anyhow::Result<(Self::Payload, DeviceInfo)>;
 
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo);
 }

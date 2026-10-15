@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use anyhow::Context;
 use tokio::sync::{mpsc, watch};
 
 use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
@@ -54,13 +55,10 @@ impl<ChainT: ChunkSource + Send> SwitchingInputSource<ChainT> {
 impl<ChainT: ChunkSource + Send> ChunkSource for SwitchingInputSource<ChainT> {
     async fn next_chunk(&mut self) -> Option<AudioChunk> {
         loop {
-            let mut current = match self.current.take() {
-                Some(current) => current,
-                None => {
-                    let request = self.swap_rx.recv().await?;
-                    self.apply(request);
-                    continue;
-                }
+            let Some(mut current) = self.current.take() else {
+                let request = self.swap_rx.recv().await?;
+                self.apply(request);
+                continue;
             };
             tokio::select! {
                 biased;
@@ -96,23 +94,15 @@ impl PayloadBuilder for InputChainBuilder {
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
-    ) -> Option<(Self::Payload, DeviceInfo)> {
+    ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
         let name = device.name();
-        match make_single_input(device.0, config, reporter, stats) {
-            Ok(receiver) => {
-                let format = receiver.format().clone();
-                let resampled =
-                    RubatoResampler::new(receiver, config.sample_rate(), config.frames());
-                let chain =
-                    InputChain::Live(Box::new(SampleChunker::new(resampled, config.frames())));
-                let info = DeviceInfo { name, format };
-                Some((chain, info))
-            }
-            Err(e) => {
-                log::warn!("Failed to build input for {name}, keeping current: {e:?}");
-                None
-            }
-        }
+        let receiver = make_single_input(device.0, config, reporter, stats)
+            .context(format!("Failed to build input for {name}, keeping current"))?;
+        let format = receiver.format().clone();
+        let resampled = RubatoResampler::new(receiver, config.sample_rate(), config.frames());
+        let chain = InputChain::Live(Box::new(SampleChunker::new(resampled, config.frames())));
+        let info = DeviceInfo { name, format };
+        Ok((chain, info))
     }
 
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
