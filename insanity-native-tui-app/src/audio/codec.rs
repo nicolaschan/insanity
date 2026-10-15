@@ -1,3 +1,4 @@
+use anyhow::Context;
 use opus::{Application, Channels, Decoder, Encoder};
 
 use insanity_core::audio::AudioFormat;
@@ -64,31 +65,28 @@ impl OpusDecoder {
             .map(|inner| OpusDecoder { inner, format })
     }
 
-    fn set_format(&mut self, format: AudioFormat) -> bool {
+    fn set_format(&mut self, format: AudioFormat) -> anyhow::Result<()> {
         if self.format == format {
-            return true;
-        }
-        let channels = format.channel_count;
-        let sample_rate = format.sample_rate;
-        match Decoder::new(sample_rate, u16_to_channels(channels)) {
-            Ok(inner) => {
-                self.inner = inner;
-                self.format = format;
-                true
-            }
-            Err(e) => {
-                log::warn!("Opus decoder rebuild failed: {e:?}");
-                false
-            }
+            Ok(())
+        } else {
+            let decoder = Decoder::new(format.sample_rate, u16_to_channels(format.channel_count))
+                .context("Opus decoder rebuild failed")?;
+            self.inner = decoder;
+            self.format = format;
+            Ok(())
         }
     }
 }
 
 impl AudioDecoder for OpusDecoder {
     fn decode(&mut self, frame: &EncodedChunk) -> Option<AudioChunk> {
-        if frame.codec != AudioCodec::Opus || !self.set_format(frame.format.clone()) {
+        if frame.codec != AudioCodec::Opus {
             return None;
         };
+        if let Err(e) = self.set_format(frame.format.clone()) {
+            log::debug!("{:#}", e);
+            return None;
+        }
         let Ok(nb) = self.inner.get_nb_samples(&frame.payload[..]) else {
             return None;
         };
