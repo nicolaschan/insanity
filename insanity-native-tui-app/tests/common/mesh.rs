@@ -6,10 +6,9 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::mixer::{MixerMetrics, SlotId};
 use insanity_core::audio::sample::{SampleSource, SyncSampleSource};
 use insanity_core::user_input_event::DenoiseSelection;
+use insanity_native_tui_app::audio::codec::rebuild_opus_decoder;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
-use insanity_native_tui_app::audio::mixer::{
-    AppMixer, PeerControls, chain_from_controls, rebuild_opus_decoder,
-};
+use insanity_native_tui_app::audio::mixer::{AppMixer, PeerControls, chain_from_controls};
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use opus::Decoder;
 use std::collections::HashMap;

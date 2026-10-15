@@ -70,10 +70,6 @@ pub fn chain_from_controls(controls: &PeerControls) -> PeerChain {
     )
 }
 
-pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
-    OpusDecoder::new(format.sample_rate, format.channel_count)
-}
-
 pub(crate) const MIXER_OPS_BOUND: usize = 64;
 pub(crate) const RING_CAPACITY_BLOCKS: usize = 8;
 pub(crate) const TARGET_RING_BLOCKS: usize = 2;

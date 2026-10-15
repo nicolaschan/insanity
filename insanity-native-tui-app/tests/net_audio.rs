@@ -9,9 +9,8 @@ use insanity_core::audio::mixer::SlotId;
 use insanity_core::audio::sample::SyncSampleSource;
 use insanity_core::audio::transform::MetricsState;
 use insanity_core::user_input_event::DenoiseSelection;
-use insanity_native_tui_app::audio::mixer::{
-    AppMixer, PeerControls, chain_from_controls, rebuild_opus_decoder,
-};
+use insanity_native_tui_app::audio::codec::rebuild_opus_decoder;
+use insanity_native_tui_app::audio::mixer::{AppMixer, PeerControls, chain_from_controls};
 use insanity_native_tui_app::clerver::run_clerver;
 use insanity_native_tui_app::protocol::ProtocolMessage;
 use sine::{SineSource, hub_from_source, new_no_device_mixer};

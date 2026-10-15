@@ -325,7 +325,8 @@ async fn burst_loss_still_realtime() {
 
 #[test]
 fn opus_stereo_frame_roundtrip_shape() {
-    let mut enc = OpusEncoder::new(48000, 2).expect("encoder");
+    let format = AudioFormat::new(2, 48000);
+    let mut enc = OpusEncoder::new(&format).expect("encoder");
     let mut dec = Decoder::new(48000, Channels::Stereo).expect("decoder");
     let mut out = None;
     for seq in 0..6u128 {
