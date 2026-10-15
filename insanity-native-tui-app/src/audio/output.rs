@@ -6,21 +6,8 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
-use insanity_core::audio::AudioFormat;
-use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::converter::FormatConverter;
-use insanity_core::audio::device::AudioDevice;
-use insanity_core::audio::mixer::Mixer;
-use insanity_core::audio::sample::SyncSampleSource;
-use insanity_core::audio::transform::Gain;
 use rtrb::{Consumer, Producer, RingBuffer};
-use rubato_audio_source::StreamResampler;
 use tokio::sync::{mpsc, watch};
-
-use crate::audio::{
-    cpal_registry::{CpalAudioDevice, CpalOutputDeviceRegistry},
-    device_supervisor::{DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder},
-};
 
 use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
 use super::cpal_stream::sample_format_dispatch;
@@ -30,6 +17,18 @@ use super::mixer::{
     SubscribeRequest, TARGET_RING_BLOCKS, demand_sleep,
 };
 use super::stream_errors::{FatalReporter, FatalSignal};
+use crate::audio::{
+    cpal_registry::{CpalAudioDevice, CpalOutputDeviceRegistry},
+    device_supervisor::{DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder},
+};
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::converter::FormatConverter;
+use insanity_core::audio::device::AudioDevice;
+use insanity_core::audio::mixer::Mixer;
+use insanity_core::audio::sample::SyncSampleSource;
+use insanity_core::audio::transform::Gain;
+use rubato_audio_source::StreamResampler;
 
 const PREFILL_BOUND: usize = 8;
 

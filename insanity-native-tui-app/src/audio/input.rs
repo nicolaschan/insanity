@@ -1,21 +1,20 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+use tokio::sync::{mpsc, watch};
+
+use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
+use super::handoff::{HANDOFF_BOUND, HandoffRequest};
+use super::stream_errors::{FatalReporter, FatalSignal};
+use crate::audio::cpal_registry::{CpalAudioDevice, CpalInputDeviceRegistry};
+use crate::audio::device_supervisor::{
+    DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder,
+};
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::device::AudioDevice;
 use insanity_core::audio::sample::SampleSource;
 use rubato_audio_source::RubatoResampler;
-use tokio::sync::{mpsc, watch};
-
-use crate::audio::cpal_registry::{CpalAudioDevice, CpalInputDeviceRegistry};
-use crate::audio::device_supervisor::{
-    DUMMY_DEVICE_NAME, DeviceInfo, DeviceManager, PayloadBuilder,
-};
-
-use super::cpal_stream_receiver::{CpalStreamReceiver, InputStats, make_single_input};
-use super::handoff::{HANDOFF_BOUND, HandoffRequest};
-use super::stream_errors::{FatalReporter, FatalSignal};
 
 pub(crate) type LiveChain = SampleChunker<RubatoResampler<CpalStreamReceiver>>;
 

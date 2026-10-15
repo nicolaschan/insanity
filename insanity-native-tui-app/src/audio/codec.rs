@@ -1,8 +1,9 @@
+use opus::{Application, Channels, Decoder, Encoder};
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
 use insanity_core::audio::transform::ChunkTransform;
-use opus::{Application, Channels, Decoder, Encoder};
 
 pub(crate) fn u16_to_channels(n: u16) -> Channels {
     match n {
@@ -113,11 +114,12 @@ pub fn rebuild_opus_decoder(format: &AudioFormat) -> Option<OpusDecoder> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpusDecoder, OpusEncoder};
     use insanity_core::audio::AudioFormat;
     use insanity_core::audio::chunk::AudioChunk;
     use insanity_core::audio::codec::{AudioCodec, AudioDecoder, EncodedChunk};
     use insanity_core::audio::transform::ChunkTransform;
+
+    use super::{OpusDecoder, OpusEncoder};
 
     #[test]
     fn opus_roundtrip_preserves_shape() {

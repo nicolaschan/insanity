@@ -1,8 +1,9 @@
+use std::path::Path;
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::denoiser::MultiChannelDenoiser;
 use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
-use std::path::Path;
 
 fn fixture_path() -> &'static Path {
     if Path::new("insanity-native-tui-app/tests/testdata/speech_sample.raw").exists() {

@@ -1,10 +1,12 @@
+use std::hint::black_box;
+
 use criterion::{Criterion, criterion_group, criterion_main};
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::codec::AudioDecoder;
 use insanity_core::audio::transform::{ChunkTransform, Hysteresis, RmsDetector, SilenceGate};
 use insanity_native_tui_app::audio::codec::{OpusDecoder, OpusEncoder};
-use std::hint::black_box;
 
 fn bench_opus(c: &mut Criterion) {
     let mut group = c.benchmark_group("opus_e2e");

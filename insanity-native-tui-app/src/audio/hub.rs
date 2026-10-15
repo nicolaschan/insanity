@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use tokio::sync::broadcast;
+
+#[cfg(feature = "encode-silence")]
+use super::mixer::{QUIET_HANGOVER_CHUNKS, QUIET_RMS_THRESHOLD};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::ChunkSource;
 use insanity_core::audio::codec::ChunkEncoder;
@@ -7,10 +11,6 @@ use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
 #[cfg(feature = "encode-silence")]
 use insanity_core::audio::transform::{Hysteresis, RmsDetector, SilenceGate};
-use tokio::sync::broadcast;
-
-#[cfg(feature = "encode-silence")]
-use super::mixer::{QUIET_HANGOVER_CHUNKS, QUIET_RMS_THRESHOLD};
 
 /// Broadcasts chunks
 pub struct AudioInputHub<OutputT> {

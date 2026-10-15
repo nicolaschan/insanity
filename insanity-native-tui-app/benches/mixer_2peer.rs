@@ -1,4 +1,7 @@
+use std::hint::black_box;
+
 use criterion::{Criterion, criterion_group, criterion_main};
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::AudioChunk;
 use insanity_core::audio::config::AudioPipelineConfig;
@@ -9,7 +12,6 @@ use insanity_core::user_input_event::DenoiseSelection;
 use insanity_native_tui_app::audio::denoise::NnnoiselessDenoiser;
 use insanity_native_tui_app::audio::mixer::{MAX_VOLUME, PeerControls, chain_from_controls};
 use rubato_audio_source::StreamResampler;
-use std::hint::black_box;
 
 #[path = "../tests/common/unit_mixer.rs"]
 mod unit_mixer;

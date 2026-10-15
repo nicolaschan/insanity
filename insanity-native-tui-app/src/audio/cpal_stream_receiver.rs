@@ -9,14 +9,14 @@ use cpal::{
     Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
-use insanity_core::audio::AudioFormat;
-use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::sample::SampleSource;
 
 use super::config::{STREAM_BUILD_TIMEOUT, get_input_config};
 use super::cpal_stream::sample_format_dispatch;
 use super::mixer::RING_CAPACITY_BLOCKS;
 use super::stream_errors::FatalReporter;
+use insanity_core::audio::AudioFormat;
+use insanity_core::audio::config::AudioPipelineConfig;
+use insanity_core::audio::sample::SampleSource;
 
 #[derive(Default)]
 pub(crate) struct InputStats {

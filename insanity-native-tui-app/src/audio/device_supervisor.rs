@@ -1,23 +1,22 @@
+use std::marker::PhantomData;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use anyhow::Context;
+use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
+
 use super::handoff::HandoffRequest;
 use super::input::InputManager;
 use super::output::OutputManager;
 use super::stream_errors::{FatalReporter, FatalSignal};
-
 use crate::audio::cpal_registry::{
     CpalAudioDevice, CpalInputDeviceRegistry, CpalOutputDeviceRegistry,
 };
-
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 use insanity_tui_adapter::AppEvent;
-
-use anyhow::Context;
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{mpsc, watch};
-use tokio_util::sync::CancellationToken;
 
 pub(crate) const DUMMY_DEVICE_NAME: &str = "dummy";
 

@@ -5,6 +5,7 @@ use cpal::{
     Device,
     traits::{DeviceTrait, HostTrait},
 };
+
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 
 const SYNTHETIC_DEVICE_NAMES: [&str; 3] = ["default_input", "default_output", "default_sink"];

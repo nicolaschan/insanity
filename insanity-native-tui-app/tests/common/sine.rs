@@ -1,4 +1,6 @@
 #![allow(dead_code)]
+use opus::{Channels, Decoder};
+
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::codec::EncodedChunk;
@@ -9,7 +11,6 @@ use insanity_core::audio::transform::Gain;
 use insanity_native_tui_app::audio::codec::rebuild_opus_encoder;
 use insanity_native_tui_app::audio::hub::AudioInputHub;
 use insanity_native_tui_app::audio::mixer::{AppMixer, MAX_VOLUME};
-use opus::{Channels, Decoder};
 use rubato_audio_source::RubatoResampler;
 
 pub struct SineSource {

@@ -4,6 +4,10 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use tokio::sync::{mpsc, oneshot};
+
+use super::codec::OpusDecoder;
+use super::denoise::NnnoiselessDenoiser;
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::codec::EncodedChunk;
 use insanity_core::audio::mixer::{Mixer, MixerMetrics, SlotId};
@@ -13,10 +17,6 @@ use insanity_core::audio::transform::{
 #[cfg(feature = "denoise-passthrough")]
 use insanity_core::audio::transform::{Hysteresis, PassthroughGate, RmsDetector};
 use insanity_core::user_input_event::DenoiseSelection;
-use tokio::sync::{mpsc, oneshot};
-
-use super::codec::OpusDecoder;
-use super::denoise::NnnoiselessDenoiser;
 
 pub const MAX_VOLUME: usize = 500;
 #[cfg(any(feature = "encode-silence", feature = "denoise-passthrough"))]
@@ -188,8 +188,9 @@ pub fn format_audio_interval(
 
 #[cfg(test)]
 mod demand_sleep_tests {
-    use super::{MAX_FILL_SLEEP, MIN_FILL_SLEEP, TARGET_RING_BLOCKS, demand_sleep};
     use std::time::Duration;
+
+    use super::{MAX_FILL_SLEEP, MIN_FILL_SLEEP, TARGET_RING_BLOCKS, demand_sleep};
 
     const BLOCK: usize = 960;
     const CAPACITY: usize = BLOCK * 8;
