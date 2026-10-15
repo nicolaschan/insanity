@@ -4,7 +4,7 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use anyhow::anyhow;
+use anyhow::Context;
 use cpal::{
     Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
@@ -115,11 +115,8 @@ pub(crate) fn make_single_input(
     reporter: FatalReporter,
     stats: &Arc<InputStats>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let Ok((fmt, cfg)) = get_input_config(&device, audio_config) else {
-        return Err(anyhow!(
-            "Failed to get input config, parking input until a device appears"
-        ));
-    };
+    let (fmt, cfg) = get_input_config(&device, audio_config)
+        .context("Failed to get input config, parking input until a device appears")?;
     let format = AudioFormat::new(cfg.channels, cfg.sample_rate);
     let block_samples = cfg.channels as usize * audio_config.frames();
     assert!(block_samples > 0);
@@ -128,7 +125,7 @@ pub(crate) fn make_single_input(
     let build_wake = Arc::clone(&wake);
     let build_stats = Arc::clone(stats);
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        match setup_input_stream(
+        setup_input_stream(
             fmt,
             cfg,
             &device,
@@ -136,20 +133,14 @@ pub(crate) fn make_single_input(
             build_wake,
             build_stats,
             reporter,
-        ) {
-            Ok(stream) => Some(stream),
-            Err(e) => {
-                log::warn!("Failed to build input stream, parking input: {e:?}");
-                None
-            }
-        }
+        )
+        .inspect_err(|e| log::warn!("Failed to build input stream, parking input: {e:#}"))
+        .ok()
     });
     let playing = wrapper
         .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
         .unwrap_or(false);
-    if !playing {
-        anyhow::bail!("Failed to start input stream, parking input until a device appears");
-    }
+    anyhow::ensure!(playing, "Failed to start input stream, parking input");
     Ok(CpalStreamReceiver {
         _stream: wrapper,
         consumer,

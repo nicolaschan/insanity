@@ -78,13 +78,13 @@ impl CpalInputDeviceRegistry {
 }
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        match shared_host().input_devices() {
-            Ok(devices) => filtered_devices(devices),
-            Err(error) => {
-                log::warn!("Failed to enumerate input devices: {error}");
+        shared_host()
+            .input_devices()
+            .map(filtered_devices)
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to enumerate input devices: {e:#}");
                 Vec::new()
-            }
-        }
+            })
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
@@ -102,13 +102,13 @@ impl CpalOutputDeviceRegistry {
 
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
-        match shared_host().output_devices() {
-            Ok(devices) => filtered_devices(devices),
-            Err(error) => {
-                log::warn!("Failed to enumerate output devices: {error}");
+        shared_host()
+            .output_devices()
+            .map(filtered_devices)
+            .unwrap_or_else(|e| {
+                log::warn!("Failed to enumerate output devices: {e:#}");
                 Vec::new()
-            }
-        }
+            })
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
