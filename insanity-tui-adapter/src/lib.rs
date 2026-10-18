@@ -18,12 +18,12 @@ mod style;
 use editor::Editor;
 mod render;
 
-const TAB_NAME_PEERS: &str = "Peers";
+const TAB_NAME_MAIN: &str = "Main";
 const TAB_NAME_CHAT: &str = "Chat";
 const TAB_NAME_SETTINGS: &str = "Settings";
 
 // Order must match in TAB_NAMES.
-pub const TAB_IDX_PEERS: usize = 0;
+pub const TAB_IDX_MAIN: usize = 0;
 pub const TAB_IDX_CHAT: usize = 1;
 pub const TAB_IDX_SETTINGS: usize = 2;
 
@@ -39,7 +39,7 @@ pub const MUTE_KEY: char = 'm';
 pub const REFRESH_DEVICES_KEY: char = 'r';
 
 const NUM_TABS: usize = 3;
-const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_PEERS, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
+const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_MAIN, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
 
 const EVENT_BATCH_BOUND: usize = 64;
 const LOUDNESS_RENDER_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -124,6 +124,8 @@ pub enum AppEvent {
     ToggleDenoise,
     SetPeerDenoise(String, DenoiseSelection),
     SetPeerVolume(String, usize),
+    SetSpeakerVolume(usize),
+    SetMicVolume(usize),
     MuteSelf(bool),
     Loudness(String, f64),
     SetInputDeviceName(String),
@@ -150,7 +152,9 @@ pub struct App {
     pub room: Option<String>,
     pub room_fingerprint: Option<String>,
     pub editor: Editor,
-    pub peer_index: usize,
+    pub main_cursor: MainCursor,
+    pub speaker_volume: usize,
+    pub mic_volume: usize,
     pub chat_history: Vec<(String, String)>, // (Display Name, Message)
     pub unread_messages: bool,
     pub chat_offset: usize, // Offset from bottom of chat in full messages.
@@ -160,6 +164,13 @@ pub struct App {
     pub input_devices: Vec<(String, String)>, // (Device ID, Device Name)
     pub output_devices: Vec<(String, String)>, // (Device ID, Device Name)
     pub device_cursor: DeviceCursor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainCursor {
+    Speaker,
+    Mic,
+    Peer(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,7 +193,9 @@ impl App {
             room: None,
             room_fingerprint: None,
             editor: Editor::new(),
-            peer_index: 0,
+            main_cursor: MainCursor::Speaker,
+            speaker_volume: 100,
+            mic_volume: 100,
             chat_history: vec![],
             unread_messages: false,
             chat_offset: 0,
@@ -222,9 +235,13 @@ impl App {
                 }
                 changed
             }
-            AppEvent::RemovePeer(id) => self.peers.remove(&id).is_some(),
+            AppEvent::RemovePeer(id) => {
+                let removed = self.peers.remove(&id).is_some();
+                self.clamp_main_cursor();
+                removed
+            }
             AppEvent::Character(c) => match self.tab_index {
-                TAB_IDX_PEERS => match c {
+                TAB_IDX_MAIN => match c {
                     TOGGLE_PEER_KEY => {
                         self.toggle_peer();
                         true
@@ -241,20 +258,22 @@ impl App {
                         self.adjust_volume(-1);
                         true
                     }
-                    MOVE_DOWN_PEER_LIST_KEY => self.move_peer(1),
-                    MOVE_UP_PEER_LIST_KEY => self.move_peer(-1),
+                    MOVE_DOWN_PEER_LIST_KEY => self.move_main(1),
+                    MOVE_UP_PEER_LIST_KEY => self.move_main(-1),
                     MOVE_TOP_PEER_LIST_KEY => {
-                        let old = self.peer_index;
-                        self.peer_index = 0;
-                        old != self.peer_index
+                        let old = self.main_cursor;
+                        self.main_cursor = MainCursor::Speaker;
+                        old != self.main_cursor
                     }
                     MOVE_BOTTOM_PEER_LIST_KEY => {
                         if self.peers.is_empty() {
-                            false
+                            let old = self.main_cursor;
+                            self.main_cursor = MainCursor::Mic;
+                            old != self.main_cursor
                         } else {
-                            let old = self.peer_index;
-                            self.peer_index = self.peers.len() - 1;
-                            old != self.peer_index
+                            let old = self.main_cursor;
+                            self.main_cursor = MainCursor::Peer(self.peers.len() - 1);
+                            old != self.main_cursor
                         }
                     }
                     MUTE_KEY => {
@@ -365,7 +384,7 @@ impl App {
                 true
             }
             AppEvent::Down => match self.tab_index {
-                TAB_IDX_PEERS => self.move_peer(1),
+                TAB_IDX_MAIN => self.move_main(1),
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
                     self.chat_offset = self.chat_offset.saturating_sub(1);
@@ -378,7 +397,7 @@ impl App {
                 _ => false,
             },
             AppEvent::Up => match self.tab_index {
-                TAB_IDX_PEERS => self.move_peer(-1),
+                TAB_IDX_MAIN => self.move_main(-1),
                 TAB_IDX_CHAT => {
                     let old = self.chat_offset;
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
@@ -421,6 +440,16 @@ impl App {
                     false
                 }
             }
+            AppEvent::SetSpeakerVolume(volume) => {
+                let changed = self.speaker_volume != volume;
+                self.speaker_volume = volume;
+                changed
+            }
+            AppEvent::SetMicVolume(volume) => {
+                let changed = self.mic_volume != volume;
+                self.mic_volume = volume;
+                changed
+            }
             AppEvent::MuteSelf(is_muted) => {
                 let changed = self.mute_self != is_muted;
                 self.mute_self = is_muted;
@@ -462,18 +491,56 @@ impl App {
         }
     }
 
-    fn move_peer(&mut self, delta: isize) -> bool {
-        if self.peers.is_empty() {
-            false
-        } else {
-            let old = self.peer_index;
-            self.peer_index = add_in_bounds(self.peer_index, 0, self.peers.len() - 1, delta);
-            old != self.peer_index
+    /// Position of `cursor` in the seamless Main-tab chain
+    /// Speaker(0) -> Mic(1) -> Peer(0..n).
+    fn main_position(cursor: MainCursor) -> usize {
+        match cursor {
+            MainCursor::Speaker => 0,
+            MainCursor::Mic => 1,
+            MainCursor::Peer(i) => 2 + i,
         }
     }
 
+    /// Total rows in the Main-tab chain (2 volume rows + peers).
+    fn main_len(&self) -> usize {
+        2 + self.peers.len()
+    }
+
+    fn cursor_at_position(&self, pos: usize) -> MainCursor {
+        if pos == 0 {
+            MainCursor::Speaker
+        } else if pos == 1 {
+            MainCursor::Mic
+        } else {
+            MainCursor::Peer(pos - 2)
+        }
+    }
+
+    fn move_main(&mut self, delta: isize) -> bool {
+        let len = self.main_len();
+        debug_assert!(len >= 2);
+        let old = self.main_cursor;
+        let pos = Self::main_position(old);
+        let new_pos = add_in_bounds(pos, 0, len - 1, delta);
+        self.main_cursor = self.cursor_at_position(new_pos);
+        old != self.main_cursor
+    }
+
+    /// Re-park the Main cursor after peer list changes. Returns whether it moved.
+    fn clamp_main_cursor(&mut self) -> bool {
+        let old = self.main_cursor;
+        let len = self.main_len();
+        let pos = Self::main_position(old);
+        let clamped = std::cmp::min(pos, len - 1);
+        self.main_cursor = self.cursor_at_position(clamped);
+        old != self.main_cursor
+    }
+
     fn selected_peer(&self) -> Option<&Peer> {
-        self.peers.values().nth(self.peer_index)
+        match self.main_cursor {
+            MainCursor::Peer(i) => self.peers.values().nth(i),
+            _ => None,
+        }
     }
 
     fn clamp_device_cursor(&mut self) -> bool {
@@ -615,13 +682,37 @@ impl App {
     }
 
     fn adjust_volume(&mut self, delta: isize) {
-        if let Some(peer) = self.selected_peer() {
-            self.user_action_sender
-                .send(UserInputEvent::SetVolume(
-                    peer.id.clone(),
-                    add_in_bounds(peer.volume, 0, 999, delta),
-                ))
-                .unwrap();
+        match self.main_cursor {
+            MainCursor::Speaker => {
+                self.user_action_sender
+                    .send(UserInputEvent::SetSpeakerVolume(add_in_bounds(
+                        self.speaker_volume,
+                        0,
+                        999,
+                        delta,
+                    )))
+                    .unwrap();
+            }
+            MainCursor::Mic => {
+                self.user_action_sender
+                    .send(UserInputEvent::SetMicVolume(add_in_bounds(
+                        self.mic_volume,
+                        0,
+                        999,
+                        delta,
+                    )))
+                    .unwrap();
+            }
+            MainCursor::Peer(_) => {
+                if let Some(peer) = self.selected_peer() {
+                    self.user_action_sender
+                        .send(UserInputEvent::SetVolume(
+                            peer.id.clone(),
+                            add_in_bounds(peer.volume, 0, 999, delta),
+                        ))
+                        .unwrap();
+                }
+            }
         }
     }
 
@@ -939,13 +1030,18 @@ mod render_scaling_tests {
         assert!(!app.process_event(AppEvent::Up));
         let (mut app, _) = test_app_with_peers(2);
         assert!(app.process_event(AppEvent::Down));
-        assert!(!app.process_event(AppEvent::Down));
+        assert!(app.process_event(AppEvent::Down));
         assert!(app.process_event(AppEvent::Up));
         let (mut empty, _) = test_app_with_peers(0);
+        // With no peers the chain is Speaker <-> Mic, clamped at both ends.
+        assert!(empty.process_event(AppEvent::Down));
         assert!(!empty.process_event(AppEvent::Down));
+        assert!(empty.process_event(AppEvent::Up));
         assert!(!empty.process_event(AppEvent::Up));
+        assert!(empty.process_event(AppEvent::Character('G')));
         assert!(!empty.process_event(AppEvent::Character('G')));
         assert!(!empty.process_event(AppEvent::Character('j')));
+        assert!(empty.process_event(AppEvent::Character('k')));
     }
 
     fn test_app_on_settings() -> (App, UnboundedReceiver<UserInputEvent>) {
@@ -1031,5 +1127,250 @@ mod render_scaling_tests {
         for name in ["Mic 0", "Mic 1", "Mic 2", "Speakers 0", "Speakers 1"] {
             assert!(text.contains(name), "{name} clipped from settings picker");
         }
+    }
+
+    #[test]
+    fn main_cursor_walks_seamless_chain() {
+        let (mut app, _) = test_app_with_peers(2);
+        assert_eq!(app.main_cursor, MainCursor::Speaker);
+        assert!(app.process_event(AppEvent::Down));
+        assert_eq!(app.main_cursor, MainCursor::Mic);
+        assert!(app.process_event(AppEvent::Down));
+        assert_eq!(app.main_cursor, MainCursor::Peer(0));
+        assert!(app.process_event(AppEvent::Down));
+        assert_eq!(app.main_cursor, MainCursor::Peer(1));
+        // Clamped at the bottom.
+        assert!(!app.process_event(AppEvent::Down));
+        assert_eq!(app.main_cursor, MainCursor::Peer(1));
+        assert!(app.process_event(AppEvent::Up));
+        assert!(app.process_event(AppEvent::Up));
+        assert_eq!(app.main_cursor, MainCursor::Mic);
+        assert!(app.process_event(AppEvent::Up));
+        assert_eq!(app.main_cursor, MainCursor::Speaker);
+        // Clamped at the top.
+        assert!(!app.process_event(AppEvent::Up));
+        // j/k mirror the arrows.
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.main_cursor, MainCursor::Mic);
+        assert!(app.process_event(AppEvent::Character('k')));
+        assert_eq!(app.main_cursor, MainCursor::Speaker);
+    }
+
+    #[test]
+    fn main_cursor_top_bottom_keys_span_chain() {
+        let (mut app, _) = test_app_with_peers(2);
+        assert!(app.process_event(AppEvent::Character('G')));
+        assert_eq!(app.main_cursor, MainCursor::Peer(1));
+        assert!(!app.process_event(AppEvent::Character('G')));
+        assert!(app.process_event(AppEvent::Character('g')));
+        assert_eq!(app.main_cursor, MainCursor::Speaker);
+        assert!(!app.process_event(AppEvent::Character('g')));
+    }
+
+    #[test]
+    fn main_cursor_falls_back_when_peers_empty() {
+        let (mut app, ids) = test_app_with_peers(1);
+        assert!(app.process_event(AppEvent::Down));
+        assert!(app.process_event(AppEvent::Down));
+        assert_eq!(app.main_cursor, MainCursor::Peer(0));
+        assert!(app.process_event(AppEvent::RemovePeer(ids[0].clone())));
+        assert_eq!(app.main_cursor, MainCursor::Mic);
+        // Bottom key with no peers lands on Mic.
+        assert!(app.process_event(AppEvent::Character('g')));
+        assert!(app.process_event(AppEvent::Character('G')));
+        assert_eq!(app.main_cursor, MainCursor::Mic);
+    }
+
+    #[test]
+    fn plus_minus_target_focused_row() {
+        let (mut app, ids) = test_app_with_peers(1);
+        let mut rx = {
+            let (tx, rx) = unbounded_channel();
+            app.user_action_sender = tx;
+            rx
+        };
+        // Speaker row focused initially.
+        assert!(app.process_event(AppEvent::Character('+')));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(UserInputEvent::SetSpeakerVolume(101))
+        );
+        assert!(app.process_event(AppEvent::Character('-')));
+        assert_eq!(rx.try_recv(), Ok(UserInputEvent::SetSpeakerVolume(99)));
+        // Mic row.
+        assert!(app.process_event(AppEvent::Down));
+        assert!(app.process_event(AppEvent::Character('+')));
+        assert_eq!(rx.try_recv(), Ok(UserInputEvent::SetMicVolume(101)));
+        // Peer row still routes to per-peer volume.
+        assert!(app.process_event(AppEvent::Down));
+        assert_eq!(app.main_cursor, MainCursor::Peer(0));
+        assert!(app.process_event(AppEvent::Character('+')));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(UserInputEvent::SetVolume(ids[0].clone(), 101))
+        );
+        // Peer-only keys are inert on volume rows.
+        assert!(app.process_event(AppEvent::Character('g')));
+        assert!(app.process_event(AppEvent::Character(' ')));
+        assert!(rx.try_recv().is_err());
+        assert!(app.process_event(AppEvent::Character('d')));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn mute_self_is_independent_of_mic_volume() {
+        let (tx, mut rx) = unbounded_channel();
+        let mut app = App::new(tx);
+        // Mute, then adjust mic gain while muted: mute state must not move.
+        assert!(app.process_event(AppEvent::MuteSelf(true)));
+        assert!(app.process_event(AppEvent::Down));
+        assert_eq!(app.main_cursor, MainCursor::Mic);
+        assert!(app.process_event(AppEvent::Character('+')));
+        assert_eq!(rx.try_recv(), Ok(UserInputEvent::SetMicVolume(101)));
+        assert!(app.mute_self);
+        assert!(app.process_event(AppEvent::SetMicVolume(101)));
+        assert_eq!(app.mic_volume, 101);
+        assert!(app.mute_self);
+        // Unmuting restores the untouched gain.
+        assert!(app.process_event(AppEvent::MuteSelf(false)));
+        assert!(!app.mute_self);
+        assert_eq!(app.mic_volume, 101);
+    }
+
+    #[test]
+    fn master_volume_echo_updates_state() {        let (mut app, _) = test_app_with_peers(0);
+        assert!(!app.process_event(AppEvent::SetSpeakerVolume(100)));
+        assert!(app.process_event(AppEvent::SetSpeakerVolume(120)));
+        assert_eq!(app.speaker_volume, 120);
+        assert!(!app.process_event(AppEvent::SetMicVolume(100)));
+        assert!(app.process_event(AppEvent::SetMicVolume(80)));
+        assert_eq!(app.mic_volume, 80);
+    }
+
+    #[test]
+    fn main_tab_renders_volume_and_peers_sections() {
+        let (app, _) = test_app_with_peers(1);
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let text = buffer_text(&terminal).join("\n");
+        for needle in ["Main", "Volume", "Speaker volume", "Mic gain", "Peers"] {
+            assert!(text.contains(needle), "{needle} missing from main tab");
+        }
+    }
+
+    #[test]
+    fn main_tab_volume_styles_and_mute_indicator() {
+        use ratatui::style::{Color, Modifier};
+
+        fn cell_rows(
+            terminal: &Terminal<TestBackend>,
+        ) -> Vec<(Vec<char>, Vec<Color>, Vec<Modifier>)> {
+            let buffer = terminal.backend().buffer();
+            let width = buffer.area.width as usize;
+            buffer
+                .content
+                .chunks(width)
+                .map(|row| {
+                    (
+                        row.iter()
+                            .map(|cell| cell.symbol().chars().next().unwrap_or(' '))
+                            .collect(),
+                        row.iter().map(|cell| cell.fg).collect(),
+                        row.iter().map(|cell| cell.modifier).collect(),
+                    )
+                })
+                .collect()
+        }
+
+        fn label_cells(
+            rows: &[(Vec<char>, Vec<Color>, Vec<Modifier>)],
+            label: &str,
+        ) -> (Vec<Color>, Vec<Modifier>) {
+            let needle: Vec<char> = label.chars().collect();
+            let (_, fgs, mods) = rows
+                .iter()
+                .find(|(chars, _, _)| {
+                    chars.windows(needle.len()).any(|w| w == needle.as_slice())
+                })
+                .unwrap_or_else(|| panic!("{label} not rendered"));
+            let start = rows
+                .iter()
+                .find_map(|(chars, _, _)| {
+                    chars
+                        .windows(needle.len())
+                        .position(|w| w == needle.as_slice())
+                })
+                .expect("label position");
+            (
+                fgs[start..start + needle.len()].to_vec(),
+                mods[start..start + needle.len()].to_vec(),
+            )
+        }
+
+        fn row_chars_containing(
+            rows: &[(Vec<char>, Vec<Color>, Vec<Modifier>)],
+            label: &str,
+        ) -> Vec<char> {
+            let needle: Vec<char> = label.chars().collect();
+            rows.iter()
+                .find(|(chars, _, _)| {
+                    chars.windows(needle.len()).any(|w| w == needle.as_slice())
+                })
+                .map(|(chars, _, _)| chars.clone())
+                .unwrap_or_else(|| panic!("{label} not rendered"))
+        }
+
+        let (mut app, _) = test_app_with_peers(1);
+        app.own_display_name = Some("me".to_string());
+
+        // Unmuted: DarkGray labels, white values, speaker icon on mic row.
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let all_text = buffer_text(&terminal).join("\n");
+        assert!(all_text.contains("(you)"));
+        assert!(!all_text.contains("MUTED"));
+        let rows = cell_rows(&terminal);
+        for label in ["Speaker volume", "Mic gain"] {
+            let (fgs, mods) = label_cells(&rows, label);
+            assert!(
+                fgs.iter().all(|fg| *fg == Color::DarkGray),
+                "{label} label not DarkGray"
+            );
+            assert!(
+                mods.iter().all(|m| !m.contains(Modifier::CROSSED_OUT)),
+                "{label} label crossed out while unmuted"
+            );
+            let row = row_chars_containing(&rows, label);
+            assert!(
+                row.contains(&'1'),
+                "{label} row shows no volume value"
+            );
+        }
+        let mic_row = row_chars_containing(&rows, "Mic gain");
+        assert!(mic_row.contains(&'🔊'), "mic row shows no unmute icon");
+
+        // Muted: crossed-out mic label + mute icon; speaker row untouched.
+        assert!(app.process_event(AppEvent::MuteSelf(true)));
+        let mut terminal = test_terminal();
+        app.render(&mut terminal).expect("render");
+        let all_text = buffer_text(&terminal).join("\n");
+        assert!(all_text.contains("(you)"));
+        assert!(!all_text.contains("MUTED"));
+        let rows = cell_rows(&terminal);
+        let (mic_fgs, mic_mods) = label_cells(&rows, "Mic gain");
+        assert!(mic_fgs.iter().all(|fg| *fg == Color::DarkGray));
+        assert!(
+            mic_mods.iter().all(|m| m.contains(Modifier::CROSSED_OUT)),
+            "mic label not crossed out while muted"
+        );
+        let mic_row = row_chars_containing(&rows, "Mic gain");
+        assert!(mic_row.contains(&'🔇'), "mic row shows no mute icon");
+        let (_, speaker_mods) = label_cells(&rows, "Speaker volume");
+        assert!(
+            speaker_mods
+                .iter()
+                .all(|m| !m.contains(Modifier::CROSSED_OUT)),
+            "speaker label crossed out by mute"
+        );
     }
 }

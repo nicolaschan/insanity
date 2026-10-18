@@ -2,13 +2,16 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
+use super::mixer::MAX_VOLUME;
 #[cfg(feature = "encode-silence")]
 use super::mixer::{QUIET_HANGOVER_CHUNKS, QUIET_RMS_THRESHOLD};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::chunk::ChunkSource;
 use insanity_core::audio::codec::ChunkEncoder;
 use insanity_core::audio::config::AudioPipelineConfig;
-use insanity_core::audio::transform::{ChannelMap, ChunkTransform, Mute, MuteControl};
+use insanity_core::audio::transform::{
+    ChannelMap, ChunkTransform, Gain, GainControl, Mute, MuteControl,
+};
 #[cfg(feature = "encode-silence")]
 use insanity_core::audio::transform::{Hysteresis, RmsDetector, SilenceGate};
 
@@ -16,6 +19,7 @@ use insanity_core::audio::transform::{Hysteresis, RmsDetector, SilenceGate};
 pub struct AudioInputHub<OutputT> {
     tx: broadcast::Sender<OutputT>,
     mute_control: Arc<MuteControl>,
+    mic_gain_control: Arc<GainControl>,
 }
 
 impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
@@ -30,7 +34,10 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
         F: FnMut(&AudioFormat) -> Option<E> + Send + 'static,
     {
         let (mute, mute_control) = Mute::shared(false);
-        let base = mute.chain(ChannelMap::capped(audio_config.channels()));
+        let (mic_gain, mic_gain_control) = Gain::shared(100, MAX_VOLUME);
+        let base = mute
+            .chain(mic_gain)
+            .chain(ChannelMap::capped(audio_config.channels()));
         #[cfg(feature = "encode-silence")]
         let mut transform = base.chain(SilenceGate::new(
             ChunkEncoder::new(rebuild, audio_config.frames()),
@@ -42,6 +49,7 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
         let hub = Self {
             tx: tx.clone(),
             mute_control,
+            mic_gain_control,
         };
         tokio::spawn(async move {
             while let Some(chunk) = source.next_chunk().await {
@@ -60,5 +68,13 @@ impl<OutputT: Clone + Send + 'static> AudioInputHub<OutputT> {
 
     pub fn set_muted(&self, muted: bool) {
         self.mute_control.set(muted);
+    }
+
+    pub fn set_mic_volume(&self, volume: usize) {
+        self.mic_gain_control.set(volume);
+    }
+
+    pub fn mic_volume(&self) -> usize {
+        self.mic_gain_control.get()
     }
 }

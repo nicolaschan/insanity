@@ -8,8 +8,8 @@ use ratatui::{
 };
 
 use crate::{
-    App, DECREMENT_PEER_VOLUME_KEY, Editor, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY, Peer,
-    TAB_IDX_CHAT, TAB_IDX_PEERS, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
+    App, DECREMENT_PEER_VOLUME_KEY, Editor, INCREMENT_PEER_VOLUME_KEY, MUTE_KEY, MainCursor, Peer,
+    TAB_IDX_CHAT, TAB_IDX_MAIN, TAB_IDX_SETTINGS, TOGGLE_PEER_DENOISE_KEY, TOGGLE_PEER_KEY,
     components::{block::default_block, settings::render_settings},
     style::{BG_GRAY, CHAT_COLORS, COLOR_RED, CONNECTED, NUM_CHAT_COLORS, SELECTED},
 };
@@ -25,7 +25,7 @@ pub fn ui(f: &mut Frame, app: &App) {
         .split(f.area());
     f.render_widget(tab_list(app), chunks[0]);
     match app.tab_index {
-        TAB_IDX_PEERS => render_peer_list(f, app, chunks[1]),
+        TAB_IDX_MAIN => render_main(f, app, chunks[1]),
         TAB_IDX_CHAT => render_chat(f, app, chunks[1]),
         TAB_IDX_SETTINGS => render_settings(f, app, chunks[1]),
         _ => panic!("Tab index out of bounds."),
@@ -158,33 +158,90 @@ static PEER_HELP_TEXT: std::sync::LazyLock<String> = std::sync::LazyLock::new(||
     .fold("   ".to_string(), |acc, x| acc + &x)
 });
 
-fn render_peer_list(f: &mut Frame, app: &App, area: Rect) {
+fn volume_row<'a>(
+    icon: &'a str,
+    label: &'static str,
+    volume: usize,
+    selected: bool,
+    muted: bool,
+) -> Row<'a> {
+    let style = if selected {
+        Style::default().bg(SELECTED)
+    } else {
+        Style::default()
+    };
+    let label_style = style.fg(Color::DarkGray);
+    let label_style = if muted {
+        label_style.add_modifier(Modifier::CROSSED_OUT)
+    } else {
+        label_style
+    };
+    Row::new(vec![
+        Cell::from(icon),
+        Cell::from(Line::from(vec![Span::styled(label, label_style)])),
+        Cell::from(Line::from(vec![Span::styled(
+            format!("{volume}"),
+            style.fg(Color::White),
+        )])),
+    ])
+}
+
+fn render_main(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
         .split(area);
 
-    let muted = if app.mute_self { "🔇" } else { "🔊" };
-    let you_text = if app.mute_self {
-        " (you: MUTED)"
-    } else {
-        " (you)"
+    let (speaker_cursor, mic_cursor, peer_cursor) = match app.main_cursor {
+        MainCursor::Speaker => (Some(0), None, None),
+        MainCursor::Mic => (None, Some(0), None),
+        MainCursor::Peer(i) => (None, None, Some(i)),
     };
 
-    let name_style = Style::default().fg(Color::Magenta);
-    let name_style = if app.mute_self {
-        name_style.add_modifier(Modifier::CROSSED_OUT)
-    } else {
-        name_style
-    };
+    let volume_rows = vec![
+        volume_row(
+            "",
+            "Speaker volume",
+            app.speaker_volume,
+            speaker_cursor.is_some(),
+            false,
+        ),
+        volume_row(
+            if app.mute_self { "🔇" } else { "🔊" },
+            "Mic gain",
+            app.mic_volume,
+            mic_cursor.is_some(),
+            app.mute_self,
+        ),
+    ];
+    let mut volume_block = default_block().title("Volume");
+    if speaker_cursor.is_some() || mic_cursor.is_some() {
+        volume_block = volume_block.border_style(Style::default().fg(Color::DarkGray));
+    }
+    let volume_widget = Table::new(
+        volume_rows,
+        [
+            Constraint::Min(2),
+            Constraint::Percentage(60),
+            Constraint::Percentage(40),
+        ],
+    )
+    .style(Style::default().fg(Color::White))
+    .column_spacing(1)
+    .block(volume_block);
+    f.render_widget(volume_widget, chunks[0]);
 
     let self_row = match &app.own_display_name {
         Some(display_name) => vec![Row::new(vec![
             Cell::from(""),
-            Cell::from(muted),
+            Cell::from(""),
             Cell::from(Line::from(vec![
-                Span::styled(display_name, name_style),
-                Span::styled(you_text, Style::default().fg(Color::DarkGray)),
+                Span::styled(display_name, Style::default().fg(Color::Magenta)),
+                Span::styled(" (you)", Style::default().fg(Color::DarkGray)),
             ])),
         ])],
         None => vec![],
@@ -193,9 +250,13 @@ fn render_peer_list(f: &mut Frame, app: &App, area: Rect) {
         .peers
         .values()
         .enumerate()
-        .map(|(i, peer)| peer_row(peer, i == app.peer_index))
+        .map(|(i, peer)| peer_row(peer, peer_cursor == Some(i)))
         .collect();
     let rows = self_row.into_iter().chain(rows).collect::<Vec<_>>();
+    let mut peers_block = default_block().title("Peers");
+    if peer_cursor.is_some() {
+        peers_block = peers_block.border_style(Style::default().fg(Color::DarkGray));
+    }
     let peer_list = Table::new(
         rows,
         [
@@ -206,13 +267,13 @@ fn render_peer_list(f: &mut Frame, app: &App, area: Rect) {
     )
     .style(Style::default().fg(Color::White))
     .column_spacing(1)
-    .block(default_block());
-    f.render_widget(peer_list, chunks[0]);
+    .block(peers_block);
+    f.render_widget(peer_list, chunks[1]);
 
     // Command help list
     let commands = Paragraph::new(PEER_HELP_TEXT.as_str())
         .block(Block::default().style(Style::default().fg(Color::DarkGray)));
-    f.render_widget(commands, chunks[1]);
+    f.render_widget(commands, chunks[2]);
 }
 
 fn render_editor<'a>(editor: &'a Editor, area: &'a Rect) -> Paragraph<'a> {

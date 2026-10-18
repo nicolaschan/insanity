@@ -4,6 +4,8 @@ pub enum UserInputEvent {
     EnablePeer(String),
     SetDenoise(String, DenoiseSelection),
     SetVolume(String, usize),
+    SetSpeakerVolume(usize),
+    SetMicVolume(usize),
     SendMessage(String),
     SetMuteSelf(bool),
     SetInputDevice(String, String),

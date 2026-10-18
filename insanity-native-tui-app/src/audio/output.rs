@@ -29,7 +29,7 @@ use insanity_core::audio::converter::FormatConverter;
 use insanity_core::audio::device::AudioDevice;
 use insanity_core::audio::mixer::Mixer;
 use insanity_core::audio::sample::SyncSampleSource;
-use insanity_core::audio::transform::Gain;
+use insanity_core::audio::transform::{Gain, GainControl};
 use rubato_audio_source::StreamResampler;
 
 const PREFILL_BOUND: usize = 8;
@@ -101,10 +101,28 @@ impl OutputStats {
     }
 }
 
+/// Aggregate handle for the output subsystem.
+///
+/// Holds the data plane (`client`), the device plane (`manager`), and the
+/// master speaker bus control. The control is the retained half of the
+/// `Gain::shared` split in `start_output`: the `Gain` transform itself lives
+/// in the `Mixer` owned by the output owner task, so the `Arc<GainControl>`
+/// must be kept here to drive it.
 #[derive(Clone)]
 pub(crate) struct AudioOutput {
     pub(crate) client: MixerClient,
     pub(crate) manager: OutputManager,
+    speaker_gain: Arc<GainControl>,
+}
+
+impl AudioOutput {
+    pub(crate) fn set_speaker_volume(&self, volume: usize) {
+        self.speaker_gain.set(volume);
+    }
+
+    pub(crate) fn speaker_volume(&self) -> usize {
+        self.speaker_gain.get()
+    }
 }
 
 pub(crate) struct Sink {
@@ -310,8 +328,9 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
         Arc::new(AtomicU64::new(0)),
     );
 
+    let (bus, speaker_gain) = Gain::shared(100, MAX_VOLUME);
     tokio::spawn(run_output_owner(
-        Mixer::new(audio_config, Gain::shared(100, MAX_VOLUME).0),
+        Mixer::new(audio_config, bus),
         dummy_sink,
         manager.stats(),
         op_rx,
@@ -328,6 +347,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
             dropped: Arc::new(AtomicUsize::new(0)),
         },
         manager,
+        speaker_gain,
     }
 }
 

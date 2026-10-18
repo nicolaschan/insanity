@@ -86,6 +86,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .send(AppEvent::SetPeerVolume(peer_id, volume))
                         .unwrap();
                 }
+                UserInputEvent::SetSpeakerVolume(volume) => {
+                    sender.send(AppEvent::SetSpeakerVolume(volume)).unwrap();
+                }
+                UserInputEvent::SetMicVolume(volume) => {
+                    sender.send(AppEvent::SetMicVolume(volume)).unwrap();
+                }
                 UserInputEvent::SendMessage(_message) => {}
                 UserInputEvent::SetMuteSelf(_) => todo!(),
                 UserInputEvent::SetInputDevice(_, _) => {}
