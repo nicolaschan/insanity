@@ -234,10 +234,7 @@ mod tests {
         ];
         let ranked = ranked_configs(configs.into_iter(), 2, 48000);
         assert_eq!(
-            ranked
-                .iter()
-                .map(|r| r.sample_format())
-                .collect::<Vec<_>>(),
+            ranked.iter().map(|r| r.sample_format()).collect::<Vec<_>>(),
             vec![SampleFormat::F32, SampleFormat::F64, SampleFormat::I16]
         );
         assert!(ranked.iter().all(|r| r.channels() == 1));
