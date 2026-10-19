@@ -61,7 +61,7 @@ impl Drop for NotifyingProducer {
 }
 
 pub(crate) struct CpalStreamReceiver {
-    _stream: send_safe::SendWrapperThread<Option<Stream>>,
+    _stream: send_safe::SendWrapperThread<Result<Stream, String>>,
     consumer: rtrb::Consumer<f32>,
     wake: Arc<tokio::sync::Notify>,
     format: AudioFormat,
@@ -109,44 +109,85 @@ fn publish_samples(
     }
 }
 
+fn try_input_candidate(
+    device: &Device,
+    audio_config: &AudioPipelineConfig,
+    reporter: &FatalReporter,
+    stats: &Arc<InputStats>,
+    wake: &Arc<tokio::sync::Notify>,
+    fmt: SampleFormat,
+    cfg: StreamConfig,
+) -> Result<CpalStreamReceiver, anyhow::Error> {
+    let channels = cfg.channels;
+    let sample_rate = cfg.sample_rate;
+    let format = AudioFormat::new(channels, sample_rate);
+    let block_samples = channels as usize * audio_config.frames();
+    anyhow::ensure!(block_samples > 0, "invalid block size");
+    let (producer, consumer) = rtrb::RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
+    let build_wake = Arc::clone(wake);
+    let build_stats = Arc::clone(stats);
+    let build_reporter = reporter.clone();
+    let attempt_device = device.clone();
+    let mut wrapper = send_safe::SendWrapperThread::new(move || {
+        setup_input_stream(
+            fmt,
+            cfg,
+            &attempt_device,
+            producer,
+            build_wake,
+            build_stats,
+            build_reporter,
+        )
+        .map_err(|e| format!("{e:#}"))
+    });
+    if let Some(reason) = wrapper
+        .execute(|slot| match slot {
+            Ok(stream) if stream.play().is_ok() => None,
+            Ok(_) => Some("play() failed".to_string()),
+            Err(e) => Some(std::mem::take(e)),
+        })
+        .unwrap_or_else(|_| Some("audio thread died".to_string()))
+    {
+        log::trace!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
+        anyhow::bail!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
+    }
+    Ok(CpalStreamReceiver {
+        _stream: wrapper,
+        consumer,
+        wake: Arc::clone(wake),
+        format,
+    })
+}
+
 pub(crate) fn make_single_input(
     device: Device,
     audio_config: &AudioPipelineConfig,
     reporter: FatalReporter,
     stats: &Arc<InputStats>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let (fmt, cfg) = get_input_config(&device, audio_config)
+    let candidates = get_input_config(&device, audio_config)
         .context("Failed to get input config, parking input until a device appears")?;
-    let format = AudioFormat::new(cfg.channels, cfg.sample_rate);
-    let block_samples = cfg.channels as usize * audio_config.frames();
-    assert!(block_samples > 0);
-    let (producer, consumer) = rtrb::RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
+    log::debug!("Trying {} ranked input configs", candidates.len());
     let wake = Arc::new(tokio::sync::Notify::new());
-    let build_wake = Arc::clone(&wake);
-    let build_stats = Arc::clone(stats);
-    let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        setup_input_stream(
-            fmt,
-            cfg,
-            &device,
-            producer,
-            build_wake,
-            build_stats,
-            reporter,
-        )
-        .inspect_err(|e| log::warn!("Failed to build input stream, parking input: {e:#}"))
-        .ok()
-    });
-    let playing = wrapper
-        .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
-        .unwrap_or(false);
-    anyhow::ensure!(playing, "Failed to start input stream, parking input");
-    Ok(CpalStreamReceiver {
-        _stream: wrapper,
-        consumer,
-        wake,
-        format,
-    })
+    let mut failures = Vec::new();
+    for (fmt, cfg) in candidates {
+        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg) {
+            Ok(receiver) => {
+                log::info!(
+                    "Selected input stream: {}ch {}Hz {fmt:?}",
+                    cfg.channels,
+                    cfg.sample_rate,
+                );
+                return Ok(receiver);
+            }
+            Err(e) => failures.push(format!("{e:#}")),
+        }
+    }
+    anyhow::bail!(
+        "Failed to start input stream (tried {} configs: {}), parking input",
+        failures.len(),
+        failures.join("; ")
+    );
 }
 
 fn setup_input_stream(

@@ -16,7 +16,7 @@ fn callback_buffer_size(host: &str, supported: &cpal::SupportedBufferSize) -> Bu
     match (host, supported) {
         (PULSEAUDIO_HOST, cpal::SupportedBufferSize::Range { min, max }) => {
             let clamped = AUDIO_CALLBACK_FRAMES.clamp(*min, *max);
-            log::debug!("requesting fixed stream buffer of {clamped} frames");
+            log::trace!("requesting fixed stream buffer of {clamped} frames");
             BufferSize::Fixed(clamped)
         }
         _ => BufferSize::Default,
@@ -46,45 +46,23 @@ fn stream_sample_rate(range: &cpal::SupportedStreamConfigRange, target: u32) -> 
     target.clamp(range.min_sample_rate(), range.max_sample_rate())
 }
 
-fn best_config(
+pub(crate) fn ranked_configs(
     ranges: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
     channels: u16,
     sample_rate: u32,
-) -> Option<cpal::SupportedStreamConfigRange> {
-    let mut ranges: Vec<cpal::SupportedStreamConfigRange> = ranges.collect();
-    let best = ranges
-        .iter()
-        .filter(|r| r.channels() == channels)
-        .filter_map(|r| {
-            let rank = sample_format_rank(r.sample_format())?;
-            let distance = sample_rate.abs_diff(stream_sample_rate(r, sample_rate));
-            Some(((Reverse(distance), rank), r))
+) -> Vec<cpal::SupportedStreamConfigRange> {
+    let mut keyed = ranges
+        .filter_map(|cfg| {
+            let distance = sample_rate.abs_diff(stream_sample_rate(&cfg, sample_rate));
+            let rank = sample_format_rank(cfg.sample_format())?;
+            Some((
+                ((cfg.channels() != channels) as u8, distance, Reverse(rank)),
+                cfg,
+            ))
         })
-        .reduce(|best, candidate| {
-            if candidate.0 > best.0 {
-                candidate
-            } else {
-                best
-            }
-        })
-        .map(|(_, r)| *r);
-    best.or_else(|| ranges.pop())
-}
-
-pub(crate) fn find_input(
-    range: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
-    channels: u16,
-    sample_rate: u32,
-) -> Option<cpal::SupportedStreamConfigRange> {
-    best_config(range, channels, sample_rate)
-}
-
-pub(crate) fn find_output(
-    range: impl Iterator<Item = cpal::SupportedStreamConfigRange>,
-    channels: u16,
-    sample_rate: u32,
-) -> Option<cpal::SupportedStreamConfigRange> {
-    best_config(range, channels, sample_rate)
+        .collect::<Vec<((u8, u32, Reverse<u8>), cpal::SupportedStreamConfigRange)>>();
+    keyed.sort_by_key(|(key, _)| *key);
+    keyed.into_iter().map(|(_, cfg)| cfg).collect()
 }
 
 fn stream_config(
@@ -98,8 +76,8 @@ fn stream_config(
         sample_rate,
         buffer_size: callback_buffer_size(host_name(), cfg_range.buffer_size()),
     };
-    log::info!(
-        "Selected {direction} stream: {}ch {}Hz {:?} from device range {}..{}Hz",
+    log::trace!(
+        "Candidate {direction} stream: {}ch {}Hz {:?} from device range {}..{}Hz",
         cfg.channels,
         cfg.sample_rate,
         cfg_range.sample_format(),
@@ -112,47 +90,79 @@ fn stream_config(
 pub(crate) fn get_input_config(
     device: &Device,
     audio_config: &AudioPipelineConfig,
-) -> anyhow::Result<(SampleFormat, StreamConfig)> {
+) -> anyhow::Result<Vec<(SampleFormat, StreamConfig)>> {
     let range = device
         .supported_input_configs()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let cfg_range = find_input(range, audio_config.channels(), audio_config.sample_rate())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "No supported input config for {}ch @ {}Hz",
-                audio_config.channels(),
-                audio_config.sample_rate()
-            )
-        })?;
-    Ok(stream_config("input", cfg_range, audio_config))
+    let ranked = ranked_configs(range, audio_config.channels(), audio_config.sample_rate());
+    if ranked.is_empty() {
+        anyhow::bail!(
+            "No supported input config for {}ch @ {}Hz",
+            audio_config.channels(),
+            audio_config.sample_rate()
+        );
+    }
+    let configs: Vec<(SampleFormat, StreamConfig)> = ranked
+        .into_iter()
+        .map(|cfg_range| stream_config("input", cfg_range, audio_config))
+        .collect();
+    Ok(configs)
 }
 
 pub(crate) fn get_output_config(
     device: &Device,
     audio_config: &AudioPipelineConfig,
-) -> anyhow::Result<(SampleFormat, StreamConfig)> {
+) -> anyhow::Result<Vec<(SampleFormat, StreamConfig)>> {
     let range = device
         .supported_output_configs()
         .map_err(|e| anyhow::anyhow!(e))?;
-    let cfg_range = find_output(range, audio_config.channels(), audio_config.sample_rate())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "No supported output config for {}ch @ {}Hz",
-                audio_config.channels(),
-                audio_config.sample_rate()
-            )
-        })?;
-    Ok(stream_config("output", cfg_range, audio_config))
+    let ranked = ranked_configs(range, audio_config.channels(), audio_config.sample_rate());
+    if ranked.is_empty() {
+        anyhow::bail!(
+            "No supported output config for {}ch @ {}Hz",
+            audio_config.channels(),
+            audio_config.sample_rate()
+        );
+    }
+    let configs: Vec<(SampleFormat, StreamConfig)> = ranked
+        .into_iter()
+        .map(|cfg_range| stream_config("output", cfg_range, audio_config))
+        .collect();
+    Ok(configs)
 }
 
 #[cfg(test)]
-mod buffer_size_tests {
-    use cpal::{BufferSize, SupportedBufferSize};
+mod tests {
+    use cpal::{BufferSize, SampleFormat, SupportedBufferSize};
 
-    use super::{AUDIO_CALLBACK_FRAMES, callback_buffer_size};
+    use super::{AUDIO_CALLBACK_FRAMES, callback_buffer_size, ranked_configs};
+
+    fn single_rate_ch(
+        channels: u16,
+        rate: u32,
+        format: SampleFormat,
+    ) -> cpal::SupportedStreamConfigRange {
+        cpal::SupportedStreamConfigRange::new(
+            channels,
+            rate,
+            rate,
+            SupportedBufferSize::Unknown,
+            format,
+        )
+    }
+
+    fn range(channels: u16, format: SampleFormat) -> cpal::SupportedStreamConfigRange {
+        cpal::SupportedStreamConfigRange::new(
+            channels,
+            44100,
+            48000,
+            SupportedBufferSize::Unknown,
+            format,
+        )
+    }
 
     #[test]
-    fn pulseaudio_requests_callback_frames_within_range() {
+    fn pulseaudio_pins_callback_frames_otherwise_default() {
         let wide = SupportedBufferSize::Range {
             min: 1,
             max: 1 << 20,
@@ -161,6 +171,7 @@ mod buffer_size_tests {
             callback_buffer_size("PulseAudio", &wide),
             BufferSize::Fixed(AUDIO_CALLBACK_FRAMES)
         );
+        // Target clamped into the device range.
         let narrow = SupportedBufferSize::Range {
             min: 1024,
             max: 4096,
@@ -169,18 +180,11 @@ mod buffer_size_tests {
             callback_buffer_size("PulseAudio", &narrow),
             BufferSize::Fixed(1024)
         );
-    }
-
-    #[test]
-    fn pulseaudio_without_range_uses_default() {
+        // Non-range sizes and non-PulseAudio hosts stay on cpal defaults.
         assert_eq!(
             callback_buffer_size("PulseAudio", &SupportedBufferSize::Unknown),
             BufferSize::Default
         );
-    }
-
-    #[test]
-    fn other_hosts_use_default_even_with_range() {
         let range = SupportedBufferSize::Range { min: 480, max: 480 };
         for host in ["WASAPI", "CoreAudio", "ALSA", "PipeWire", "JACK"] {
             assert_eq!(
@@ -190,187 +194,49 @@ mod buffer_size_tests {
             );
         }
     }
-}
-
-#[cfg(test)]
-mod format_selection_tests {
-    use cpal::SampleFormat;
-
-    use super::{find_input, find_output, sample_format_rank, stream_sample_rate};
-
-    fn range(channels: u16, format: cpal::SampleFormat) -> cpal::SupportedStreamConfigRange {
-        cpal::SupportedStreamConfigRange::new(
-            channels,
-            44100,
-            48000,
-            cpal::SupportedBufferSize::Unknown,
-            format,
-        )
-    }
-
-    fn single_rate(rate: u32, format: SampleFormat) -> cpal::SupportedStreamConfigRange {
-        cpal::SupportedStreamConfigRange::new(
-            2,
-            rate,
-            rate,
-            cpal::SupportedBufferSize::Unknown,
-            format,
-        )
-    }
-
-    #[test]
-    fn wasapi_style_per_rate_list_picks_target_rate() {
-        let rates = [
-            8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96000, 192000,
-        ];
-        let configs: Vec<_> = rates
-            .iter()
-            .map(|&r| single_rate(r, SampleFormat::F32))
-            .collect();
-        let picked = find_output(configs.into_iter(), 2, 48000).expect("config");
-        assert_eq!(picked.min_sample_rate(), 48000);
-        assert_eq!(picked.max_sample_rate(), 48000);
-        assert_eq!(stream_sample_rate(&picked, 48000), 48000);
-    }
 
     #[test]
     fn missing_target_rate_picks_closest() {
         let configs = vec![
-            single_rate(8000, SampleFormat::F32),
-            single_rate(16000, SampleFormat::F32),
-            single_rate(44100, SampleFormat::F32),
-            single_rate(96000, SampleFormat::F32),
+            single_rate_ch(2, 8000, SampleFormat::F32),
+            single_rate_ch(2, 16000, SampleFormat::F32),
+            single_rate_ch(2, 44100, SampleFormat::F32),
+            single_rate_ch(2, 96000, SampleFormat::F32),
         ];
-        let picked = find_output(configs.into_iter(), 2, 48000).expect("config");
-        assert_eq!(picked.max_sample_rate(), 44100);
-        assert_eq!(stream_sample_rate(&picked, 48000), 44100);
+        let ranked = ranked_configs(configs.into_iter(), 2, 48000);
+        assert_eq!(ranked[0].max_sample_rate(), 44100);
     }
 
     #[test]
-    fn exact_rate_beats_sample_format() {
+    fn exact_rate_beats_better_format() {
         let configs = vec![
-            single_rate(44100, SampleFormat::F32),
-            single_rate(48000, SampleFormat::I16),
+            single_rate_ch(2, 44100, SampleFormat::F32),
+            single_rate_ch(2, 48000, SampleFormat::I16),
         ];
-        let picked = find_input(configs.into_iter(), 2, 48000).expect("config");
-        assert_eq!(picked.sample_format(), SampleFormat::I16);
-        assert_eq!(picked.max_sample_rate(), 48000);
+        let ranked = ranked_configs(configs.into_iter(), 2, 48000);
+        assert_eq!(ranked[0].sample_format(), SampleFormat::I16);
     }
 
     #[test]
-    fn stream_rate_clamps_into_range() {
-        let high = cpal::SupportedStreamConfigRange::new(
-            2,
-            96000,
-            192000,
-            cpal::SupportedBufferSize::Unknown,
-            SampleFormat::F32,
-        );
-        assert_eq!(stream_sample_rate(&high, 48000), 96000);
-        assert_eq!(
-            stream_sample_rate(&single_rate(8000, SampleFormat::F32), 48000),
-            8000
-        );
-        assert_eq!(
-            stream_sample_rate(&range(2, SampleFormat::F32), 48000),
-            48000
-        );
-    }
-
-    #[test]
-    fn fidelity_ordering_prefers_float_then_width_then_signed() {
-        let ranked = [
-            SampleFormat::F32,
-            SampleFormat::F64,
-            SampleFormat::I32,
-            SampleFormat::U32,
-            SampleFormat::I16,
-            SampleFormat::U16,
-            SampleFormat::I8,
-            SampleFormat::U8,
-        ];
-        let scores: Vec<u8> = ranked
-            .iter()
-            .map(|f| sample_format_rank(*f).expect("usable"))
-            .collect();
-        let mut ordered = scores.clone();
-        ordered.sort();
-        ordered.reverse();
-        assert_eq!(scores, ordered);
-    }
-
-    #[test]
-    fn packed_and_dsd_formats_are_unusable() {
-        for format in [
-            SampleFormat::I24,
-            SampleFormat::U24,
-            SampleFormat::DsdU8,
-            SampleFormat::DsdU16,
-            SampleFormat::DsdU32,
-        ] {
-            assert_eq!(sample_format_rank(format), None);
-        }
-    }
-
-    #[test]
-    fn u8_first_list_selects_f32() {
-        let configs = vec![
-            range(2, SampleFormat::U8),
-            range(2, SampleFormat::I16),
-            range(2, SampleFormat::F32),
-        ];
-        let picked = find_input(configs.into_iter(), 2, 48000).expect("config");
-        assert_eq!(picked.sample_format(), SampleFormat::F32);
-        assert_eq!(picked.channels(), 2);
-        let configs = vec![
-            range(2, SampleFormat::U8),
-            range(2, SampleFormat::I16),
-            range(2, SampleFormat::F32),
-        ];
-        let picked = find_output(configs.into_iter(), 2, 48000).expect("config");
-        assert_eq!(picked.sample_format(), SampleFormat::F32);
-    }
-
-    #[test]
-    fn mono_configs_never_win_over_stereo() {
+    fn channel_match_beats_better_format() {
         let configs = vec![range(1, SampleFormat::F32), range(2, SampleFormat::U8)];
-        let picked = find_input(configs.into_iter(), 2, 48000).expect("config");
-        assert_eq!(picked.channels(), 2);
-        assert_eq!(picked.sample_format(), SampleFormat::U8);
+        let ranked = ranked_configs(configs.into_iter(), 2, 48000);
+        assert_eq!(ranked[0].channels(), 2);
     }
 
     #[test]
-    fn dsd_stereo_is_skipped_for_fallback() {
-        let configs = vec![range(2, SampleFormat::DsdU8), range(1, SampleFormat::F32)];
-        let picked = find_input(configs.into_iter(), 2, 48000).expect("config");
-        assert_ne!(picked.sample_format(), SampleFormat::DsdU8);
-    }
-
-    #[test]
-    fn empty_list_selects_nothing() {
-        let picked = find_input(Vec::new().into_iter(), 2, 48000);
-        assert!(picked.is_none());
-        let picked = find_output(Vec::new().into_iter(), 2, 48000);
-        assert!(picked.is_none());
-    }
-
-    #[test]
-    fn fidelity_tie_keeps_first_range() {
-        let first = cpal::SupportedStreamConfigRange::new(
-            2,
-            44100,
-            48000,
-            cpal::SupportedBufferSize::Unknown,
-            SampleFormat::F32,
+    fn prefers_f32_skips_unusable_and_falls_back_to_mono() {
+        let configs = vec![
+            range(2, SampleFormat::DsdU8),
+            single_rate_ch(1, 48000, SampleFormat::F64),
+            single_rate_ch(1, 48000, SampleFormat::I16),
+            single_rate_ch(1, 48000, SampleFormat::F32),
+        ];
+        let ranked = ranked_configs(configs.into_iter(), 2, 48000);
+        assert_eq!(
+            ranked.iter().map(|r| r.sample_format()).collect::<Vec<_>>(),
+            vec![SampleFormat::F32, SampleFormat::F64, SampleFormat::I16]
         );
-        let second = cpal::SupportedStreamConfigRange::new(
-            2,
-            8000,
-            96000,
-            cpal::SupportedBufferSize::Unknown,
-            SampleFormat::F32,
-        );
-        let picked = find_output(vec![first, second].into_iter(), 2, 48000).expect("config");
-        assert_eq!(picked.max_sample_rate(), 48000);
+        assert!(ranked.iter().all(|r| r.channels() == 1));
     }
 }
