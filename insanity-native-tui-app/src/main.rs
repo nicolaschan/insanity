@@ -16,6 +16,8 @@ const BREAKING_CHANGE_VERSION: &str = "1";
 // Use INSANITY_CONFIG_LOCATION.iter().collect::<PathBuf>() to create cross-platform path.
 const INSANITY_CONFIG_LOCATION: [&str; 2] = ["insanity", "config.toml"];
 
+const INSANITY_LOG_FILENAME: &str = "insanity.log";
+
 #[derive(Parser, Debug)]
 #[clap(version = built_info::GIT_VERSION, author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Cli {
@@ -65,6 +67,7 @@ enum Commands {
     },
     PrintConfig,
     PrintConfigPath,
+    PrintLogPath,
 }
 
 #[derive(Debug)]
@@ -133,11 +136,12 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::PrintConfigPath) => {
             let config_file_path = get_config_file_path(cli_opts.config_file.as_ref());
-            if let Some(path) = config_file_path.to_str() {
-                println!("{}", path);
-            } else {
-                println!("{:?}", config_file_path);
-            }
+            println!("{}", config_file_path.display());
+            Ok(())
+        }
+        Some(Commands::PrintLogPath) => {
+            let log_file_path = get_log_file_path(cli_opts.dir.as_ref());
+            println!("{}", log_file_path.display());
             Ok(())
         }
     }
@@ -147,9 +151,22 @@ fn get_config_file_path(config_file_path_arg: Option<&String>) -> PathBuf {
     match config_file_path_arg {
         Some(path) => PathBuf::from_str(path).unwrap(),
         None => dirs::config_local_dir()
-            .expect("No config directory!?")
+            .expect("No config directory‽")
             .join(INSANITY_CONFIG_LOCATION.iter().collect::<PathBuf>()),
     }
+}
+
+fn get_insanity_dir(dir_arg: Option<&String>) -> PathBuf {
+    match dir_arg {
+        Some(dir) => PathBuf::from_str(dir).unwrap(),
+        None => dirs::data_local_dir()
+            .expect("no data directory‽")
+            .join("insanity"),
+    }
+}
+
+fn get_log_file_path(dir_arg: Option<&String>) -> PathBuf {
+    get_insanity_dir(dir_arg).join(INSANITY_LOG_FILENAME)
 }
 
 fn print_config_file(config_file_path: Option<String>) {
@@ -168,17 +185,11 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
     let main_cancellation_token = CancellationToken::new();
 
     // Configure insanity data directory
-    let insanity_dir = match unprocessed_opts.dir {
-        Some(ref dir) => PathBuf::from_str(dir).unwrap(),
-        None => dirs::data_local_dir()
-            .expect("no data directory!?")
-            .join("insanity"),
-    };
+    let insanity_dir = get_insanity_dir(unprocessed_opts.dir.as_ref());
     renew_dir(&insanity_dir)?;
 
     // Setup logging
-    let log_path = insanity_dir.join("insanity.log");
-    println!("Logging to {:?}", log_path);
+    let log_path = get_log_file_path(unprocessed_opts.dir.as_ref());
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
