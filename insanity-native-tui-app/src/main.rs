@@ -200,7 +200,15 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
                 message
             ))
         })
-        .level(log::LevelFilter::Debug)
+        .level(log::LevelFilter::Info)
+        .level_for("insanity", log::LevelFilter::Debug)
+        .level_for("insanity_core", log::LevelFilter::Debug)
+        .level_for("insanity_native_tui_app", log::LevelFilter::Debug)
+        .level_for("insanity_tui_adapter", log::LevelFilter::Debug)
+        .level_for("rubato_audio_source", log::LevelFilter::Debug)
+        .level_for("veq", log::LevelFilter::Debug)
+        .level_for("udpp", log::LevelFilter::Debug)
+        .level_for("baybridge", log::LevelFilter::Debug)
         .chain(fern::log_file(log_path).expect("could not create insanity log file"))
         .apply()
         .expect("could not setup logging");
