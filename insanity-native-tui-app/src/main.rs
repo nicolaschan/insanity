@@ -213,7 +213,13 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
         .apply()
         .expect("could not setup logging");
 
-    log::info!("Starting insanity");
+    log::info!(
+        "Starting insanity v{} ({}; {}; {} profile)",
+        built_info::PKG_VERSION,
+        built_info::GIT_VERSION.unwrap_or("unknown git"),
+        built_info::TARGET,
+        built_info::PROFILE
+    );
 
     // Read config file.
     let config_file_path = get_config_file_path(unprocessed_opts.config_file.as_ref());
