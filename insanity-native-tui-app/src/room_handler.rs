@@ -231,7 +231,6 @@ async fn retrieve_peers(
     let me = action.whoami().await;
     loop {
         interval.tick().await;
-        log::debug!("Interval tick on retrieve peers.");
         let mapping = match action.namespace(room_fingerprint).await {
             Ok(nsr) => nsr.mapping,
             Err(e) => {
@@ -244,16 +243,14 @@ async fn retrieve_peers(
                 continue;
             }
             let Ok(info) = verify_and_decrypt(cipher, verifying_key, encrypted_info) else {
-                log::debug!("Failed to parse contents of response into AugmentedInfo.");
+                log::debug!(
+                    "Failed to parse contents of response from {person:?} into AugmentedInfo."
+                );
                 continue;
             };
-            // let Ok(info) = serde_json::from_str::<AugmentedInfo>(&info) else {
-            //     log::debug!("Failed to parse contents of response into AugmentedInfo.");
-            //     continue;
-            // };
-            log::debug!("Got info: {:?}", info);
+            log::trace!("Got info from {person:?}: {:?}", info);
             if let Err(e) = conn_info_tx.send(info) {
-                log::debug!("Failed to send received connection info: {:?}", e);
+                log::debug!("Failed to send received connection info from {person:?}: {e:#}");
             }
         }
     }
