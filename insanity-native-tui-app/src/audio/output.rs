@@ -4,6 +4,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use anyhow::Context;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -89,7 +90,7 @@ pub(crate) struct AudioOutput {
 
 pub(crate) struct Sink {
     producer: Producer<f32>,
-    stream: Option<send_safe::SendWrapperThread<Option<Stream>>>,
+    stream: Option<send_safe::SendWrapperThread<Result<Stream, String>>>,
     converter: FormatConverter<StreamResampler>,
     device_format: AudioFormat,
     device_block: usize,
@@ -104,7 +105,7 @@ impl Sink {
     fn play(&mut self) -> bool {
         match self.stream.as_mut() {
             Some(wrapper) => wrapper
-                .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
+                .execute(|slot| matches!(slot, Ok(active) if active.play().is_ok()))
                 .unwrap_or(false),
             None => false,
         }
@@ -135,6 +136,60 @@ impl Sink {
 
 pub(crate) struct SinkBuilder;
 
+fn try_output_candidate(
+    device: &Device,
+    config: &AudioPipelineConfig,
+    reporter: &FatalReporter,
+    stats: &Arc<OutputStats>,
+    sample_format: SampleFormat,
+    cfg: StreamConfig,
+) -> anyhow::Result<Sink> {
+    let channels = cfg.channels;
+    let sample_rate = cfg.sample_rate;
+    let device_format = AudioFormat::new(channels, sample_rate);
+    let device_block = channels as usize * config.frames();
+    anyhow::ensure!(device_block > 0, "invalid block size");
+    let (producer, consumer) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
+    let converter = FormatConverter::<StreamResampler>::new(
+        config.audio_format().clone(),
+        device_format.clone(),
+        device_block,
+        device_block * RING_CAPACITY_BLOCKS,
+    );
+    let build_stats = Arc::clone(stats);
+    let build_reporter = reporter.clone();
+    let attempt_device = device.clone();
+    let mut wrapper = send_safe::SendWrapperThread::new(move || {
+        build_output_stream(
+            sample_format,
+            cfg,
+            &attempt_device,
+            consumer,
+            build_stats,
+            build_reporter,
+        )
+        .map_err(|e| format!("{e:#}"))
+    });
+    if let Some(reason) = wrapper
+        .execute(|slot| match slot {
+            Ok(stream) if stream.play().is_ok() => None,
+            Ok(_) => Some("play() failed".to_string()),
+            Err(e) => Some(std::mem::take(e)),
+        })
+        .unwrap_or_else(|_| Some("audio thread died".to_string()))
+    {
+        log::trace!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
+        anyhow::bail!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
+    }
+    Ok(Sink {
+        producer,
+        stream: Some(wrapper),
+        converter,
+        device_format,
+        device_block,
+    })
+}
+
 impl PayloadBuilder for SinkBuilder {
     type Payload = Sink;
     type Stats = OutputStats;
@@ -146,46 +201,33 @@ impl PayloadBuilder for SinkBuilder {
         reporter: FatalReporter,
     ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
         let name = device.name();
-        let (sample_format, cfg) = get_output_config(&device.0, config)?;
-        let device_format = AudioFormat::new(cfg.channels, cfg.sample_rate);
-        let device_block = cfg.channels as usize * config.frames();
-        assert!(device_block > 0);
-        let (producer, consumer) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
-        let converter = FormatConverter::<StreamResampler>::new(
-            config.audio_format().clone(),
-            device_format.clone(),
-            device_block,
-            device_block * RING_CAPACITY_BLOCKS,
+        let candidates = get_output_config(&device.0, config).context(format!(
+            "Failed to get output config for {name}, parking output"
+        ))?;
+        log::debug!("Trying {} ranked output configs", candidates.len());
+        let mut failures = Vec::new();
+        for (sample_format, cfg) in candidates {
+            match try_output_candidate(&device.0, config, &reporter, stats, sample_format, cfg) {
+                Ok(sink) => {
+                    log::info!(
+                        "Selected output stream: {}ch {}Hz {sample_format:?}",
+                        cfg.channels,
+                        cfg.sample_rate,
+                    );
+                    let info = DeviceInfo {
+                        name: name.clone(),
+                        format: sink.device_format.clone(),
+                    };
+                    return Ok((sink, info));
+                }
+                Err(e) => failures.push(format!("{e:#}")),
+            }
+        }
+        anyhow::bail!(
+            "Failed to start output stream (tried {} configs: {})",
+            failures.len(),
+            failures.join("; ")
         );
-        let build_stats = Arc::clone(stats);
-        let mut wrapper = send_safe::SendWrapperThread::new(move || {
-            build_output_stream(
-                sample_format,
-                cfg,
-                &device.0,
-                consumer,
-                build_stats,
-                reporter,
-            )
-            .inspect_err(|e| log::warn!("Failed to build output stream: {e:#}"))
-            .ok()
-        });
-        let playing = wrapper
-            .execute(|stream| stream.as_ref().is_some_and(|active| active.play().is_ok()))
-            .unwrap_or(false);
-        anyhow::ensure!(playing, "Failed to start output stream");
-        let info = DeviceInfo {
-            name,
-            format: device_format.clone(),
-        };
-        let sink = Sink {
-            producer,
-            stream: Some(wrapper),
-            converter,
-            device_format,
-            device_block,
-        };
-        Ok((sink, info))
     }
 
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
