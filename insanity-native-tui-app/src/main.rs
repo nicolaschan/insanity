@@ -190,6 +190,10 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
 
     // Setup logging
     let log_path = get_log_file_path(unprocessed_opts.dir.as_ref());
+    // If RUST_LOG is present it overrides all
+    let rust_log: Option<log::LevelFilter> =
+        std::env::var("RUST_LOG").ok().and_then(|s| s.parse().ok());
+    let own_crate_level = rust_log.unwrap_or(log::LevelFilter::Debug);
     fern::Dispatch::new()
         .format(|out, message, record| {
             out.finish(format_args!(
@@ -200,15 +204,15 @@ async fn run(unprocessed_opts: Cli) -> anyhow::Result<()> {
                 message
             ))
         })
-        .level(log::LevelFilter::Info)
-        .level_for("insanity", log::LevelFilter::Debug)
-        .level_for("insanity_core", log::LevelFilter::Debug)
-        .level_for("insanity_native_tui_app", log::LevelFilter::Debug)
-        .level_for("insanity_tui_adapter", log::LevelFilter::Debug)
-        .level_for("rubato_audio_source", log::LevelFilter::Debug)
-        .level_for("veq", log::LevelFilter::Debug)
-        .level_for("udpp", log::LevelFilter::Debug)
-        .level_for("baybridge", log::LevelFilter::Debug)
+        .level(rust_log.unwrap_or(log::LevelFilter::Info))
+        .level_for("insanity", own_crate_level)
+        .level_for("insanity_core", own_crate_level)
+        .level_for("insanity_native_tui_app", own_crate_level)
+        .level_for("insanity_tui_adapter", own_crate_level)
+        .level_for("rubato_audio_source", own_crate_level)
+        .level_for("veq", own_crate_level)
+        .level_for("udpp", own_crate_level)
+        .level_for("baybridge", own_crate_level)
         .chain(fern::log_file(log_path).expect("could not create insanity log file"))
         .apply()
         .expect("could not setup logging");
