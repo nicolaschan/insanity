@@ -5,7 +5,7 @@ use std::sync::{
 };
 
 use cpal::{
-    Device, FromSample, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
+    Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
 
@@ -114,11 +114,11 @@ fn try_input_candidate(
     reporter: &FatalReporter,
     stats: &Arc<InputStats>,
     wake: &Arc<tokio::sync::Notify>,
-    config: SupportedStreamConfig,
+    fmt: SampleFormat,
+    cfg: StreamConfig,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let sample_format = config.sample_format();
-    let channels = config.channels();
-    let sample_rate = config.sample_rate();
+    let channels = cfg.channels;
+    let sample_rate = cfg.sample_rate;
     let format = AudioFormat::new(channels, sample_rate);
     let block_samples = channels as usize * audio_config.frames();
     anyhow::ensure!(block_samples > 0, "invalid block size");
@@ -129,7 +129,8 @@ fn try_input_candidate(
     let attempt_device = device.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         setup_input_stream(
-            config,
+            fmt,
+            cfg,
             &attempt_device,
             producer,
             build_wake,
@@ -146,8 +147,8 @@ fn try_input_candidate(
         })
         .unwrap_or_else(|_| Some("audio thread died".to_string()))
     {
-        log::trace!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
-        anyhow::bail!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
+        log::trace!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
+        anyhow::bail!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
     }
     Ok(CpalStreamReceiver {
         _stream: wrapper,
@@ -168,8 +169,8 @@ pub(crate) fn make_single_input(
     log::trace!("Candidate configs: {candidates:?}");
     let wake = Arc::new(tokio::sync::Notify::new());
     let mut failures = Vec::new();
-    for candidate in candidates {
-        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, candidate) {
+    for (fmt, cfg) in candidates {
+        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg.clone()) {
             Ok(mut receiver) => {
                 let buffer_size = receiver
                     ._stream
@@ -178,10 +179,11 @@ pub(crate) fn make_single_input(
                     .flatten()
                     .unwrap_or(0);
                 log::info!(
-                    "Selected input stream: {}ch {}Hz {} {:?}",
-                    candidate.channels(),
-                    candidate.sample_rate(),
-                    candidate.sample_format(),
+                    "Selected input stream: {}ch {}Hz {} req={:?} actual={}",
+                    cfg.channels,
+                    cfg.sample_rate,
+                    fmt,
+                    cfg.buffer_size,
                     buffer_size
                 );
                 return Ok(receiver);
@@ -197,7 +199,8 @@ pub(crate) fn make_single_input(
 }
 
 fn setup_input_stream(
-    config: SupportedStreamConfig,
+    sample_format: SampleFormat,
+    config: StreamConfig,
     device: &Device,
     producer: rtrb::Producer<f32>,
     wake: Arc<tokio::sync::Notify>,
@@ -206,9 +209,9 @@ fn setup_input_stream(
 ) -> anyhow::Result<Stream> {
     let producer = NotifyingProducer::new(producer, wake);
     sample_format_dispatch!(
-        config.sample_format(),
+        sample_format,
         run_input,
-        config.config(),
+        config,
         device,
         producer,
         stats,

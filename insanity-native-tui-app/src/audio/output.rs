@@ -5,7 +5,7 @@ use std::sync::{
 use std::time::Duration;
 
 use cpal::{
-    Device, FromSample, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
+    Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -142,11 +142,11 @@ fn try_output_candidate(
     audio_config: &AudioPipelineConfig,
     reporter: &FatalReporter,
     stats: &Arc<OutputStats>,
-    config: SupportedStreamConfig,
+    sample_format: SampleFormat,
+    cfg: StreamConfig,
 ) -> anyhow::Result<Sink> {
-    let sample_format = config.sample_format();
-    let channels = config.channels();
-    let sample_rate = config.sample_rate();
+    let channels = cfg.channels;
+    let sample_rate = cfg.sample_rate;
     let device_format = AudioFormat::new(channels, sample_rate);
     let device_block = channels as usize * audio_config.frames();
     anyhow::ensure!(device_block > 0, "invalid block size");
@@ -162,7 +162,8 @@ fn try_output_candidate(
     let attempt_device = device.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         build_output_stream(
-            config,
+            sample_format,
+            cfg,
             &attempt_device,
             consumer,
             build_stats,
@@ -205,8 +206,8 @@ impl PayloadBuilder for SinkBuilder {
         log::debug!("Trying {} ranked output configs", candidates.len());
         log::trace!("Candidate configs: {candidates:?}");
         let mut failures = Vec::new();
-        for candidate in candidates {
-            match try_output_candidate(&device.0, config, &reporter, stats, candidate) {
+        for (sample_format, cfg) in candidates {
+            match try_output_candidate(&device.0, config, &reporter, stats, sample_format, cfg.clone()) {
                 Ok(mut sink) => {
                     let buffer_size = sink
                         .stream
@@ -215,10 +216,11 @@ impl PayloadBuilder for SinkBuilder {
                         .flatten()
                         .unwrap_or(0);
                     log::info!(
-                        "Selected output stream: {}ch {}Hz {} {}",
-                        candidate.channels(),
-                        candidate.sample_rate(),
-                        candidate.sample_format(),
+                        "Selected output stream: {}ch {}Hz {} req={:?} actual={}",
+                        cfg.channels,
+                        cfg.sample_rate,
+                        sample_format,
+                        cfg.buffer_size,
                         buffer_size
                     );
                     let info = DeviceInfo {
@@ -415,16 +417,17 @@ async fn run_output_owner(
 }
 
 fn build_output_stream(
-    config: SupportedStreamConfig,
+    sample_format: SampleFormat,
+    config: StreamConfig,
     device: &Device,
     consumer: Consumer<f32>,
     stats: Arc<OutputStats>,
     reporter: FatalReporter,
 ) -> anyhow::Result<Stream> {
     sample_format_dispatch!(
-        config.sample_format(),
+        sample_format,
         run_output,
-        config.config(),
+        config,
         device,
         consumer,
         stats,
