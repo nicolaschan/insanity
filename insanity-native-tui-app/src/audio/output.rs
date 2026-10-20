@@ -207,14 +207,13 @@ impl PayloadBuilder for SinkBuilder {
         log::trace!("Candidate configs: {candidates:?}");
         let mut failures = Vec::new();
         for (sample_format, cfg) in candidates {
-            match try_output_candidate(&device.0, config, &reporter, stats, sample_format, cfg.clone()) {
+            match try_output_candidate(&device.0, config, &reporter, stats, sample_format, cfg) {
                 Ok(mut sink) => {
-                    let buffer_size = sink
+                    let buffer_size: Option<u32> = sink
                         .stream
                         .as_mut()
                         .and_then(|w| w.execute(|r| r.as_ref().ok()?.buffer_size().ok()).ok())
-                        .flatten()
-                        .unwrap_or(0);
+                        .flatten();
                     log::info!(
                         "Selected output stream: {}ch {}Hz {} req={:?} actual={}",
                         cfg.channels,
@@ -222,6 +221,8 @@ impl PayloadBuilder for SinkBuilder {
                         sample_format,
                         cfg.buffer_size,
                         buffer_size
+                            .map(|s| s.to_string())
+                            .unwrap_or("unknown".to_string())
                     );
                     let info = DeviceInfo {
                         name: name.clone(),

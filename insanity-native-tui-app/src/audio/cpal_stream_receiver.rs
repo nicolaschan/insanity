@@ -170,14 +170,13 @@ pub(crate) fn make_single_input(
     let wake = Arc::new(tokio::sync::Notify::new());
     let mut failures = Vec::new();
     for (fmt, cfg) in candidates {
-        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg.clone()) {
+        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg) {
             Ok(mut receiver) => {
                 let buffer_size = receiver
                     ._stream
                     .execute(|r| r.as_ref().ok()?.buffer_size().ok())
                     .ok()
-                    .flatten()
-                    .unwrap_or(0);
+                    .flatten();
                 log::info!(
                     "Selected input stream: {}ch {}Hz {} req={:?} actual={}",
                     cfg.channels,
@@ -185,6 +184,8 @@ pub(crate) fn make_single_input(
                     fmt,
                     cfg.buffer_size,
                     buffer_size
+                        .map(|s| s.to_string())
+                        .unwrap_or("unknown".to_string())
                 );
                 return Ok(receiver);
             }

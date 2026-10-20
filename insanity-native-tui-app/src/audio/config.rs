@@ -50,8 +50,7 @@ fn find_supported_config<'a>(
                 && r.contains_rate(audio_config.sample_rate())
                 && r.sample_format() == SampleFormat::F32
         })
-        .map(|r| r.try_with_sample_rate(audio_config.sample_rate()))
-        .flatten()
+        .and_then(|r| r.try_with_sample_rate(audio_config.sample_rate()))
         .map(|s| to_stream_pair(s, audio_config.frames() as u32))
 }
 
@@ -66,13 +65,19 @@ fn is_streamable_format(format: SampleFormat) -> bool {
 fn cpal_config_prioritization(
     mut ranges: Vec<SupportedStreamConfigRange>,
     frames: u32,
+    sample_rate: u32,
 ) -> impl Iterator<Item = (SampleFormat, StreamConfig)> {
     // `cmp_default_heuristics` ranks the best config greatest
     ranges.sort_by(|lhs, rhs| rhs.cmp_default_heuristics(lhs));
     ranges
         .into_iter()
         .filter(|r| is_streamable_format(r.sample_format()))
-        .filter_map(|r| r.try_with_standard_sample_rate())
+        .filter_map(move |r| {
+            r.try_with_standard_sample_rate().or_else(|| {
+                let rate = sample_rate.clamp(r.min_sample_rate(), r.max_sample_rate());
+                r.try_with_sample_rate(rate)
+            })
+        })
         .map(move |s| to_stream_pair(s, frames))
 }
 
@@ -85,7 +90,11 @@ fn app_config_prioritization(
     find_supported_config(ranges.iter(), audio_config)
         .into_iter()
         .chain(default_config.map(|s| to_stream_pair(s, frames)))
-        .chain(cpal_config_prioritization(ranges, frames))
+        .chain(cpal_config_prioritization(
+            ranges,
+            frames,
+            audio_config.sample_rate(),
+        ))
         .collect()
 }
 
@@ -211,5 +220,42 @@ mod tests {
                 "{host}"
             );
         }
+    }
+
+    #[test]
+    fn exotic_rate_tail_falls_back_to_clamped_rate() {
+        // Device supports neither 48k nor 44.1k: tail must still offer a
+        // candidate at the nearest edge instead of dropping the range.
+        let low = single_rate_ch(2, 16000, SampleFormat::F32);
+        let high = single_rate_ch(1, 96000, SampleFormat::F32);
+        let ordered =
+            app_config_prioritization(vec![low, high], None, &AudioPipelineConfig::default());
+        assert!(!ordered.is_empty());
+        assert!(
+            ordered
+                .iter()
+                .any(|(_, cfg)| cfg.sample_rate == 16000 && cfg.channels == 2)
+        );
+        assert!(
+            ordered
+                .iter()
+                .any(|(_, cfg)| cfg.sample_rate == 96000 && cfg.channels == 1)
+        );
+    }
+
+    #[test]
+    fn standard_rate_tail_prefers_48k() {
+        // 1ch so the exact-pipeline slot (2ch) misses and the tail decides.
+        let range = cpal::SupportedStreamConfigRange::new(
+            1,
+            44100,
+            48000,
+            SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        );
+        let ordered = app_config_prioritization(vec![range], None, &AudioPipelineConfig::default());
+        // Tail must resolve to 48k first, not 44.1k.
+        assert!(!ordered.is_empty());
+        assert_eq!(ordered[0].1.sample_rate, 48000);
     }
 }
