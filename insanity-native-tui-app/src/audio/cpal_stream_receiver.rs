@@ -4,13 +4,12 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use anyhow::Context;
 use cpal::{
     Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
 
-use super::config::{STREAM_BUILD_TIMEOUT, get_input_config};
+use super::config::{STREAM_BUILD_TIMEOUT, ordered_input_configs};
 use super::cpal_stream::sample_format_dispatch;
 use super::mixer::RING_CAPACITY_BLOCKS;
 use super::stream_errors::FatalReporter;
@@ -165,18 +164,28 @@ pub(crate) fn make_single_input(
     reporter: FatalReporter,
     stats: &Arc<InputStats>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let candidates = get_input_config(&device, audio_config)
-        .context("Failed to get input config, parking input until a device appears")?;
+    let candidates = ordered_input_configs(&device, audio_config);
     log::debug!("Trying {} ranked input configs", candidates.len());
+    log::trace!("Candidate configs: {candidates:?}");
     let wake = Arc::new(tokio::sync::Notify::new());
     let mut failures = Vec::new();
     for (fmt, cfg) in candidates {
         match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg) {
-            Ok(receiver) => {
+            Ok(mut receiver) => {
+                let buffer_size = receiver
+                    ._stream
+                    .execute(|r| r.as_ref().ok()?.buffer_size().ok())
+                    .ok()
+                    .flatten();
                 log::info!(
-                    "Selected input stream: {}ch {}Hz {fmt:?}",
+                    "Selected input stream: {}ch {}Hz {} req={:?} actual={}",
                     cfg.channels,
                     cfg.sample_rate,
+                    fmt,
+                    cfg.buffer_size,
+                    buffer_size
+                        .map(|s| s.to_string())
+                        .unwrap_or("unknown".to_string())
                 );
                 return Ok(receiver);
             }

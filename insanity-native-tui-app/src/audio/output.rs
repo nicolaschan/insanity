@@ -4,13 +4,14 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use anyhow::Context;
-use cpal::traits::{DeviceTrait, StreamTrait};
-use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{
+    Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
+    traits::{DeviceTrait, StreamTrait},
+};
 use rtrb::{Consumer, Producer, RingBuffer};
 use tokio::sync::{mpsc, watch};
 
-use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
+use super::config::{STREAM_BUILD_TIMEOUT, ordered_output_configs};
 use super::cpal_stream::sample_format_dispatch;
 use super::handoff::{HANDOFF_BOUND, HandoffRequest};
 use super::mixer::{
@@ -138,7 +139,7 @@ pub(crate) struct SinkBuilder;
 
 fn try_output_candidate(
     device: &Device,
-    config: &AudioPipelineConfig,
+    audio_config: &AudioPipelineConfig,
     reporter: &FatalReporter,
     stats: &Arc<OutputStats>,
     sample_format: SampleFormat,
@@ -147,11 +148,11 @@ fn try_output_candidate(
     let channels = cfg.channels;
     let sample_rate = cfg.sample_rate;
     let device_format = AudioFormat::new(channels, sample_rate);
-    let device_block = channels as usize * config.frames();
+    let device_block = channels as usize * audio_config.frames();
     anyhow::ensure!(device_block > 0, "invalid block size");
     let (producer, consumer) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
     let converter = FormatConverter::<StreamResampler>::new(
-        config.audio_format().clone(),
+        audio_config.audio_format().clone(),
         device_format.clone(),
         device_block,
         device_block * RING_CAPACITY_BLOCKS,
@@ -201,18 +202,27 @@ impl PayloadBuilder for SinkBuilder {
         reporter: FatalReporter,
     ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
         let name = device.name();
-        let candidates = get_output_config(&device.0, config).context(format!(
-            "Failed to get output config for {name}, parking output"
-        ))?;
+        let candidates = ordered_output_configs(&device.0, config);
         log::debug!("Trying {} ranked output configs", candidates.len());
+        log::trace!("Candidate configs: {candidates:?}");
         let mut failures = Vec::new();
         for (sample_format, cfg) in candidates {
             match try_output_candidate(&device.0, config, &reporter, stats, sample_format, cfg) {
-                Ok(sink) => {
+                Ok(mut sink) => {
+                    let buffer_size: Option<u32> = sink
+                        .stream
+                        .as_mut()
+                        .and_then(|w| w.execute(|r| r.as_ref().ok()?.buffer_size().ok()).ok())
+                        .flatten();
                     log::info!(
-                        "Selected output stream: {}ch {}Hz {sample_format:?}",
+                        "Selected output stream: {}ch {}Hz {} req={:?} actual={}",
                         cfg.channels,
                         cfg.sample_rate,
+                        sample_format,
+                        cfg.buffer_size,
+                        buffer_size
+                            .map(|s| s.to_string())
+                            .unwrap_or("unknown".to_string())
                     );
                     let info = DeviceInfo {
                         name: name.clone(),
