@@ -207,12 +207,19 @@ impl PayloadBuilder for SinkBuilder {
         let mut failures = Vec::new();
         for candidate in candidates {
             match try_output_candidate(&device.0, config, &reporter, stats, candidate) {
-                Ok(sink) => {
+                Ok(mut sink) => {
+                    let buffer_size = sink
+                        .stream
+                        .as_mut()
+                        .and_then(|w| w.execute(|r| r.as_ref().ok()?.buffer_size().ok()).ok())
+                        .flatten()
+                        .unwrap_or(0);
                     log::info!(
-                        "Selected output stream: {}ch {}Hz {}",
+                        "Selected output stream: {}ch {}Hz {} {}",
                         candidate.channels(),
                         candidate.sample_rate(),
-                        candidate.sample_format()
+                        candidate.sample_format(),
+                        buffer_size
                     );
                     let info = DeviceInfo {
                         name: name.clone(),

@@ -170,12 +170,19 @@ pub(crate) fn make_single_input(
     let mut failures = Vec::new();
     for candidate in candidates {
         match try_input_candidate(&device, audio_config, &reporter, stats, &wake, candidate) {
-            Ok(receiver) => {
+            Ok(mut receiver) => {
+                let buffer_size = receiver
+                    ._stream
+                    .execute(|r| r.as_ref().ok()?.buffer_size().ok())
+                    .ok()
+                    .flatten()
+                    .unwrap_or(0);
                 log::info!(
-                    "Selected input stream: {}ch {}Hz {}",
+                    "Selected input stream: {}ch {}Hz {} {:?}",
                     candidate.channels(),
                     candidate.sample_rate(),
-                    candidate.sample_format()
+                    candidate.sample_format(),
+                    buffer_size
                 );
                 return Ok(receiver);
             }
