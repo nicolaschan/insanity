@@ -4,13 +4,12 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
-use anyhow::Context;
 use cpal::{
-    Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
+    Device, FromSample, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
 
-use super::config::{STREAM_BUILD_TIMEOUT, get_input_config};
+use super::config::{STREAM_BUILD_TIMEOUT, ordered_input_configs};
 use super::cpal_stream::sample_format_dispatch;
 use super::mixer::RING_CAPACITY_BLOCKS;
 use super::stream_errors::FatalReporter;
@@ -115,11 +114,11 @@ fn try_input_candidate(
     reporter: &FatalReporter,
     stats: &Arc<InputStats>,
     wake: &Arc<tokio::sync::Notify>,
-    fmt: SampleFormat,
-    cfg: StreamConfig,
+    config: SupportedStreamConfig,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let channels = cfg.channels;
-    let sample_rate = cfg.sample_rate;
+    let sample_format = config.sample_format();
+    let channels = config.channels();
+    let sample_rate = config.sample_rate();
     let format = AudioFormat::new(channels, sample_rate);
     let block_samples = channels as usize * audio_config.frames();
     anyhow::ensure!(block_samples > 0, "invalid block size");
@@ -130,8 +129,7 @@ fn try_input_candidate(
     let attempt_device = device.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         setup_input_stream(
-            fmt,
-            cfg,
+            config,
             &attempt_device,
             producer,
             build_wake,
@@ -148,8 +146,8 @@ fn try_input_candidate(
         })
         .unwrap_or_else(|_| Some("audio thread died".to_string()))
     {
-        log::trace!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
-        anyhow::bail!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
+        log::trace!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
+        anyhow::bail!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
     }
     Ok(CpalStreamReceiver {
         _stream: wrapper,
@@ -165,18 +163,19 @@ pub(crate) fn make_single_input(
     reporter: FatalReporter,
     stats: &Arc<InputStats>,
 ) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let candidates = get_input_config(&device, audio_config)
-        .context("Failed to get input config, parking input until a device appears")?;
+    let candidates = ordered_input_configs(&device, audio_config);
     log::debug!("Trying {} ranked input configs", candidates.len());
+    log::trace!("Candidate configs: {candidates:?}");
     let wake = Arc::new(tokio::sync::Notify::new());
     let mut failures = Vec::new();
-    for (fmt, cfg) in candidates {
-        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg) {
+    for candidate in candidates {
+        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, candidate) {
             Ok(receiver) => {
                 log::info!(
-                    "Selected input stream: {}ch {}Hz {fmt:?}",
-                    cfg.channels,
-                    cfg.sample_rate,
+                    "Selected input stream: {}ch {}Hz {}",
+                    candidate.channels(),
+                    candidate.sample_rate(),
+                    candidate.sample_format()
                 );
                 return Ok(receiver);
             }
@@ -191,8 +190,7 @@ pub(crate) fn make_single_input(
 }
 
 fn setup_input_stream(
-    sample_format: SampleFormat,
-    config: StreamConfig,
+    config: SupportedStreamConfig,
     device: &Device,
     producer: rtrb::Producer<f32>,
     wake: Arc<tokio::sync::Notify>,
@@ -201,9 +199,9 @@ fn setup_input_stream(
 ) -> anyhow::Result<Stream> {
     let producer = NotifyingProducer::new(producer, wake);
     sample_format_dispatch!(
-        sample_format,
+        config.sample_format(),
         run_input,
-        config,
+        config.config(),
         device,
         producer,
         stats,

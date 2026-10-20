@@ -4,13 +4,14 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use anyhow::Context;
-use cpal::traits::{DeviceTrait, StreamTrait};
-use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{
+    Device, FromSample, SizedSample, Stream, StreamConfig, SupportedStreamConfig,
+    traits::{DeviceTrait, StreamTrait},
+};
 use rtrb::{Consumer, Producer, RingBuffer};
 use tokio::sync::{mpsc, watch};
 
-use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
+use super::config::{STREAM_BUILD_TIMEOUT, ordered_output_configs};
 use super::cpal_stream::sample_format_dispatch;
 use super::handoff::{HANDOFF_BOUND, HandoffRequest};
 use super::mixer::{
@@ -138,20 +139,20 @@ pub(crate) struct SinkBuilder;
 
 fn try_output_candidate(
     device: &Device,
-    config: &AudioPipelineConfig,
+    audio_config: &AudioPipelineConfig,
     reporter: &FatalReporter,
     stats: &Arc<OutputStats>,
-    sample_format: SampleFormat,
-    cfg: StreamConfig,
+    config: SupportedStreamConfig,
 ) -> anyhow::Result<Sink> {
-    let channels = cfg.channels;
-    let sample_rate = cfg.sample_rate;
+    let sample_format = config.sample_format();
+    let channels = config.channels();
+    let sample_rate = config.sample_rate();
     let device_format = AudioFormat::new(channels, sample_rate);
-    let device_block = channels as usize * config.frames();
+    let device_block = channels as usize * audio_config.frames();
     anyhow::ensure!(device_block > 0, "invalid block size");
     let (producer, consumer) = RingBuffer::new(device_block * RING_CAPACITY_BLOCKS);
     let converter = FormatConverter::<StreamResampler>::new(
-        config.audio_format().clone(),
+        audio_config.audio_format().clone(),
         device_format.clone(),
         device_block,
         device_block * RING_CAPACITY_BLOCKS,
@@ -161,8 +162,7 @@ fn try_output_candidate(
     let attempt_device = device.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
         build_output_stream(
-            sample_format,
-            cfg,
+            config,
             &attempt_device,
             consumer,
             build_stats,
@@ -201,18 +201,18 @@ impl PayloadBuilder for SinkBuilder {
         reporter: FatalReporter,
     ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
         let name = device.name();
-        let candidates = get_output_config(&device.0, config).context(format!(
-            "Failed to get output config for {name}, parking output"
-        ))?;
+        let candidates = ordered_output_configs(&device.0, config);
         log::debug!("Trying {} ranked output configs", candidates.len());
+        log::trace!("Candidate configs: {candidates:?}");
         let mut failures = Vec::new();
-        for (sample_format, cfg) in candidates {
-            match try_output_candidate(&device.0, config, &reporter, stats, sample_format, cfg) {
+        for candidate in candidates {
+            match try_output_candidate(&device.0, config, &reporter, stats, candidate) {
                 Ok(sink) => {
                     log::info!(
-                        "Selected output stream: {}ch {}Hz {sample_format:?}",
-                        cfg.channels,
-                        cfg.sample_rate,
+                        "Selected output stream: {}ch {}Hz {}",
+                        candidate.channels(),
+                        candidate.sample_rate(),
+                        candidate.sample_format()
                     );
                     let info = DeviceInfo {
                         name: name.clone(),
@@ -408,17 +408,16 @@ async fn run_output_owner(
 }
 
 fn build_output_stream(
-    sample_format: SampleFormat,
-    config: StreamConfig,
+    config: SupportedStreamConfig,
     device: &Device,
     consumer: Consumer<f32>,
     stats: Arc<OutputStats>,
     reporter: FatalReporter,
 ) -> anyhow::Result<Stream> {
     sample_format_dispatch!(
-        sample_format,
+        config.sample_format(),
         run_output,
-        config,
+        config.config(),
         device,
         consumer,
         stats,
