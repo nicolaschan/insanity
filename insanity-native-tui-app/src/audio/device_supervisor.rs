@@ -241,22 +241,15 @@ struct DeviceLiveness {
     count: u64,
     switched_at: std::time::Instant,
     last_advance: std::time::Instant,
-    deadline: std::time::Duration,
 }
 
 impl DeviceLiveness {
-    fn new(
-        now: std::time::Instant,
-        generation: u64,
-        count: u64,
-        stall_timeout: std::time::Duration,
-    ) -> Self {
+    fn new(now: std::time::Instant, generation: u64, count: u64) -> Self {
         DeviceLiveness {
             generation,
             count,
             switched_at: now,
             last_advance: now,
-            deadline: stall_timeout,
         }
     }
 
@@ -268,14 +261,18 @@ impl DeviceLiveness {
         generation: u64,
         current_name: &str,
         count: u64,
-        stall_timeout: std::time::Duration,
+        period: Option<std::time::Duration>,
     ) -> bool {
-        self.deadline = stall_timeout;
+        let stall_timeout = stall_timeout_for_period(period);
         if generation != self.generation {
             self.generation = generation;
             self.count = count;
             self.switched_at = now;
             self.last_advance = now;
+            log::info!(
+                "DeviceLiveness: device {current_name} switched to generation {generation}: \
+                 period={period:?} deadline={stall_timeout:?}"
+            );
             return false;
         }
         if current_name == DUMMY_DEVICE_NAME {
@@ -291,7 +288,7 @@ impl DeviceLiveness {
         if now < self.switched_at + STARTUP_GRACE {
             return false;
         }
-        now.duration_since(self.last_advance) > self.deadline
+        now.duration_since(self.last_advance) > stall_timeout
     }
 }
 
@@ -309,13 +306,11 @@ pub(crate) async fn run_device_supervisor(
         std::time::Instant::now(),
         input.generation(),
         input.stats().data_callbacks(),
-        stall_timeout_for_period(input.stats().callback_period()),
     );
     let mut output_liveness = DeviceLiveness::new(
         std::time::Instant::now(),
         output.generation(),
         output.stats().data_callbacks(),
-        stall_timeout_for_period(output.stats().callback_period()),
     );
     loop {
         tokio::select! {
@@ -350,7 +345,7 @@ pub(crate) async fn run_device_supervisor(
                     input.generation(),
                     &input.current_name(),
                     input.stats().data_callbacks(),
-                    stall_timeout_for_period(input.stats().callback_period()),
+                    input.stats().callback_period(),
                 ) {
                     log::warn!("Input stalled (no data callbacks), falling back to dummy device");
                     input.adopt_dummy();
@@ -360,7 +355,7 @@ pub(crate) async fn run_device_supervisor(
                     output.generation(),
                     &output.current_name(),
                     output.stats().data_callbacks(),
-                    stall_timeout_for_period(output.stats().callback_period()),
+                    output.stats().callback_period(),
                 ) {
                     log::warn!("Output stalled (no data callbacks), falling back to dummy device");
                     output.adopt_dummy();
@@ -385,17 +380,17 @@ mod tests {
         Duration::from_millis(n)
     }
 
-    fn live_at(now: Instant, deadline: Duration) -> DeviceLiveness {
-        DeviceLiveness::new(now, 1, 10, deadline)
+    fn live_at(now: Instant) -> DeviceLiveness {
+        DeviceLiveness::new(now, 1, 10)
     }
 
     #[test]
     fn frozen_count_inside_grace_is_not_dead() {
         let t0 = Instant::now();
-        let mut liveness = live_at(t0, ms(500));
+        let mut liveness = live_at(t0);
         for dt in [100, 200, 1000] {
             assert!(
-                !liveness.poll_check_dead(t0 + ms(dt), 1, "device", 10, ms(500)),
+                !liveness.poll_check_dead(t0 + ms(dt), 1, "device", 10, Some(ms(100))),
                 "frozen count at +{dt}ms must not trip inside grace"
             );
         }
@@ -404,20 +399,32 @@ mod tests {
     #[test]
     fn frozen_count_past_grace_and_deadline_is_dead() {
         let t0 = Instant::now();
-        let mut liveness = live_at(t0, ms(500));
+        let mut liveness = live_at(t0);
         // Inside grace but past deadline: grace wins.
-        assert!(!liveness.poll_check_dead(t0 + ms(1000), 1, "device", 10, ms(500)));
+        assert!(!liveness.poll_check_dead(t0 + ms(1000), 1, "device", 10, Some(ms(100))));
         // Past both: dead.
-        assert!(liveness.poll_check_dead(t0 + STARTUP_GRACE + ms(501), 1, "device", 10, ms(500)));
+        assert!(liveness.poll_check_dead(
+            t0 + STARTUP_GRACE + ms(501),
+            1,
+            "device",
+            10,
+            Some(ms(100))
+        ));
     }
 
     #[test]
     fn generation_switch_resnapshots_deadline() {
         let t0 = Instant::now();
-        let mut liveness = live_at(t0, ms(500));
+        let mut liveness = live_at(t0);
         let switch_at = t0 + STARTUP_GRACE + ms(10_000);
         // New generation carries a longer (5s) deadline.
-        assert!(!liveness.poll_check_dead(switch_at, 2, "device", 10, ms(5000)));
+        assert!(!liveness.poll_check_dead(
+            switch_at,
+            2,
+            "device",
+            10,
+            Some(Duration::from_secs(2))
+        ));
         // Past grace and past the old 500ms deadline, but within the new one:
         // alive, proving the fresh deadline governs.
         assert!(!liveness.poll_check_dead(
@@ -425,7 +432,7 @@ mod tests {
             2,
             "device",
             10,
-            ms(5000)
+            Some(Duration::from_secs(2))
         ));
         // Past the new deadline: dead.
         assert!(liveness.poll_check_dead(
@@ -433,7 +440,7 @@ mod tests {
             2,
             "device",
             10,
-            ms(5000)
+            Some(Duration::from_secs(2))
         ));
     }
 
