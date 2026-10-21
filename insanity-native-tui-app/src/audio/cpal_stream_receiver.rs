@@ -21,6 +21,7 @@ use insanity_core::audio::sample::SampleSource;
 pub(crate) struct InputStats {
     overruns: AtomicUsize,
     data_callbacks: AtomicU64,
+    callback_period_us: AtomicU64,
 }
 
 impl InputStats {
@@ -34,6 +35,23 @@ impl InputStats {
 
     pub(crate) fn data_callbacks(&self) -> u64 {
         self.data_callbacks.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_callback_period(&self, frames: u32, sample_rate: u32) {
+        if sample_rate == 0 {
+            return;
+        }
+        let micros = frames as u64 * 1_000_000 / sample_rate as u64;
+        self.callback_period_us.store(micros, Ordering::Release);
+    }
+
+    pub(crate) fn callback_period(&self) -> Option<std::time::Duration> {
+        let micros = self.callback_period_us.load(Ordering::Acquire);
+        if micros == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_micros(micros))
+        }
     }
 
     pub(crate) fn overruns(&self) -> usize {
@@ -172,18 +190,26 @@ pub(crate) fn make_single_input(
     for (fmt, cfg) in candidates {
         match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg) {
             Ok(mut receiver) => {
-                let buffer_size = receiver
+                let actual: Option<u32> = receiver
                     ._stream
                     .execute(|r| r.as_ref().ok()?.buffer_size().ok())
                     .ok()
                     .flatten();
+                // Fall back to requested pipeline frames.
+                let frames = actual
+                    .or(match cfg.buffer_size {
+                        cpal::BufferSize::Fixed(n) => Some(n),
+                        cpal::BufferSize::Default => None,
+                    })
+                    .unwrap_or_else(|| u32::try_from(audio_config.frames()).unwrap_or(u32::MAX));
+                stats.set_callback_period(frames, cfg.sample_rate);
                 log::info!(
                     "Selected input stream: {}ch {}Hz {} req={:?} actual={}",
                     cfg.channels,
                     cfg.sample_rate,
                     fmt,
                     cfg.buffer_size,
-                    buffer_size
+                    actual
                         .map(|s| s.to_string())
                         .unwrap_or("unknown".to_string())
                 );

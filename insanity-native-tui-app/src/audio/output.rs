@@ -41,6 +41,7 @@ pub(crate) struct OutputStats {
     total_nanos: AtomicU64,
     fills: AtomicUsize,
     data_callbacks: AtomicU64,
+    callback_period_us: AtomicU64,
 }
 
 impl OutputStats {
@@ -58,6 +59,23 @@ impl OutputStats {
 
     pub(crate) fn data_callbacks(&self) -> u64 {
         self.data_callbacks.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_callback_period(&self, frames: u32, sample_rate: u32) {
+        if sample_rate == 0 {
+            return;
+        }
+        let micros = frames as u64 * 1_000_000 / sample_rate as u64;
+        self.callback_period_us.store(micros, Ordering::Release);
+    }
+
+    pub(crate) fn callback_period(&self) -> Option<std::time::Duration> {
+        let micros = self.callback_period_us.load(Ordering::Acquire);
+        if micros == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_micros(micros))
+        }
     }
 
     pub(crate) fn underruns(&self) -> usize {
@@ -209,18 +227,26 @@ impl PayloadBuilder for SinkBuilder {
         for (sample_format, cfg) in candidates {
             match try_output_candidate(&device.0, config, &reporter, stats, sample_format, cfg) {
                 Ok(mut sink) => {
-                    let buffer_size: Option<u32> = sink
+                    let actual: Option<u32> = sink
                         .stream
                         .as_mut()
                         .and_then(|w| w.execute(|r| r.as_ref().ok()?.buffer_size().ok()).ok())
                         .flatten();
+                    // Fall back to requested pipeline frames.
+                    let frames = actual
+                        .or(match cfg.buffer_size {
+                            cpal::BufferSize::Fixed(n) => Some(n),
+                            cpal::BufferSize::Default => None,
+                        })
+                        .unwrap_or_else(|| u32::try_from(config.frames()).unwrap_or(u32::MAX));
+                    stats.set_callback_period(frames, cfg.sample_rate);
                     log::info!(
                         "Selected output stream: {}ch {}Hz {} req={:?} actual={}",
                         cfg.channels,
                         cfg.sample_rate,
                         sample_format,
                         cfg.buffer_size,
-                        buffer_size
+                        actual
                             .map(|s| s.to_string())
                             .unwrap_or("unknown".to_string())
                     );
