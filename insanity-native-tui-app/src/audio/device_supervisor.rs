@@ -270,12 +270,12 @@ impl DeviceLiveness {
         count: u64,
         stall_timeout: std::time::Duration,
     ) -> bool {
+        self.deadline = stall_timeout;
         if generation != self.generation {
             self.generation = generation;
             self.count = count;
             self.switched_at = now;
             self.last_advance = now;
-            self.deadline = stall_timeout;
             return false;
         }
         if current_name == DUMMY_DEVICE_NAME {
@@ -409,6 +409,32 @@ mod tests {
         assert!(!liveness.poll_check_dead(t0 + ms(1000), 1, "device", 10, ms(500)));
         // Past both: dead.
         assert!(liveness.poll_check_dead(t0 + STARTUP_GRACE + ms(501), 1, "device", 10, ms(500)));
+    }
+
+    #[test]
+    fn generation_switch_resnapshots_deadline() {
+        let t0 = Instant::now();
+        let mut liveness = live_at(t0, ms(500));
+        let switch_at = t0 + STARTUP_GRACE + ms(10_000);
+        // New generation carries a longer (5s) deadline.
+        assert!(!liveness.poll_check_dead(switch_at, 2, "device", 10, ms(5000)));
+        // Past grace and past the old 500ms deadline, but within the new one:
+        // alive, proving the fresh deadline governs.
+        assert!(!liveness.poll_check_dead(
+            switch_at + STARTUP_GRACE + ms(600),
+            2,
+            "device",
+            10,
+            ms(5000)
+        ));
+        // Past the new deadline: dead.
+        assert!(liveness.poll_check_dead(
+            switch_at + STARTUP_GRACE + ms(5001),
+            2,
+            "device",
+            10,
+            ms(5000)
+        ));
     }
 
     #[test]
