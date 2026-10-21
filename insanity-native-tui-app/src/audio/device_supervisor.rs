@@ -112,6 +112,10 @@ where
         self.generation.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn pipeline_config(&self) -> AudioPipelineConfig {
+        self.config
+    }
+
     fn _switch_to(&mut self, id: &str, name: &str) -> anyhow::Result<()> {
         let device = DeviceRegistry::find(id, name).context("Requested device not found")?;
         self.adopt(device)?;
@@ -153,8 +157,15 @@ where
     fn adopt(&mut self, device: CpalAudioDevice) -> anyhow::Result<()> {
         let next = self.generation.load(Ordering::Relaxed) + 1;
         let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
+        let started = std::time::Instant::now();
         let (payload, info) = Builder::build(device, &self.config, &self.stats, reporter)
             .context("Failed to build device")?;
+        log::debug!(
+            "Built device {} (generation {}) in {:?}",
+            info.name,
+            next,
+            started.elapsed()
+        );
         self.send(payload, info, next)?;
         self.generation.store(next, Ordering::Relaxed);
         Ok(())
@@ -177,7 +188,7 @@ where
         };
         self.switch_tx
             .try_send(request)
-            .map_err(|_| anyhow::anyhow!("Failed to send switch request"))
+            .map_err(|e| anyhow::anyhow!("Failed to send switch request: {e}"))
     }
 }
 
@@ -214,6 +225,11 @@ fn device_lists() -> (DeviceList, DeviceList) {
 
 pub(crate) fn refresh_device_events(input: &InputManager, output: &OutputManager) -> Vec<AppEvent> {
     let (inputs, outputs) = device_lists();
+    log::trace!(
+        "Audio devices: inputs={:?} outputs={:?}",
+        inputs.iter().map(|(_, name)| name).collect::<Vec<_>>(),
+        outputs.iter().map(|(_, name)| name).collect::<Vec<_>>()
+    );
     vec![
         AppEvent::SetInputDevices(inputs),
         AppEvent::SetOutputDevices(outputs),
@@ -241,6 +257,7 @@ struct DeviceLiveness {
     count: u64,
     switched_at: std::time::Instant,
     last_advance: std::time::Instant,
+    advanced_since_switch: bool,
 }
 
 impl DeviceLiveness {
@@ -250,7 +267,12 @@ impl DeviceLiveness {
             count,
             switched_at: now,
             last_advance: now,
+            advanced_since_switch: false,
         }
+    }
+
+    fn frozen_for(&self, now: std::time::Instant) -> std::time::Duration {
+        now.saturating_duration_since(self.last_advance)
     }
 
     /// True when current device is not dummy, the startup grace has elapsed,
@@ -269,9 +291,9 @@ impl DeviceLiveness {
             self.count = count;
             self.switched_at = now;
             self.last_advance = now;
+            self.advanced_since_switch = false;
             log::info!(
-                "DeviceLiveness: device {current_name} switched to generation {generation}: \
-                 period={period:?} deadline={stall_timeout:?}"
+                "DeviceLiveness: device {current_name} switched to generation {generation}: period={period:?} deadline={stall_timeout:?}"
             );
             return false;
         }
@@ -283,6 +305,14 @@ impl DeviceLiveness {
         if count != self.count {
             self.count = count;
             self.last_advance = now;
+            if !self.advanced_since_switch {
+                self.advanced_since_switch = true;
+                log::debug!(
+                    "DeviceLiveness: device {current_name} first callback {:?} \
+                     after switch (generation {generation})",
+                    now.duration_since(self.switched_at)
+                );
+            }
             return false;
         }
         if now < self.switched_at + STARTUP_GRACE {
@@ -300,6 +330,18 @@ pub(crate) async fn run_device_supervisor(
 ) {
     let input_fatal = input.fatal_signal();
     let output_fatal = output.fatal_signal();
+    {
+        let pipeline = input.pipeline_config();
+        log::info!(
+            "Audio supervisor starting: host={} pipeline=({}ch {}Hz frames={}) input={} output={}",
+            super::cpal_registry::shared_host().id().name(),
+            pipeline.channels(),
+            pipeline.sample_rate(),
+            pipeline.frames(),
+            input.current_name(),
+            output.current_name()
+        );
+    }
     let mut liveness_tick = tokio::time::interval(WATCHDOG_INTERVAL);
     liveness_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut input_liveness = DeviceLiveness::new(
@@ -316,7 +358,10 @@ pub(crate) async fn run_device_supervisor(
         tokio::select! {
             _ = input_fatal.notified() => {
                 if input_fatal.generation() == input.generation() {
-                    log::info!("Input stream failed, falling back to dummy device");
+                    log::info!(
+                        "Input stream failed ({:?}), falling back to dummy device",
+                        super::stream_errors::input_fatal_kind()
+                    );
                     input.adopt_dummy();
                     send_refresh(&app_event_tx, &input, &output);
                 } else {
@@ -328,7 +373,10 @@ pub(crate) async fn run_device_supervisor(
             }
             _ = output_fatal.notified() => {
                 if output_fatal.generation() == output.generation() {
-                    log::info!("Output stream failed, falling back to dummy device");
+                    log::info!(
+                        "Output stream failed ({:?}), falling back to dummy device",
+                        super::stream_errors::output_fatal_kind()
+                    );
                     output.adopt_dummy();
                     send_refresh(&app_event_tx, &input, &output);
                 } else {
@@ -340,24 +388,40 @@ pub(crate) async fn run_device_supervisor(
             }
             _ = liveness_tick.tick() => {
                 let now = std::time::Instant::now();
+                let input_period = input.stats().callback_period();
                 if input_liveness.poll_check_dead(
                     now,
                     input.generation(),
                     &input.current_name(),
                     input.stats().data_callbacks(),
-                    input.stats().callback_period(),
+                    input_period,
                 ) {
-                    log::warn!("Input stalled (no data callbacks), falling back to dummy device");
+                    log::warn!(
+                        "Input stalled (no data callbacks for {:?}, deadline {:?}, \
+                         gen {} {}), falling back to dummy device",
+                        input_liveness.frozen_for(now),
+                        stall_timeout_for_period(input_period),
+                        input.generation(),
+                        input.current_name()
+                    );
                     input.adopt_dummy();
                 }
+                let output_period = output.stats().callback_period();
                 if output_liveness.poll_check_dead(
                     now,
                     output.generation(),
                     &output.current_name(),
                     output.stats().data_callbacks(),
-                    output.stats().callback_period(),
+                    output_period,
                 ) {
-                    log::warn!("Output stalled (no data callbacks), falling back to dummy device");
+                    log::warn!(
+                        "Output stalled (no data callbacks for {:?}, deadline {:?}, \
+                         gen {} {}), falling back to dummy device",
+                        output_liveness.frozen_for(now),
+                        stall_timeout_for_period(output_period),
+                        output.generation(),
+                        output.current_name()
+                    );
                     output.adopt_dummy();
                 }
                 send_refresh(&app_event_tx, &input, &output);

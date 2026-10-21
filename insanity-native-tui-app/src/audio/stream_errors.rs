@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use cpal::ErrorKind;
+use crossbeam_utils::atomic::AtomicCell;
 use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -53,6 +54,18 @@ impl Counters {
 
 static INPUT: Counters = Counters::new();
 static OUTPUT: Counters = Counters::new();
+
+/// Last fatal error kind per direction.
+static INPUT_FATAL_KIND: AtomicCell<Option<ErrorKind>> = AtomicCell::new(None);
+static OUTPUT_FATAL_KIND: AtomicCell<Option<ErrorKind>> = AtomicCell::new(None);
+
+pub(crate) fn input_fatal_kind() -> Option<ErrorKind> {
+    INPUT_FATAL_KIND.take()
+}
+
+pub(crate) fn output_fatal_kind() -> Option<ErrorKind> {
+    OUTPUT_FATAL_KIND.take()
+}
 
 fn is_fatal(kind: ErrorKind) -> bool {
     !matches!(
@@ -113,6 +126,7 @@ impl FatalReporter {
 fn note_input_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
     INPUT.note(kind);
     if is_fatal(kind) {
+        INPUT_FATAL_KIND.store(Some(kind));
         fatal.signal(generation);
     }
 }
@@ -121,6 +135,7 @@ fn note_input_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) 
 fn note_output_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
     OUTPUT.note(kind);
     if is_fatal(kind) {
+        OUTPUT_FATAL_KIND.store(Some(kind));
         fatal.signal(generation);
     }
 }
@@ -204,5 +219,28 @@ mod tests {
         let earlier = StreamErrorCounts { xruns: 3, other: 5 };
         assert!(later.since(earlier).is_zero());
         assert!(!earlier.since(later).is_zero());
+    }
+
+    #[test]
+    fn fatal_kind_follows_production_path() {
+        let _guard = SERIAL.lock().unwrap();
+        // Start clean regardless of test order.
+        let _ = super::input_fatal_kind();
+        let fatal = test_fatal();
+        // Fatal errors record their kind.
+        note_input_error(ErrorKind::DeviceNotAvailable, &fatal, 3);
+        assert_eq!(
+            super::input_fatal_kind(),
+            Some(ErrorKind::DeviceNotAvailable)
+        );
+        // Non-fatals must not clobber the last fatal.
+        note_input_error(ErrorKind::DeviceNotAvailable, &fatal, 4);
+        note_input_error(ErrorKind::Xrun, &fatal, 4);
+        assert_eq!(
+            super::input_fatal_kind(),
+            Some(ErrorKind::DeviceNotAvailable)
+        );
+        // Consumed on take; slot left clean for the next test.
+        assert_eq!(super::input_fatal_kind(), None);
     }
 }
