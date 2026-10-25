@@ -76,7 +76,7 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                built_info::GIT_VERSION.unwrap_or("unknown"),
+                built_info::PKG_VERSION,
                 Style::default().fg(Color::LightBlue),
             ),
         ]),
