@@ -19,7 +19,7 @@ const INSANITY_CONFIG_LOCATION: [&str; 2] = ["insanity", "config.toml"];
 const INSANITY_LOG_FILENAME: &str = "insanity.log";
 
 #[derive(Parser, Debug)]
-#[clap(version = built_info::GIT_VERSION, author = "Nicolas Chan <nicolas@nicolaschan.com>")]
+#[clap(version = built_info::PKG_VERSION, author = "Nicolas Chan <nicolas@nicolaschan.com>")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
