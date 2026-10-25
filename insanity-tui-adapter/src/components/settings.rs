@@ -72,13 +72,18 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     .style(Style::default().fg(Color::White));
     f.render_widget(server_widget, chunks[0]);
 
+    let version = {
+        let mut version = built_info::PKG_VERSION.to_string();
+        if let Some(git_commit_hash) = built_info::GIT_COMMIT_HASH_SHORT {
+            version += ", ";
+            version += git_commit_hash;
+        }
+        version
+    };
     let version_widget = Paragraph::new(vec![
         Line::from(vec![
             Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                built_info::PKG_VERSION,
-                Style::default().fg(Color::LightBlue),
-            ),
+            Span::styled(version, Style::default().fg(Color::LightBlue)),
         ]),
         Line::from(vec![
             Span::styled("Target: ", Style::default().fg(Color::DarkGray)),
