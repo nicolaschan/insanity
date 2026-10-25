@@ -6,6 +6,8 @@ use cpal::{
     traits::{DeviceTrait, HostTrait},
 };
 
+use anyhow::Context;
+
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 
 const SYNTHETIC_DEVICE_NAMES: [&str; 3] = ["default_input", "default_output", "default_sink"];
@@ -69,13 +71,31 @@ fn filtered_devices(devices: impl IntoIterator<Item = Device>) -> Vec<CpalAudioD
 pub(crate) struct CpalInputDeviceRegistry;
 pub(crate) struct CpalOutputDeviceRegistry;
 
+fn log_fallback(direction: &str, err: &anyhow::Error, fallback: Option<&CpalAudioDevice>) {
+    log::debug!(
+        "No usable {direction} default ({err:#} fallback={}); falling back to first device",
+        fallback
+            .and_then(|device| device.try_name())
+            .as_deref()
+            .unwrap_or("none"),
+    );
+}
+
 impl CpalInputDeviceRegistry {
-    fn _default_device() -> Option<CpalAudioDevice> {
-        let device = shared_host().default_input_device()?;
-        let name = device_name_opt(&device)?;
-        (device.supports_input() && keep_device(&name)).then(|| CpalAudioDevice(device))
+    fn _default_device() -> anyhow::Result<CpalAudioDevice> {
+        let device = shared_host()
+            .default_input_device()
+            .context("no system default")?;
+        let name = device_name_opt(&device).context("default has no name")?;
+        anyhow::ensure!(
+            device.supports_input(),
+            "default {name} does not support input"
+        );
+        anyhow::ensure!(keep_device(&name), "default {name} filtered");
+        Ok(CpalAudioDevice(device))
     }
 }
+
 impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     fn list_devices() -> Vec<CpalAudioDevice> {
         shared_host()
@@ -88,15 +108,29 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalInputDeviceRegistry {
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        Self::_default_device().or_else(|| Self::list_devices().into_iter().next())
+        match Self::_default_device() {
+            Ok(device) => Some(device),
+            Err(err) => {
+                let fallback = Self::list_devices().into_iter().next();
+                log_fallback("input", &err, fallback.as_ref());
+                fallback
+            }
+        }
     }
 }
 
 impl CpalOutputDeviceRegistry {
-    fn _default_device() -> Option<CpalAudioDevice> {
-        let device = shared_host().default_output_device()?;
-        let name = device_name_opt(&device)?;
-        (device.supports_output() && keep_device(&name)).then(|| CpalAudioDevice(device))
+    fn _default_device() -> anyhow::Result<CpalAudioDevice> {
+        let device = shared_host()
+            .default_output_device()
+            .context("no system default")?;
+        let name = device_name_opt(&device).context("default has no name")?;
+        anyhow::ensure!(
+            device.supports_output(),
+            "default {name} does not support output"
+        );
+        anyhow::ensure!(keep_device(&name), "default {name} filtered");
+        Ok(CpalAudioDevice(device))
     }
 }
 
@@ -112,6 +146,13 @@ impl AudioDeviceRegistry<CpalAudioDevice> for CpalOutputDeviceRegistry {
     }
 
     fn default_device() -> Option<CpalAudioDevice> {
-        Self::_default_device().or_else(|| Self::list_devices().into_iter().next())
+        match Self::_default_device() {
+            Ok(device) => Some(device),
+            Err(err) => {
+                let fallback = Self::list_devices().into_iter().next();
+                log_fallback("output", &err, fallback.as_ref());
+                fallback
+            }
+        }
     }
 }
