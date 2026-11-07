@@ -165,24 +165,23 @@ fn volume_row<'a>(
     selected: bool,
     muted: bool,
 ) -> Row<'a> {
-    let style = if selected {
-        Style::default().bg(SELECTED)
-    } else {
-        Style::default()
-    };
-    let label_style = style.fg(Color::DarkGray);
-    let label_style = if muted {
-        label_style.add_modifier(Modifier::CROSSED_OUT)
-    } else {
-        label_style
+    let label_style = {
+        let mut style = Style::default().fg(Color::DarkGray);
+        if selected {
+            style = style.bg(SELECTED);
+        }
+        if muted {
+            style = style.add_modifier(Modifier::CROSSED_OUT);
+        }
+        style
     };
     Row::new(vec![
         Cell::from(icon),
-        Cell::from(Line::from(vec![Span::styled(label, label_style)])),
         Cell::from(Line::from(vec![Span::styled(
             format!("{volume}"),
-            style.fg(Color::White),
+            Style::default(),
         )])),
+        Cell::from(Line::from(vec![Span::styled(label, label_style)])),
     ])
 }
 
@@ -190,7 +189,7 @@ fn render_main(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
+            Constraint::Length(5),
             Constraint::Min(0),
             Constraint::Length(1),
         ])
@@ -222,18 +221,6 @@ fn render_main(f: &mut Frame, app: &App, area: Rect) {
     if speaker_cursor.is_some() || mic_cursor.is_some() {
         volume_block = volume_block.border_style(Style::default().fg(Color::DarkGray));
     }
-    let volume_widget = Table::new(
-        volume_rows,
-        [
-            Constraint::Min(2),
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ],
-    )
-    .style(Style::default().fg(Color::White))
-    .column_spacing(1)
-    .block(volume_block);
-    f.render_widget(volume_widget, chunks[0]);
 
     let self_row = match &app.own_display_name {
         Some(display_name) => vec![Row::new(vec![
@@ -246,13 +233,26 @@ fn render_main(f: &mut Frame, app: &App, area: Rect) {
         ])],
         None => vec![],
     };
+    let volume_widget = Table::new(
+        self_row.into_iter().chain(volume_rows).collect::<Vec<_>>(),
+        [
+            Constraint::Min(2),
+            Constraint::Length(3),
+            Constraint::Percentage(100),
+        ],
+    )
+    .style(Style::default().fg(Color::White))
+    .column_spacing(1)
+    .block(volume_block);
+    f.render_widget(volume_widget, chunks[0]);
+
     let rows: Vec<Row> = app
         .peers
         .values()
         .enumerate()
         .map(|(i, peer)| peer_row(peer, peer_cursor == Some(i)))
         .collect();
-    let rows = self_row.into_iter().chain(rows).collect::<Vec<_>>();
+
     let mut peers_block = default_block().title("Peers");
     if peer_cursor.is_some() {
         peers_block = peers_block.border_style(Style::default().fg(Color::DarkGray));
