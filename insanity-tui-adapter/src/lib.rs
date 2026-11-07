@@ -1251,7 +1251,7 @@ mod render_scaling_tests {
         let mut terminal = test_terminal();
         app.render(&mut terminal).expect("render");
         let text = buffer_text(&terminal).join("\n");
-        for needle in ["Main", "Volume", "Speaker volume", "Mic gain", "Peers"] {
+        for needle in ["Main", "Volume", "Speaker volume", "Mic volume", "Peers"] {
             assert!(text.contains(needle), "{needle} missing from main tab");
         }
     }
@@ -1324,7 +1324,7 @@ mod render_scaling_tests {
         assert!(all_text.contains("(you)"));
         assert!(!all_text.contains("MUTED"));
         let rows = cell_rows(&terminal);
-        for label in ["Speaker volume", "Mic gain"] {
+        for label in ["Speaker volume", "Mic volume"] {
             let (fgs, mods) = label_cells(&rows, label);
             assert!(
                 fgs.iter().all(|fg| *fg == Color::DarkGray),
@@ -1337,7 +1337,7 @@ mod render_scaling_tests {
             let row = row_chars_containing(&rows, label);
             assert!(row.contains(&'1'), "{label} row shows no volume value");
         }
-        let mic_row = row_chars_containing(&rows, "Mic gain");
+        let mic_row = row_chars_containing(&rows, "Mic volume");
         assert!(mic_row.contains(&'🔊'), "mic row shows no unmute icon");
 
         // Muted: crossed-out mic label + mute icon; speaker row untouched.
@@ -1348,13 +1348,13 @@ mod render_scaling_tests {
         assert!(all_text.contains("(you)"));
         assert!(!all_text.contains("MUTED"));
         let rows = cell_rows(&terminal);
-        let (mic_fgs, mic_mods) = label_cells(&rows, "Mic gain");
+        let (mic_fgs, mic_mods) = label_cells(&rows, "Mic volume");
         assert!(mic_fgs.iter().all(|fg| *fg == Color::DarkGray));
         assert!(
             mic_mods.iter().all(|m| m.contains(Modifier::CROSSED_OUT)),
             "mic label not crossed out while muted"
         );
-        let mic_row = row_chars_containing(&rows, "Mic gain");
+        let mic_row = row_chars_containing(&rows, "Mic volume");
         assert!(mic_row.contains(&'🔇'), "mic row shows no mute icon");
         let (_, speaker_mods) = label_cells(&rows, "Speaker volume");
         assert!(

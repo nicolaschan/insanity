@@ -140,11 +140,11 @@ fn char_to_readable(c: char) -> String {
     }
 }
 
-fn peer_command_help_entry(key: char, help_str: &'static str) -> String {
+fn main_command_help_entry(key: char, help_str: &'static str) -> String {
     format!("[{}] {}     ", char_to_readable(key), help_str)
 }
 
-static PEER_HELP_TEXT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+static MAIN_HELP_TEXT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     [
         ('\t', "tab"),
         (TOGGLE_PEER_KEY, "toggle peer"),
@@ -154,7 +154,7 @@ static PEER_HELP_TEXT: std::sync::LazyLock<String> = std::sync::LazyLock::new(||
         (MUTE_KEY, "toggle self mute"),
     ]
     .iter()
-    .map(|(key, help_str)| peer_command_help_entry(*key, help_str))
+    .map(|(key, help_str)| main_command_help_entry(*key, help_str))
     .fold("   ".to_string(), |acc, x| acc + &x)
 });
 
@@ -211,7 +211,7 @@ fn render_main(f: &mut Frame, app: &App, area: Rect) {
         ),
         volume_row(
             if app.mute_self { "🔇" } else { "🔊" },
-            "Mic gain",
+            "Mic volume",
             app.mic_volume,
             mic_cursor.is_some(),
             app.mute_self,
@@ -271,7 +271,7 @@ fn render_main(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(peer_list, chunks[1]);
 
     // Command help list
-    let commands = Paragraph::new(PEER_HELP_TEXT.as_str())
+    let commands = Paragraph::new(MAIN_HELP_TEXT.as_str())
         .block(Block::default().style(Style::default().fg(Color::DarkGray)));
     f.render_widget(commands, chunks[2]);
 }
