@@ -552,6 +552,29 @@ mod tests {
     }
 
     #[test]
+    fn mute_and_gain_are_independent() {
+        let (mute, mute_control) = Mute::shared(false);
+        let (gain, gain_control) = Gain::shared(100, 500);
+        let mut chain = mute.chain(gain);
+        // Gain applies while unmuted.
+        gain_control.set(50);
+        let expected = 0.5 * volume_multiplier(50);
+        let out = chain.transform(chunk(vec![0.5; 4]));
+        assert_eq!(out.audio_data, vec![expected; 4]);
+        // Muting silences regardless of gain...
+        mute_control.set(true);
+        let out = chain.transform(chunk(vec![0.5; 4]));
+        assert_eq!(out.audio_data, vec![0.0; 4]);
+        // ...and gain changes made while muted take effect on unmute.
+        gain_control.set(100);
+        let out = chain.transform(chunk(vec![0.5; 4]));
+        assert_eq!(out.audio_data, vec![0.0; 4]);
+        mute_control.set(false);
+        let out = chain.transform(chunk(vec![0.5; 4]));
+        assert_eq!(out.audio_data, vec![0.5; 4]);
+    }
+
+    #[test]
     fn gain_unity_passes_through_zero_silences() {
         let (mut gain, control) = Gain::shared(100, 500);
         let out = gain.transform(chunk(vec![0.5; 4]));

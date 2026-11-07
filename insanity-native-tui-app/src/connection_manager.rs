@@ -558,6 +558,24 @@ async fn handle_user_action(
                 peer.set_volume(volume)?;
             }
         }
+        UserInputEvent::SetSpeakerVolume(volume) => {
+            audio.output.set_speaker_volume(volume);
+            let clamped = audio.output.speaker_volume();
+            if let Some(app_event_tx) = app_event_tx
+                && let Err(e) = app_event_tx.send(AppEvent::SetSpeakerVolume(clamped))
+            {
+                log::debug!("Failed to send speaker volume event: {:?}", e);
+            }
+        }
+        UserInputEvent::SetMicVolume(volume) => {
+            audio.input.hub.set_mic_volume(volume);
+            let clamped = audio.input.hub.mic_volume();
+            if let Some(app_event_tx) = app_event_tx
+                && let Err(e) = app_event_tx.send(AppEvent::SetMicVolume(clamped))
+            {
+                log::debug!("Failed to send mic volume event: {:?}", e);
+            }
+        }
         UserInputEvent::SendMessage(message) => {
             for peer in managed_peers.values() {
                 if let Err(e) = peer.send_message(message.clone()) {

@@ -5,6 +5,9 @@ use std::{collections::BTreeMap, error::Error};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (sender, mut user_action_receiver, handle) = start_tui().await?;
+    sender
+        .send(AppEvent::SetOwnDisplayName("alvin".to_string()))
+        .unwrap();
     let mut peers = BTreeMap::new();
     peers.insert(
         "francis",
@@ -86,8 +89,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .send(AppEvent::SetPeerVolume(peer_id, volume))
                         .unwrap();
                 }
+                UserInputEvent::SetSpeakerVolume(volume) => {
+                    sender.send(AppEvent::SetSpeakerVolume(volume)).unwrap();
+                }
+                UserInputEvent::SetMicVolume(volume) => {
+                    sender.send(AppEvent::SetMicVolume(volume)).unwrap();
+                }
                 UserInputEvent::SendMessage(_message) => {}
-                UserInputEvent::SetMuteSelf(_) => todo!(),
+                UserInputEvent::SetMuteSelf(muted) => {
+                    sender.send(AppEvent::MuteSelf(muted)).unwrap();
+                }
                 UserInputEvent::SetInputDevice(_, _) => {}
                 UserInputEvent::SetOutputDevice(_, _) => {}
                 UserInputEvent::RefreshDevices => {
