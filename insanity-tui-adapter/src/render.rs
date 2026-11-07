@@ -186,15 +186,6 @@ fn volume_row<'a>(
 }
 
 fn render_main(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),
-            Constraint::Min(0),
-            Constraint::Length(1),
-        ])
-        .split(area);
-
     let (speaker_cursor, mic_cursor, peer_cursor) = match app.main_cursor {
         MainCursor::Speaker => (Some(0), None, None),
         MainCursor::Mic => (None, Some(0), None),
@@ -233,6 +224,16 @@ fn render_main(f: &mut Frame, app: &App, area: Rect) {
         ])],
         None => vec![],
     };
+    // 2 for borders + 1 per row (self + speaker + mic).
+    let volume_height = (self_row.len() + volume_rows.len()) as u16 + 2;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(volume_height), // Volume
+            Constraint::Min(0),                // Peers list
+            Constraint::Length(1),             // Help message
+        ])
+        .split(area);
     let volume_widget = Table::new(
         self_row.into_iter().chain(volume_rows).collect::<Vec<_>>(),
         [

@@ -23,20 +23,20 @@ const TAB_NAME_CHAT: &str = "Chat";
 const TAB_NAME_SETTINGS: &str = "Settings";
 
 // Order must match in TAB_NAMES.
-pub const TAB_IDX_MAIN: usize = 0;
-pub const TAB_IDX_CHAT: usize = 1;
-pub const TAB_IDX_SETTINGS: usize = 2;
+pub(crate) const TAB_IDX_MAIN: usize = 0;
+pub(crate) const TAB_IDX_CHAT: usize = 1;
+pub(crate) const TAB_IDX_SETTINGS: usize = 2;
 
-pub const TOGGLE_PEER_KEY: char = ' ';
-pub const TOGGLE_PEER_DENOISE_KEY: char = 'd';
-pub const INCREMENT_PEER_VOLUME_KEY: char = '+';
-pub const DECREMENT_PEER_VOLUME_KEY: char = '-';
-pub const MOVE_DOWN_PEER_LIST_KEY: char = 'j';
-pub const MOVE_UP_PEER_LIST_KEY: char = 'k';
-pub const MOVE_TOP_PEER_LIST_KEY: char = 'g';
-pub const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
-pub const MUTE_KEY: char = 'm';
-pub const REFRESH_DEVICES_KEY: char = 'r';
+pub(crate) const TOGGLE_PEER_KEY: char = ' ';
+pub(crate) const TOGGLE_PEER_DENOISE_KEY: char = 'd';
+pub(crate) const INCREMENT_PEER_VOLUME_KEY: char = '+';
+pub(crate) const DECREMENT_PEER_VOLUME_KEY: char = '-';
+pub(crate) const MOVE_DOWN_PEER_LIST_KEY: char = 'j';
+pub(crate) const MOVE_UP_PEER_LIST_KEY: char = 'k';
+pub(crate) const MOVE_TOP_PEER_LIST_KEY: char = 'g';
+pub(crate) const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
+pub(crate) const MUTE_KEY: char = 'm';
+pub(crate) const REFRESH_DEVICES_KEY: char = 'r';
 
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_MAIN, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
@@ -242,22 +242,10 @@ impl App {
             }
             AppEvent::Character(c) => match self.tab_index {
                 TAB_IDX_MAIN => match c {
-                    TOGGLE_PEER_KEY => {
-                        self.toggle_peer();
-                        true
-                    }
-                    TOGGLE_PEER_DENOISE_KEY => {
-                        self.toggle_denoise();
-                        true
-                    }
-                    INCREMENT_PEER_VOLUME_KEY => {
-                        self.adjust_volume(1);
-                        true
-                    }
-                    DECREMENT_PEER_VOLUME_KEY => {
-                        self.adjust_volume(-1);
-                        true
-                    }
+                    TOGGLE_PEER_KEY => self.toggle_peer(),
+                    TOGGLE_PEER_DENOISE_KEY => self.toggle_denoise(),
+                    INCREMENT_PEER_VOLUME_KEY => self.adjust_volume(1),
+                    DECREMENT_PEER_VOLUME_KEY => self.adjust_volume(-1),
                     MOVE_DOWN_PEER_LIST_KEY => self.move_main(1),
                     MOVE_UP_PEER_LIST_KEY => self.move_main(-1),
                     MOVE_TOP_PEER_LIST_KEY => {
@@ -406,22 +394,8 @@ impl App {
                 TAB_IDX_SETTINGS => self.move_device_cursor(-1),
                 _ => false,
             },
-            AppEvent::TogglePeer => {
-                if self.selected_peer().is_none() {
-                    false
-                } else {
-                    self.toggle_peer();
-                    true
-                }
-            }
-            AppEvent::ToggleDenoise => {
-                if self.selected_peer().is_none() {
-                    false
-                } else {
-                    self.toggle_denoise();
-                    true
-                }
-            }
+            AppEvent::TogglePeer => self.toggle_peer(),
+            AppEvent::ToggleDenoise => self.toggle_denoise(),
             AppEvent::SetPeerDenoise(peer_id, denoised) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
                     let changed = peer.denoised != denoised;
@@ -621,10 +595,7 @@ impl App {
                 .map(|(id, name)| UserInputEvent::SetOutputDevice(id.clone(), name.clone())),
         };
         match selected {
-            Some(event) => {
-                self.user_action_sender.send(event).unwrap();
-                true
-            }
+            Some(event) => self.user_action_sender.send(event).is_ok(),
             None => false,
         }
     }
@@ -635,17 +606,19 @@ impl App {
             .unwrap();
     }
 
-    fn toggle_peer(&mut self) {
+    fn toggle_peer(&mut self) -> bool {
         if let Some(peer) = self.selected_peer() {
             if peer.state == PeerState::Disabled {
                 self.user_action_sender
                     .send(UserInputEvent::EnablePeer(peer.id.clone()))
-                    .unwrap();
+                    .is_ok()
             } else {
                 self.user_action_sender
                     .send(UserInputEvent::DisablePeer(peer.id.clone()))
-                    .unwrap();
+                    .is_ok()
             }
+        } else {
+            false
         }
     }
 
@@ -670,49 +643,56 @@ impl App {
         }
     }
 
-    fn toggle_denoise(&mut self) {
+    fn toggle_denoise(&mut self) -> bool {
         if let Some(peer) = self.selected_peer() {
             self.user_action_sender
                 .send(UserInputEvent::SetDenoise(
                     peer.id.clone(),
                     peer.denoised.next(),
                 ))
-                .unwrap();
+                .is_ok()
+        } else {
+            false
         }
     }
 
-    fn adjust_volume(&mut self, delta: isize) {
+    fn adjust_volume(&mut self, delta: isize) -> bool {
         // The volumes here are clamped to 0, 999 because
         // we've restricted 3 characters for volume display.
         match self.main_cursor {
             MainCursor::Speaker => {
-                self.user_action_sender
-                    .send(UserInputEvent::SetSpeakerVolume(add_in_bounds(
-                        self.speaker_volume,
-                        0,
-                        999,
-                        delta,
-                    )))
-                    .unwrap();
+                let new_volume = add_in_bounds(self.speaker_volume, 0, 999, delta);
+                if new_volume == self.speaker_volume {
+                    false
+                } else {
+                    self.user_action_sender
+                        .send(UserInputEvent::SetSpeakerVolume(new_volume))
+                        .is_ok()
+                }
             }
             MainCursor::Mic => {
-                self.user_action_sender
-                    .send(UserInputEvent::SetMicVolume(add_in_bounds(
-                        self.mic_volume,
-                        0,
-                        999,
-                        delta,
-                    )))
-                    .unwrap();
+                let new_volume = add_in_bounds(self.mic_volume, 0, 999, delta);
+                if new_volume == self.mic_volume {
+                    false
+                } else {
+                    self.user_action_sender
+                        .send(UserInputEvent::SetMicVolume(new_volume))
+                        .is_ok()
+                }
             }
             MainCursor::Peer(_) => {
                 if let Some(peer) = self.selected_peer() {
-                    self.user_action_sender
-                        .send(UserInputEvent::SetVolume(
-                            peer.id.clone(),
-                            add_in_bounds(peer.volume, 0, 999, delta),
-                        ))
-                        .unwrap();
+                    let new_volume = add_in_bounds(peer.volume, 0, 999, delta);
+                    if new_volume == peer.volume {
+                        false
+                    } else {
+                        let peer_id = peer.id.clone();
+                        self.user_action_sender
+                            .send(UserInputEvent::SetVolume(peer_id, new_volume))
+                            .is_ok()
+                    }
+                } else {
+                    false
                 }
             }
         }
@@ -1210,9 +1190,9 @@ mod render_scaling_tests {
         );
         // Peer-only keys are inert on volume rows.
         assert!(app.process_event(AppEvent::Character('g')));
-        assert!(app.process_event(AppEvent::Character(' ')));
+        assert!(!app.process_event(AppEvent::Character(' ')));
         assert!(rx.try_recv().is_err());
-        assert!(app.process_event(AppEvent::Character('d')));
+        assert!(!app.process_event(AppEvent::Character('d')));
         assert!(rx.try_recv().is_err());
     }
 
