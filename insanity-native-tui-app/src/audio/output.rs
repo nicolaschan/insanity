@@ -101,13 +101,6 @@ impl OutputStats {
     }
 }
 
-/// Aggregate handle for the output subsystem.
-///
-/// Holds the data plane (`client`), the device plane (`manager`), and the
-/// master speaker bus control. The control is the retained half of the
-/// `Gain::shared` split in `start_output`: the `Gain` transform itself lives
-/// in the `Mixer` owned by the output owner task, so the `Arc<GainControl>`
-/// must be kept here to drive it.
 #[derive(Clone)]
 pub(crate) struct AudioOutput {
     pub(crate) client: MixerClient,
