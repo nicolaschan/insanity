@@ -1191,10 +1191,7 @@ mod render_scaling_tests {
         };
         // Speaker row focused initially.
         assert!(app.process_event(AppEvent::Character('+')));
-        assert_eq!(
-            rx.try_recv(),
-            Ok(UserInputEvent::SetSpeakerVolume(101))
-        );
+        assert_eq!(rx.try_recv(), Ok(UserInputEvent::SetSpeakerVolume(101)));
         assert!(app.process_event(AppEvent::Character('-')));
         assert_eq!(rx.try_recv(), Ok(UserInputEvent::SetSpeakerVolume(99)));
         // Mic row.
@@ -1238,7 +1235,8 @@ mod render_scaling_tests {
     }
 
     #[test]
-    fn master_volume_echo_updates_state() {        let (mut app, _) = test_app_with_peers(0);
+    fn master_volume_echo_updates_state() {
+        let (mut app, _) = test_app_with_peers(0);
         assert!(!app.process_event(AppEvent::SetSpeakerVolume(100)));
         assert!(app.process_event(AppEvent::SetSpeakerVolume(120)));
         assert_eq!(app.speaker_volume, 120);
@@ -1289,9 +1287,7 @@ mod render_scaling_tests {
             let needle: Vec<char> = label.chars().collect();
             let (_, fgs, mods) = rows
                 .iter()
-                .find(|(chars, _, _)| {
-                    chars.windows(needle.len()).any(|w| w == needle.as_slice())
-                })
+                .find(|(chars, _, _)| chars.windows(needle.len()).any(|w| w == needle.as_slice()))
                 .unwrap_or_else(|| panic!("{label} not rendered"));
             let start = rows
                 .iter()
@@ -1313,9 +1309,7 @@ mod render_scaling_tests {
         ) -> Vec<char> {
             let needle: Vec<char> = label.chars().collect();
             rows.iter()
-                .find(|(chars, _, _)| {
-                    chars.windows(needle.len()).any(|w| w == needle.as_slice())
-                })
+                .find(|(chars, _, _)| chars.windows(needle.len()).any(|w| w == needle.as_slice()))
                 .map(|(chars, _, _)| chars.clone())
                 .unwrap_or_else(|| panic!("{label} not rendered"))
         }
@@ -1341,10 +1335,7 @@ mod render_scaling_tests {
                 "{label} label crossed out while unmuted"
             );
             let row = row_chars_containing(&rows, label);
-            assert!(
-                row.contains(&'1'),
-                "{label} row shows no volume value"
-            );
+            assert!(row.contains(&'1'), "{label} row shows no volume value");
         }
         let mic_row = row_chars_containing(&rows, "Mic gain");
         assert!(mic_row.contains(&'🔊'), "mic row shows no unmute icon");
