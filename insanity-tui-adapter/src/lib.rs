@@ -682,6 +682,8 @@ impl App {
     }
 
     fn adjust_volume(&mut self, delta: isize) {
+        // The volumes here are clamped to 0, 999 because
+        // we've restricted 3 characters for volume display.
         match self.main_cursor {
             MainCursor::Speaker => {
                 self.user_action_sender
