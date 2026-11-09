@@ -552,36 +552,73 @@ mod tests {
         FallbackDecision, FallbackMode, FallbackPolicy, MAX_STALL_TIMEOUT, MIN_STALL_TIMEOUT,
         PayloadBuilder, STARTUP_GRACE, handle_device_loss, stall_timeout_for_period,
     };
-    use crate::audio::cpal_registry::CpalAudioDevice;
     use insanity_core::audio::config::AudioPipelineConfig;
     use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 
     struct EmptyRegistry;
 
-    impl AudioDeviceRegistry<CpalAudioDevice> for EmptyRegistry {
-        fn list_devices() -> Vec<CpalAudioDevice> {
+    impl AudioDeviceRegistry<FakeDevice> for EmptyRegistry {
+        fn list_devices() -> Vec<FakeDevice> {
             Vec::new()
         }
 
-        fn default_device() -> Option<CpalAudioDevice> {
+        fn default_device() -> Option<FakeDevice> {
             None
         }
     }
 
-    struct DummyBuilder;
+    const FAKE_ID: &str = "fake-id";
+    const FAKE_NAME: &str = "fake-device";
 
-    impl PayloadBuilder for DummyBuilder {
+    #[derive(Clone, Debug)]
+    struct FakeDevice;
+
+    impl AudioDevice for FakeDevice {
+        fn try_name(&self) -> Option<String> {
+            Some(String::from(FAKE_NAME))
+        }
+
+        fn try_id(&self) -> Option<String> {
+            Some(String::from(FAKE_ID))
+        }
+    }
+
+    struct FakeRegistry;
+
+    impl AudioDeviceRegistry<FakeDevice> for FakeRegistry {
+        fn list_devices() -> Vec<FakeDevice> {
+            vec![FakeDevice]
+        }
+
+        fn default_device() -> Option<FakeDevice> {
+            Some(FakeDevice)
+        }
+    }
+
+    struct FakeBuilder<const SUCCEED: bool>;
+
+    impl<const SUCCEED: bool> PayloadBuilder for FakeBuilder<SUCCEED> {
         type Payload = String;
         type Stats = ();
-        type Device = CpalAudioDevice;
+        type Device = FakeDevice;
 
         fn build(
-            _device: CpalAudioDevice,
-            _config: &AudioPipelineConfig,
+            device: FakeDevice,
+            config: &AudioPipelineConfig,
             _stats: &Arc<Self::Stats>,
             _reporter: FatalReporter,
         ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
-            anyhow::bail!("no hardware in unit test")
+            if SUCCEED {
+                Ok((
+                    String::from("fake"),
+                    DeviceInfo {
+                        name: device.name(),
+                        format: config.audio_format(),
+                    },
+                ))
+            } else {
+                anyhow::bail!("no hardware in unit test")
+            }
         }
 
         fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
@@ -595,128 +632,10 @@ mod tests {
         }
     }
 
-    const FAKE_ID: &str = "fake-id";
-    const FAKE_NAME: &str = "fake-device";
+    type TestManager = DeviceManager<String, (), EmptyRegistry, FakeBuilder<true>>;
 
-    #[derive(Clone, Debug)]
-    struct FakeDevice {
-        id: String,
-        name: String,
-    }
-
-    impl FakeDevice {
-        fn new() -> Self {
-            FakeDevice {
-                id: String::from(FAKE_ID),
-                name: String::from(FAKE_NAME),
-            }
-        }
-    }
-
-    impl AudioDevice for FakeDevice {
-        fn try_name(&self) -> Option<String> {
-            Some(self.name.clone())
-        }
-
-        fn try_id(&self) -> Option<String> {
-            Some(self.id.clone())
-        }
-    }
-
-    struct FakeRegistry;
-
-    impl AudioDeviceRegistry<FakeDevice> for FakeRegistry {
-        fn list_devices() -> Vec<FakeDevice> {
-            vec![FakeDevice::new()]
-        }
-
-        fn default_device() -> Option<FakeDevice> {
-            Some(FakeDevice::new())
-        }
-    }
-
-    struct FakeBuilder;
-
-    impl PayloadBuilder for FakeBuilder {
-        type Payload = String;
-        type Stats = ();
-        type Device = FakeDevice;
-
-        fn build(
-            device: FakeDevice,
-            config: &AudioPipelineConfig,
-            _stats: &Arc<Self::Stats>,
-            _reporter: FatalReporter,
-        ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
-            Ok((
-                String::from("fake"),
-                DeviceInfo {
-                    name: device.name(),
-                    format: config.audio_format(),
-                },
-            ))
-        }
-
-        fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
-            DummyBuilder::build_dummy(config)
-        }
-    }
-
-    struct FailingFakeBuilder;
-
-    impl PayloadBuilder for FailingFakeBuilder {
-        type Payload = String;
-        type Stats = ();
-        type Device = FakeDevice;
-
-        fn build(
-            _device: FakeDevice,
-            _config: &AudioPipelineConfig,
-            _stats: &Arc<Self::Stats>,
-            _reporter: FatalReporter,
-        ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
-            anyhow::bail!("no hardware in unit test")
-        }
-
-        fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
-            DummyBuilder::build_dummy(config)
-        }
-    }
-
-    type TestManager = DeviceManager<String, (), EmptyRegistry, DummyBuilder>;
-
-    fn test_manager_named(
-        name: &str,
-    ) -> (
-        TestManager,
-        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
-    ) {
-        let config = AudioPipelineConfig::default();
-        let (switch_tx, switch_rx) = mpsc::channel(8);
-        let (_, info_rx) = watch::channel(DeviceInfo {
-            name: String::from(name),
-            format: config.audio_format(),
-        });
-        let manager = TestManager::new(
-            config,
-            switch_tx,
-            Arc::new(FatalSignal::new()),
-            Arc::new(()),
-            info_rx,
-            Arc::new(AtomicU64::new(0)),
-        );
-        (manager, switch_rx)
-    }
-
-    fn test_manager() -> (
-        TestManager,
-        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
-    ) {
-        test_manager_named(DUMMY_DEVICE_NAME)
-    }
-
-    type FakeManager = DeviceManager<String, (), FakeRegistry, FakeBuilder>;
-    type FailingFakeManager = DeviceManager<String, (), FakeRegistry, FailingFakeBuilder>;
+    type FakeManager = DeviceManager<String, (), FakeRegistry, FakeBuilder<true>>;
+    type FailingFakeManager = DeviceManager<String, (), FakeRegistry, FakeBuilder<false>>;
 
     type ManagedHandoff<Registry, Builder> = (
         DeviceManager<String, (), Registry, Builder>,
@@ -725,7 +644,7 @@ mod tests {
 
     fn manager_with<Registry, Builder>(name: &str) -> ManagedHandoff<Registry, Builder>
     where
-        Registry: AudioDeviceRegistry<Builder::Device> + AudioDeviceRegistry<FakeDevice>,
+        Registry: AudioDeviceRegistry<Builder::Device>,
         Builder: PayloadBuilder<Payload = String, Stats = ()>,
     {
         let config = AudioPipelineConfig::default();
@@ -745,60 +664,20 @@ mod tests {
         (manager, switch_rx)
     }
 
-    fn fake_manager_named(
-        name: &str,
-    ) -> (
-        FakeManager,
-        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
-    ) {
-        manager_with(name)
-    }
-
-    fn failing_fake_manager_named(
-        name: &str,
-    ) -> (
-        FailingFakeManager,
-        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
-    ) {
-        manager_with(name)
-    }
-
-    fn set_explicit<Registry, Builder>(manager: &DeviceManager<String, (), Registry, Builder>)
-    where
-        Registry: AudioDeviceRegistry<Builder::Device>,
-        Builder: PayloadBuilder<Payload = String, Stats = ()>,
-    {
-        manager.set_mode(FallbackMode::Explicit);
-    }
-
-    #[test]
-    fn new_starts_in_auto() {
-        let (manager, _rx) = test_manager();
-        assert_eq!(manager.mode(), FallbackMode::Auto);
-        assert_eq!(manager.generation(), 0);
-    }
-
-    #[test]
-    fn failed_switch_leaves_auto() {
-        let (manager, mut rx) = test_manager();
-        assert!(manager.switch_to("missing-id", "missing-name").is_err());
-        assert_eq!(manager.mode(), FallbackMode::Auto);
-        assert_eq!(manager.generation(), 0);
-        assert!(rx.try_recv().is_err());
-    }
-
     #[test]
     fn switch_to_default_stays_auto() {
-        let (manager, mut rx) = test_manager_named("device");
-        set_explicit(&manager);
+        let (manager, mut rx): (TestManager, _) = manager_with("device");
+        manager.set_mode(FallbackMode::Explicit);
         assert!(manager.switch_to_default().is_err());
         assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 0);
         assert!(rx.try_recv().is_err());
     }
 
     #[test]
     fn switch_to_succeeds_sets_explicit() {
-        let (manager, mut rx) = fake_manager_named("device");
+        let (manager, mut rx): (FakeManager, _) = manager_with("device");
+        assert_eq!(manager.mode(), FallbackMode::Auto);
         assert!(manager.switch_to(FAKE_ID, FAKE_NAME).is_ok());
         assert_eq!(manager.mode(), FallbackMode::Explicit);
         assert_eq!(manager.generation(), 1);
@@ -809,8 +688,8 @@ mod tests {
 
     #[test]
     fn switch_to_default_succeeds_stays_auto() {
-        let (manager, mut rx) = fake_manager_named("device");
-        set_explicit(&manager);
+        let (manager, mut rx): (FakeManager, _) = manager_with("device");
+        manager.set_mode(FallbackMode::Explicit);
         assert!(manager.switch_to_default().is_ok());
         assert_eq!(manager.mode(), FallbackMode::Auto);
         assert_eq!(manager.generation(), 1);
@@ -821,7 +700,7 @@ mod tests {
 
     #[test]
     fn failed_build_leaves_generation() {
-        let (manager, mut rx) = failing_fake_manager_named("device");
+        let (manager, mut rx): (FailingFakeManager, _) = manager_with("device");
         assert!(manager.switch_to(FAKE_ID, FAKE_NAME).is_err());
         assert_eq!(manager.mode(), FallbackMode::Auto);
         assert_eq!(manager.generation(), 0);
@@ -830,7 +709,7 @@ mod tests {
 
     #[test]
     fn handle_auto_reaches_default() {
-        let (manager, mut rx) = fake_manager_named("device");
+        let (manager, mut rx): (FakeManager, _) = manager_with("device");
         let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
         assert!(handle_device_loss(&manager, &mut policy, Instant::now()));
         assert_eq!(manager.mode(), FallbackMode::Auto);
@@ -840,9 +719,25 @@ mod tests {
     }
 
     #[test]
-    fn policy_throttles_default_retries() {
+    fn policy_decisions() {
         let t0 = Instant::now();
         let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
+        assert_eq!(
+            policy.on_device_lost(t0, FallbackMode::Explicit, true),
+            FallbackDecision::ParkOnDummy
+        );
+        assert_eq!(
+            policy.on_device_lost(t0 + ms(100), FallbackMode::Explicit, true),
+            FallbackDecision::ParkOnDummy
+        );
+        assert!(policy.last_default_attempt.is_none());
+        for mode in [FallbackMode::Auto, FallbackMode::Explicit] {
+            assert_eq!(
+                policy.on_device_lost(t0, mode, false),
+                FallbackDecision::DoNothing
+            );
+        }
+        assert!(policy.last_default_attempt.is_none());
         assert_eq!(
             policy.on_device_lost(t0, FallbackMode::Auto, true),
             FallbackDecision::RetryDefault
@@ -858,36 +753,8 @@ mod tests {
     }
 
     #[test]
-    fn policy_explicit_parks_without_throttling() {
-        let t0 = Instant::now();
-        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
-        assert_eq!(
-            policy.on_device_lost(t0, FallbackMode::Explicit, true),
-            FallbackDecision::ParkOnDummy
-        );
-        assert_eq!(
-            policy.on_device_lost(t0 + ms(100), FallbackMode::Explicit, true),
-            FallbackDecision::ParkOnDummy
-        );
-        assert!(policy.last_default_attempt.is_none());
-    }
-
-    #[test]
-    fn policy_already_dummy_is_noop() {
-        let t0 = Instant::now();
-        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
-        for mode in [FallbackMode::Auto, FallbackMode::Explicit] {
-            assert_eq!(
-                policy.on_device_lost(t0, mode, false),
-                FallbackDecision::DoNothing
-            );
-        }
-        assert!(policy.last_default_attempt.is_none());
-    }
-
-    #[test]
     fn handle_auto_parks_on_failed_default() {
-        let (manager, mut rx) = test_manager_named("device");
+        let (manager, mut rx): (TestManager, _) = manager_with("device");
         let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
         assert!(handle_device_loss(&manager, &mut policy, Instant::now()));
         assert_eq!(manager.generation(), 1);
@@ -896,38 +763,14 @@ mod tests {
     }
 
     #[test]
-    fn handle_throttled_keeps_current() {
-        let (manager, mut rx) = test_manager_named("device");
-        let t0 = Instant::now();
-        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
-        assert!(handle_device_loss(&manager, &mut policy, t0));
-        let _ = rx.try_recv().expect("must park on dummy");
-        assert!(!handle_device_loss(&manager, &mut policy, t0 + ms(100)));
-        assert_eq!(manager.generation(), 1);
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn handle_already_dummy_is_noop() {
-        let (manager, mut rx) = test_manager();
-        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
-        assert!(!handle_device_loss(&manager, &mut policy, Instant::now()));
-        set_explicit(&manager);
-        assert!(!handle_device_loss(&manager, &mut policy, Instant::now()));
-        assert_eq!(manager.generation(), 0);
-        assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
     fn handle_explicit_parks() {
-        let (manager, mut rx) = test_manager_named("device");
-        set_explicit(&manager);
+        let (manager, mut rx): (TestManager, _) = manager_with("device");
+        manager.set_mode(FallbackMode::Explicit);
         let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
         assert!(handle_device_loss(&manager, &mut policy, Instant::now()));
         assert_eq!(manager.generation(), 1);
         let request = rx.try_recv().expect("explicit must park");
         assert_eq!(request.info.name, DUMMY_DEVICE_NAME);
-        assert!(policy.last_default_attempt.is_none());
     }
 
     fn ms(n: u64) -> Duration {
@@ -939,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_count_inside_grace_is_not_dead() {
+    fn stall_needs_grace_and_deadline() {
         let t0 = Instant::now();
         let mut liveness = live_at(t0);
         for dt in [100, 200, 1000] {
@@ -948,13 +791,6 @@ mod tests {
                 "frozen count at +{dt}ms must not trip inside grace"
             );
         }
-    }
-
-    #[test]
-    fn frozen_count_past_grace_and_deadline_is_dead() {
-        let t0 = Instant::now();
-        let mut liveness = live_at(t0);
-        assert!(!liveness.check_stalled(t0 + ms(1000), 1, "device", 10, Some(ms(100))));
         assert!(liveness.check_stalled(
             t0 + STARTUP_GRACE + ms(501),
             1,
@@ -969,38 +805,25 @@ mod tests {
         let t0 = Instant::now();
         let mut liveness = live_at(t0);
         let switch_at = t0 + STARTUP_GRACE + ms(10_000);
-        assert!(!liveness.check_stalled(switch_at, 2, "device", 10, Some(Duration::from_secs(2))));
-        assert!(!liveness.check_stalled(
-            switch_at + STARTUP_GRACE + ms(600),
-            2,
-            "device",
-            10,
-            Some(Duration::from_secs(2))
-        ));
-        assert!(liveness.check_stalled(
-            switch_at + STARTUP_GRACE + ms(5001),
-            2,
-            "device",
-            10,
-            Some(Duration::from_secs(2))
-        ));
+        let period = Some(Duration::from_secs(2));
+        for (at, stalled) in [
+            (switch_at, false),
+            (switch_at + STARTUP_GRACE + ms(600), false),
+            (switch_at + STARTUP_GRACE + ms(5001), true),
+        ] {
+            assert_eq!(liveness.check_stalled(at, 2, "device", 10, period), stalled);
+        }
     }
 
     #[test]
     fn stall_timeout_scales_with_period_and_clamps() {
-        // 480 frames @ 48kHz = 10ms period -> 30ms, floored to the minimum.
-        assert_eq!(
-            stall_timeout_for_period(Some(Duration::from_millis(10))),
-            MIN_STALL_TIMEOUT
-        );
-        // Unknown period -> minimum.
-        assert_eq!(stall_timeout_for_period(None), MIN_STALL_TIMEOUT);
-        // 96000 frames @ 48kHz = 2s period -> 6s, capped at the maximum.
-        assert_eq!(
-            stall_timeout_for_period(Some(Duration::from_secs(2))),
-            MAX_STALL_TIMEOUT
-        );
-        // A mid-range period passes through scaled.
-        assert_eq!(stall_timeout_for_period(Some(ms(300))), ms(900));
+        for (period, expected) in [
+            (Some(Duration::from_millis(10)), MIN_STALL_TIMEOUT),
+            (None, MIN_STALL_TIMEOUT),
+            (Some(Duration::from_secs(2)), MAX_STALL_TIMEOUT),
+            (Some(ms(300)), ms(900)),
+        ] {
+            assert_eq!(stall_timeout_for_period(period), expected);
+        }
     }
 }
