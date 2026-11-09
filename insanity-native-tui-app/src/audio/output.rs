@@ -223,6 +223,7 @@ fn try_output_candidate(
 impl PayloadBuilder for SinkBuilder {
     type Payload = Sink;
     type Stats = OutputStats;
+    type Device = CpalAudioDevice;
 
     fn build(
         device: CpalAudioDevice,

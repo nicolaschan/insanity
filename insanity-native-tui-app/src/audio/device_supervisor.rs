@@ -11,9 +11,7 @@ use super::handoff::HandoffRequest;
 use super::input::InputManager;
 use super::output::OutputManager;
 use super::stream_errors::{FatalReporter, FatalSignal};
-use crate::audio::cpal_registry::{
-    CpalAudioDevice, CpalInputDeviceRegistry, CpalOutputDeviceRegistry,
-};
+use crate::audio::cpal_registry::{CpalInputDeviceRegistry, CpalOutputDeviceRegistry};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
@@ -99,9 +97,10 @@ pub(crate) struct DeviceInfo {
 pub(crate) trait PayloadBuilder {
     type Payload;
     type Stats;
+    type Device: AudioDevice;
 
     fn build(
-        device: CpalAudioDevice,
+        device: Self::Device,
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
@@ -126,7 +125,7 @@ pub(crate) struct DeviceManager<Payload, Stats, DeviceRegistry, Builder> {
 
 impl<Payload, Stats, DeviceRegistry, Builder> DeviceManager<Payload, Stats, DeviceRegistry, Builder>
 where
-    DeviceRegistry: AudioDeviceRegistry<CpalAudioDevice>,
+    DeviceRegistry: AudioDeviceRegistry<Builder::Device>,
     Builder: PayloadBuilder<Payload = Payload, Stats = Stats>,
 {
     pub(crate) fn new(
@@ -219,7 +218,7 @@ where
         self.switch_to_device(&id, &name)
     }
 
-    fn adopt(&self, device: CpalAudioDevice) -> anyhow::Result<()> {
+    fn adopt(&self, device: Builder::Device) -> anyhow::Result<()> {
         let next = self.generation.load(Ordering::Relaxed) + 1;
         let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
         let started = std::time::Instant::now();
@@ -402,7 +401,7 @@ fn handle_device_loss<Payload, Stats, Registry, Builder>(
     now: std::time::Instant,
 ) -> bool
 where
-    Registry: AudioDeviceRegistry<CpalAudioDevice>,
+    Registry: AudioDeviceRegistry<Builder::Device>,
     Builder: PayloadBuilder<Payload = Payload, Stats = Stats>,
 {
     let decision = policy.on_device_lost(now, manager.mode(), manager.is_live());
@@ -555,7 +554,7 @@ mod tests {
     };
     use crate::audio::cpal_registry::CpalAudioDevice;
     use insanity_core::audio::config::AudioPipelineConfig;
-    use insanity_core::audio::device::AudioDeviceRegistry;
+    use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
 
     struct EmptyRegistry;
 
@@ -574,6 +573,7 @@ mod tests {
     impl PayloadBuilder for DummyBuilder {
         type Payload = String;
         type Stats = ();
+        type Device = CpalAudioDevice;
 
         fn build(
             _device: CpalAudioDevice,
@@ -592,6 +592,94 @@ mod tests {
                     format: config.audio_format(),
                 },
             )
+        }
+    }
+
+    const FAKE_ID: &str = "fake-id";
+    const FAKE_NAME: &str = "fake-device";
+
+    #[derive(Clone, Debug)]
+    struct FakeDevice {
+        id: String,
+        name: String,
+    }
+
+    impl FakeDevice {
+        fn new() -> Self {
+            FakeDevice {
+                id: String::from(FAKE_ID),
+                name: String::from(FAKE_NAME),
+            }
+        }
+    }
+
+    impl AudioDevice for FakeDevice {
+        fn try_name(&self) -> Option<String> {
+            Some(self.name.clone())
+        }
+
+        fn try_id(&self) -> Option<String> {
+            Some(self.id.clone())
+        }
+    }
+
+    struct FakeRegistry;
+
+    impl AudioDeviceRegistry<FakeDevice> for FakeRegistry {
+        fn list_devices() -> Vec<FakeDevice> {
+            vec![FakeDevice::new()]
+        }
+
+        fn default_device() -> Option<FakeDevice> {
+            Some(FakeDevice::new())
+        }
+    }
+
+    struct FakeBuilder;
+
+    impl PayloadBuilder for FakeBuilder {
+        type Payload = String;
+        type Stats = ();
+        type Device = FakeDevice;
+
+        fn build(
+            device: FakeDevice,
+            config: &AudioPipelineConfig,
+            _stats: &Arc<Self::Stats>,
+            _reporter: FatalReporter,
+        ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
+            Ok((
+                String::from("fake"),
+                DeviceInfo {
+                    name: device.name(),
+                    format: config.audio_format(),
+                },
+            ))
+        }
+
+        fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
+            DummyBuilder::build_dummy(config)
+        }
+    }
+
+    struct FailingFakeBuilder;
+
+    impl PayloadBuilder for FailingFakeBuilder {
+        type Payload = String;
+        type Stats = ();
+        type Device = FakeDevice;
+
+        fn build(
+            _device: FakeDevice,
+            _config: &AudioPipelineConfig,
+            _stats: &Arc<Self::Stats>,
+            _reporter: FatalReporter,
+        ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
+            anyhow::bail!("no hardware in unit test")
+        }
+
+        fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
+            DummyBuilder::build_dummy(config)
         }
     }
 
@@ -627,7 +715,59 @@ mod tests {
         test_manager_named(DUMMY_DEVICE_NAME)
     }
 
-    fn set_explicit(manager: &TestManager) {
+    type FakeManager = DeviceManager<String, (), FakeRegistry, FakeBuilder>;
+    type FailingFakeManager = DeviceManager<String, (), FakeRegistry, FailingFakeBuilder>;
+
+    type ManagedHandoff<Registry, Builder> = (
+        DeviceManager<String, (), Registry, Builder>,
+        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
+    );
+
+    fn manager_with<Registry, Builder>(name: &str) -> ManagedHandoff<Registry, Builder>
+    where
+        Registry: AudioDeviceRegistry<Builder::Device> + AudioDeviceRegistry<FakeDevice>,
+        Builder: PayloadBuilder<Payload = String, Stats = ()>,
+    {
+        let config = AudioPipelineConfig::default();
+        let (switch_tx, switch_rx) = mpsc::channel(8);
+        let (_, info_rx) = watch::channel(DeviceInfo {
+            name: String::from(name),
+            format: config.audio_format(),
+        });
+        let manager = DeviceManager::<String, (), Registry, Builder>::new(
+            config,
+            switch_tx,
+            Arc::new(FatalSignal::new()),
+            Arc::new(()),
+            info_rx,
+            Arc::new(AtomicU64::new(0)),
+        );
+        (manager, switch_rx)
+    }
+
+    fn fake_manager_named(
+        name: &str,
+    ) -> (
+        FakeManager,
+        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
+    ) {
+        manager_with(name)
+    }
+
+    fn failing_fake_manager_named(
+        name: &str,
+    ) -> (
+        FailingFakeManager,
+        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
+    ) {
+        manager_with(name)
+    }
+
+    fn set_explicit<Registry, Builder>(manager: &DeviceManager<String, (), Registry, Builder>)
+    where
+        Registry: AudioDeviceRegistry<Builder::Device>,
+        Builder: PayloadBuilder<Payload = String, Stats = ()>,
+    {
         manager.set_mode(FallbackMode::Explicit);
     }
 
@@ -654,6 +794,49 @@ mod tests {
         assert!(manager.switch_to_default().is_err());
         assert_eq!(manager.mode(), FallbackMode::Auto);
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn switch_to_succeeds_sets_explicit() {
+        let (manager, mut rx) = fake_manager_named("device");
+        assert!(manager.switch_to(FAKE_ID, FAKE_NAME).is_ok());
+        assert_eq!(manager.mode(), FallbackMode::Explicit);
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("must hand off fake device");
+        assert_eq!(request.info.name, FAKE_NAME);
+        assert_eq!(request.generation, 1);
+    }
+
+    #[test]
+    fn switch_to_default_succeeds_stays_auto() {
+        let (manager, mut rx) = fake_manager_named("device");
+        set_explicit(&manager);
+        assert!(manager.switch_to_default().is_ok());
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("must hand off default");
+        assert_eq!(request.info.name, FAKE_NAME);
+        assert_eq!(request.generation, 1);
+    }
+
+    #[test]
+    fn failed_build_leaves_generation() {
+        let (manager, mut rx) = failing_fake_manager_named("device");
+        assert!(manager.switch_to(FAKE_ID, FAKE_NAME).is_err());
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn handle_auto_reaches_default() {
+        let (manager, mut rx) = fake_manager_named("device");
+        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
+        assert!(handle_device_loss(&manager, &mut policy, Instant::now()));
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("must hand off default");
+        assert_eq!(request.info.name, FAKE_NAME);
     }
 
     #[test]

@@ -88,6 +88,7 @@ pub(crate) struct InputChainBuilder;
 impl PayloadBuilder for InputChainBuilder {
     type Payload = InputChain;
     type Stats = InputStats;
+    type Device = CpalAudioDevice;
 
     fn build(
         device: CpalAudioDevice,
