@@ -591,11 +591,12 @@ async fn handle_user_action(
                 log::debug!("Failed to send mute self event: {:?}", e);
             }
         }
-        UserInputEvent::SetInputDevice(id, name) => match audio.input.manager.switch_to(&id, &name)
-        {
-            Ok(()) => log::debug!("Switched input device to {name}"),
-            Err(e) => log::warn!("Failed to switch input device to {name}: {e:#}"),
-        },
+        UserInputEvent::SetInputDevice(id, name) => {
+            match audio.input.manager.switch_to(&id, &name) {
+                Ok(()) => log::debug!("Switched input device to {name}"),
+                Err(e) => log::warn!("Failed to switch input device to {name}: {e:#}"),
+            }
+        }
         UserInputEvent::SetOutputDevice(id, name) => {
             match audio.output.manager.switch_to(&id, &name) {
                 Ok(()) => log::debug!("Switched output device to {name}"),

@@ -40,7 +40,7 @@ fn stall_timeout_for_period(period: Option<std::time::Duration>) -> std::time::D
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub(crate) enum FallbackMode {
+enum FallbackMode {
     Auto = 0,
     Explicit = 1,
 }
@@ -174,15 +174,15 @@ where
         self.config
     }
 
-    pub(crate) fn mode(&self) -> FallbackMode {
+    fn mode(&self) -> FallbackMode {
         self.fallback_mode.load()
     }
 
-    pub(crate) fn set_mode(&self, mode: FallbackMode) {
+    fn set_mode(&self, mode: FallbackMode) {
         self.fallback_mode.store(mode);
     }
 
-    pub(crate) fn is_live(&self) -> bool {
+    fn is_live(&self) -> bool {
         self.info.borrow().name != DUMMY_DEVICE_NAME
     }
 
@@ -236,7 +236,7 @@ where
         Ok(())
     }
 
-    pub(crate) fn adopt_dummy(&self) {
+    fn adopt_dummy(&self) {
         let (payload, info) = Builder::build_dummy(&self.config);
         let next = self.generation.load(Ordering::Relaxed) + 1;
         match self.send(payload, info, next) {
