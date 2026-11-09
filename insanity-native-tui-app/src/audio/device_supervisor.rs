@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Context;
+use crossbeam_utils::atomic::AtomicCell;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -10,9 +11,7 @@ use super::handoff::HandoffRequest;
 use super::input::InputManager;
 use super::output::OutputManager;
 use super::stream_errors::{FatalReporter, FatalSignal};
-use crate::audio::cpal_registry::{
-    CpalAudioDevice, CpalInputDeviceRegistry, CpalOutputDeviceRegistry,
-};
+use crate::audio::cpal_registry::{CpalInputDeviceRegistry, CpalOutputDeviceRegistry};
 use insanity_core::audio::AudioFormat;
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
@@ -28,11 +27,64 @@ const STARTUP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 const STALL_PERIOD_MULT: u32 = 3;
 const MIN_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 const MAX_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const FALLBACK_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn stall_timeout_for_period(period: Option<std::time::Duration>) -> std::time::Duration {
     match period {
         None => MIN_STALL_TIMEOUT,
         Some(p) => (p * STALL_PERIOD_MULT).clamp(MIN_STALL_TIMEOUT, MAX_STALL_TIMEOUT),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum FallbackMode {
+    Auto = 0,
+    Explicit = 1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FallbackDecision {
+    RetryDefault,
+    ParkOnDummy,
+    DoNothing,
+}
+
+struct FallbackPolicy {
+    last_default_attempt: Option<std::time::Instant>,
+    min_interval: std::time::Duration,
+}
+
+impl FallbackPolicy {
+    fn new(min_interval: std::time::Duration) -> Self {
+        FallbackPolicy {
+            last_default_attempt: None,
+            min_interval,
+        }
+    }
+
+    fn on_device_lost(
+        &mut self,
+        now: std::time::Instant,
+        mode: FallbackMode,
+        is_live: bool,
+    ) -> FallbackDecision {
+        if !is_live {
+            return FallbackDecision::DoNothing;
+        }
+        match mode {
+            FallbackMode::Explicit => FallbackDecision::ParkOnDummy,
+            FallbackMode::Auto => {
+                if let Some(attempted) = self.last_default_attempt
+                    && now.saturating_duration_since(attempted) < self.min_interval
+                {
+                    FallbackDecision::DoNothing
+                } else {
+                    self.last_default_attempt = Some(now);
+                    FallbackDecision::RetryDefault
+                }
+            }
+        }
     }
 }
 
@@ -45,9 +97,10 @@ pub(crate) struct DeviceInfo {
 pub(crate) trait PayloadBuilder {
     type Payload;
     type Stats;
+    type Device: AudioDevice;
 
     fn build(
-        device: CpalAudioDevice,
+        device: Self::Device,
         config: &AudioPipelineConfig,
         stats: &Arc<Self::Stats>,
         reporter: FatalReporter,
@@ -56,6 +109,8 @@ pub(crate) trait PayloadBuilder {
     fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo);
 }
 
+/// A `Clone`d handle for switching the current audio device.
+/// Switches must be serialized by callers: concurrent switch calls are not supported.
 pub(crate) struct DeviceManager<Payload, Stats, DeviceRegistry, Builder> {
     config: AudioPipelineConfig,
     switch_tx: mpsc::Sender<HandoffRequest<Payload, DeviceInfo>>,
@@ -63,13 +118,14 @@ pub(crate) struct DeviceManager<Payload, Stats, DeviceRegistry, Builder> {
     stats: Arc<Stats>,
     info: watch::Receiver<DeviceInfo>,
     generation: Arc<AtomicU64>,
+    fallback_mode: Arc<AtomicCell<FallbackMode>>,
     _payload_builder: PhantomData<Builder>,
     _device_registry: PhantomData<DeviceRegistry>,
 }
 
 impl<Payload, Stats, DeviceRegistry, Builder> DeviceManager<Payload, Stats, DeviceRegistry, Builder>
 where
-    DeviceRegistry: AudioDeviceRegistry<CpalAudioDevice>,
+    DeviceRegistry: AudioDeviceRegistry<Builder::Device>,
     Builder: PayloadBuilder<Payload = Payload, Stats = Stats>,
 {
     pub(crate) fn new(
@@ -87,6 +143,7 @@ where
             stats,
             info,
             generation,
+            fallback_mode: Arc::new(AtomicCell::new(FallbackMode::Auto)),
             _payload_builder: PhantomData,
             _device_registry: PhantomData,
         }
@@ -116,7 +173,19 @@ where
         self.config
     }
 
-    fn _switch_to(&mut self, id: &str, name: &str) -> anyhow::Result<()> {
+    fn mode(&self) -> FallbackMode {
+        self.fallback_mode.load()
+    }
+
+    fn set_mode(&self, mode: FallbackMode) {
+        self.fallback_mode.store(mode);
+    }
+
+    fn is_live(&self) -> bool {
+        self.info.borrow().name != DUMMY_DEVICE_NAME
+    }
+
+    fn switch_to_device(&self, id: &str, name: &str) -> anyhow::Result<()> {
         let device = DeviceRegistry::find(id, name).context("Requested device not found")?;
         self.adopt(device)?;
         Ok(())
@@ -125,13 +194,20 @@ where
     /// Switch to the specified device.
     /// Does not follow changes to system default.
     /// Makes no change if fails to build or adopt new device.
-    pub(crate) fn switch_to(&mut self, id: &str, name: &str) {
-        if let Err(e) = self._switch_to(id, name) {
-            log::warn!("Failed to switch to specified device: {:#}", e);
-        }
+    pub(crate) fn switch_to(&self, id: &str, name: &str) -> anyhow::Result<()> {
+        self.switch_to_device(id, name)?;
+        self.set_mode(FallbackMode::Explicit);
+        Ok(())
     }
 
-    fn _switch_to_current_default(&mut self) -> anyhow::Result<()> {
+    /// Switch to the current default device.
+    /// Does not follow changes to system default.
+    /// Sets fallback mode to auto, regardless of success/failure of switching.
+    /// Resolves the default device name and id and then re-queries the
+    /// explicit device to avoid building the system default object,
+    /// which can reroute streams based on system default changes.
+    pub(crate) fn switch_to_default(&self) -> anyhow::Result<()> {
+        self.set_mode(FallbackMode::Auto);
         let default_device = DeviceRegistry::default_device().context("No device available")?;
         let id = default_device
             .try_id()
@@ -139,22 +215,10 @@ where
         let name = default_device
             .try_name()
             .context("Failed to get default device name")?;
-        self._switch_to(&id, &name)
+        self.switch_to_device(&id, &name)
     }
 
-    /// Switch to the current default device.
-    /// Does not follow changes to system default.
-    /// Makes no change if fails to build or adopt new device.
-    // Resolves system default device name and id and then re-queries
-    // the explicit device to avoid building the system default object,
-    // which can reroute streams based on system default changes.
-    pub(crate) fn switch_to_current_default(&mut self) {
-        if let Err(e) = self._switch_to_current_default() {
-            log::warn!("Failed to switch to current default: {:#}", e);
-        }
-    }
-
-    fn adopt(&mut self, device: CpalAudioDevice) -> anyhow::Result<()> {
+    fn adopt(&self, device: Builder::Device) -> anyhow::Result<()> {
         let next = self.generation.load(Ordering::Relaxed) + 1;
         let reporter = FatalReporter::new(Arc::clone(&self.fatal), next);
         let started = std::time::Instant::now();
@@ -171,13 +235,21 @@ where
         Ok(())
     }
 
-    pub(crate) fn adopt_dummy(&mut self) {
+    fn adopt_dummy(&self) {
         let (payload, info) = Builder::build_dummy(&self.config);
         let next = self.generation.load(Ordering::Relaxed) + 1;
         match self.send(payload, info, next) {
             Ok(_) => self.generation.store(next, Ordering::Relaxed),
-            Err(e) => log::warn!("{:#}", e),
+            Err(e) => log::warn!("{e:#}"),
         }
+    }
+
+    fn park_if_live(&self) -> bool {
+        if !self.is_live() {
+            return false;
+        }
+        self.adopt_dummy();
+        true
     }
 
     fn send(&self, payload: Payload, info: DeviceInfo, generation: u64) -> anyhow::Result<()> {
@@ -203,6 +275,7 @@ impl<Payload, Stats, DeviceRegistry, Builder> Clone
             stats: Arc::clone(&self.stats),
             info: self.info.clone(),
             generation: Arc::clone(&self.generation),
+            fallback_mode: Arc::clone(&self.fallback_mode),
             _payload_builder: PhantomData,
             _device_registry: PhantomData,
         }
@@ -277,7 +350,7 @@ impl DeviceLiveness {
 
     /// True when current device is not dummy, the startup grace has elapsed,
     /// and no callback has advanced the count within the stall deadline.
-    fn poll_check_dead(
+    fn check_stalled(
         &mut self,
         now: std::time::Instant,
         generation: u64,
@@ -322,9 +395,41 @@ impl DeviceLiveness {
     }
 }
 
+fn handle_device_loss<Payload, Stats, Registry, Builder>(
+    manager: &DeviceManager<Payload, Stats, Registry, Builder>,
+    policy: &mut FallbackPolicy,
+    now: std::time::Instant,
+) -> bool
+where
+    Registry: AudioDeviceRegistry<Builder::Device>,
+    Builder: PayloadBuilder<Payload = Payload, Stats = Stats>,
+{
+    let decision = policy.on_device_lost(now, manager.mode(), manager.is_live());
+    match decision {
+        FallbackDecision::DoNothing => {
+            log::debug!("no fallback action");
+            false
+        }
+        FallbackDecision::ParkOnDummy => {
+            log::warn!("Parking explicit device on dummy");
+            manager.park_if_live()
+        }
+        FallbackDecision::RetryDefault => match manager.switch_to_default() {
+            Ok(()) => {
+                log::warn!("Fell back to default device");
+                true
+            }
+            Err(e) => {
+                log::warn!("Default fallback failed ({e:#}), parking on dummy");
+                manager.park_if_live()
+            }
+        },
+    }
+}
+
 pub(crate) async fn run_device_supervisor(
-    mut input: InputManager,
-    mut output: OutputManager,
+    input: InputManager,
+    output: OutputManager,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     cancel: CancellationToken,
 ) {
@@ -354,77 +459,78 @@ pub(crate) async fn run_device_supervisor(
         output.generation(),
         output.stats().data_callbacks(),
     );
+    let mut input_fallback = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
+    let mut output_fallback = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
     loop {
         tokio::select! {
             _ = input_fatal.notified() => {
-                if input_fatal.generation() == input.generation() {
-                    log::info!(
-                        "Input stream failed ({:?}), falling back to dummy device",
-                        super::stream_errors::input_fatal_kind()
-                    );
-                    input.adopt_dummy();
-                    send_refresh(&app_event_tx, &input, &output);
+                let generation = input_fatal.generation();
+                if generation != input.generation() {
+                    log::debug!("Ignoring stale input failure for generation {generation}");
                 } else {
-                    log::debug!(
-                        "Ignoring stale input failure for generation {}",
-                        input_fatal.generation()
-                    );
+                    let kind = super::stream_errors::input_fatal_kind();
+                    log::warn!("Input stream failed ({kind:?}) gen {generation}");
+                    let now = std::time::Instant::now();
+                    if handle_device_loss(&input, &mut input_fallback, now) {
+                        send_refresh(&app_event_tx, &input, &output);
+                    }
                 }
             }
             _ = output_fatal.notified() => {
-                if output_fatal.generation() == output.generation() {
-                    log::info!(
-                        "Output stream failed ({:?}), falling back to dummy device",
-                        super::stream_errors::output_fatal_kind()
-                    );
-                    output.adopt_dummy();
-                    send_refresh(&app_event_tx, &input, &output);
+                let generation = output_fatal.generation();
+                if generation != output.generation() {
+                    log::debug!("Ignoring stale output failure for generation {generation}");
                 } else {
-                    log::debug!(
-                        "Ignoring stale output failure for generation {}",
-                        output_fatal.generation()
-                    );
+                    let kind = super::stream_errors::output_fatal_kind();
+                    log::warn!("Output stream failed ({kind:?}) gen {generation}");
+                    let now = std::time::Instant::now();
+                    if handle_device_loss(&output, &mut output_fallback, now) {
+                        send_refresh(&app_event_tx, &input, &output);
+                    }
                 }
             }
             _ = liveness_tick.tick() => {
                 let now = std::time::Instant::now();
                 let input_period = input.stats().callback_period();
-                if input_liveness.poll_check_dead(
+                let input_dead = input_liveness.check_stalled(
                     now,
                     input.generation(),
                     &input.current_name(),
                     input.stats().data_callbacks(),
                     input_period,
-                ) {
-                    log::warn!(
-                        "Input stalled (no data callbacks for {:?}, deadline {:?}, \
-                         gen {} {}), falling back to dummy device",
+                );
+                if input_dead {
+                    log::debug!(
+                        "Input stalled (no data callbacks for {:?}, deadline {:?}, gen {} {})",
                         input_liveness.frozen_for(now),
                         stall_timeout_for_period(input_period),
                         input.generation(),
-                        input.current_name()
+                        input.current_name(),
                     );
-                    input.adopt_dummy();
+                    if handle_device_loss(&input, &mut input_fallback, now) {
+                        send_refresh(&app_event_tx, &input, &output);
+                    }
                 }
                 let output_period = output.stats().callback_period();
-                if output_liveness.poll_check_dead(
+                let output_dead = output_liveness.check_stalled(
                     now,
                     output.generation(),
                     &output.current_name(),
                     output.stats().data_callbacks(),
                     output_period,
-                ) {
-                    log::warn!(
-                        "Output stalled (no data callbacks for {:?}, deadline {:?}, \
-                         gen {} {}), falling back to dummy device",
+                );
+                if output_dead {
+                    log::debug!(
+                        "Output stalled (no data callbacks for {:?}, deadline {:?}, gen {} {})",
                         output_liveness.frozen_for(now),
                         stall_timeout_for_period(output_period),
                         output.generation(),
-                        output.current_name()
+                        output.current_name(),
                     );
-                    output.adopt_dummy();
+                    if handle_device_loss(&output, &mut output_fallback, now) {
+                        send_refresh(&app_event_tx, &input, &output);
+                    }
                 }
-                send_refresh(&app_event_tx, &input, &output);
             }
             _ = cancel.cancelled() => break,
         }
@@ -433,12 +539,239 @@ pub(crate) async fn run_device_supervisor(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
     use std::time::{Duration, Instant};
 
+    use tokio::sync::{mpsc, watch};
+
+    use super::super::handoff::HandoffRequest;
+    use super::super::stream_errors::{FatalReporter, FatalSignal};
     use super::{
-        DeviceLiveness, MAX_STALL_TIMEOUT, MIN_STALL_TIMEOUT, STARTUP_GRACE,
-        stall_timeout_for_period,
+        DUMMY_DEVICE_NAME, DeviceInfo, DeviceLiveness, DeviceManager, FALLBACK_MIN_INTERVAL,
+        FallbackDecision, FallbackMode, FallbackPolicy, MAX_STALL_TIMEOUT, MIN_STALL_TIMEOUT,
+        PayloadBuilder, STARTUP_GRACE, handle_device_loss, stall_timeout_for_period,
     };
+    use insanity_core::audio::config::AudioPipelineConfig;
+    use insanity_core::audio::device::{AudioDevice, AudioDeviceRegistry};
+
+    struct EmptyRegistry;
+
+    impl AudioDeviceRegistry<FakeDevice> for EmptyRegistry {
+        fn list_devices() -> Vec<FakeDevice> {
+            Vec::new()
+        }
+
+        fn default_device() -> Option<FakeDevice> {
+            None
+        }
+    }
+
+    const FAKE_ID: &str = "fake-id";
+    const FAKE_NAME: &str = "fake-device";
+
+    #[derive(Clone, Debug)]
+    struct FakeDevice;
+
+    impl AudioDevice for FakeDevice {
+        fn try_name(&self) -> Option<String> {
+            Some(String::from(FAKE_NAME))
+        }
+
+        fn try_id(&self) -> Option<String> {
+            Some(String::from(FAKE_ID))
+        }
+    }
+
+    struct FakeRegistry;
+
+    impl AudioDeviceRegistry<FakeDevice> for FakeRegistry {
+        fn list_devices() -> Vec<FakeDevice> {
+            vec![FakeDevice]
+        }
+
+        fn default_device() -> Option<FakeDevice> {
+            Some(FakeDevice)
+        }
+    }
+
+    struct FakeBuilder<const SUCCEED: bool>;
+
+    impl<const SUCCEED: bool> PayloadBuilder for FakeBuilder<SUCCEED> {
+        type Payload = String;
+        type Stats = ();
+        type Device = FakeDevice;
+
+        fn build(
+            device: FakeDevice,
+            config: &AudioPipelineConfig,
+            _stats: &Arc<Self::Stats>,
+            _reporter: FatalReporter,
+        ) -> anyhow::Result<(Self::Payload, DeviceInfo)> {
+            if SUCCEED {
+                Ok((
+                    String::from("fake"),
+                    DeviceInfo {
+                        name: device.name(),
+                        format: config.audio_format(),
+                    },
+                ))
+            } else {
+                anyhow::bail!("no hardware in unit test")
+            }
+        }
+
+        fn build_dummy(config: &AudioPipelineConfig) -> (Self::Payload, DeviceInfo) {
+            (
+                String::from("dummy"),
+                DeviceInfo {
+                    name: String::from(DUMMY_DEVICE_NAME),
+                    format: config.audio_format(),
+                },
+            )
+        }
+    }
+
+    type TestManager = DeviceManager<String, (), EmptyRegistry, FakeBuilder<true>>;
+
+    type FakeManager = DeviceManager<String, (), FakeRegistry, FakeBuilder<true>>;
+    type FailingFakeManager = DeviceManager<String, (), FakeRegistry, FakeBuilder<false>>;
+
+    type ManagedHandoff<Registry, Builder> = (
+        DeviceManager<String, (), Registry, Builder>,
+        mpsc::Receiver<HandoffRequest<String, DeviceInfo>>,
+    );
+
+    fn manager_with<Registry, Builder>(name: &str) -> ManagedHandoff<Registry, Builder>
+    where
+        Registry: AudioDeviceRegistry<Builder::Device>,
+        Builder: PayloadBuilder<Payload = String, Stats = ()>,
+    {
+        let config = AudioPipelineConfig::default();
+        let (switch_tx, switch_rx) = mpsc::channel(8);
+        let (_, info_rx) = watch::channel(DeviceInfo {
+            name: String::from(name),
+            format: config.audio_format(),
+        });
+        let manager = DeviceManager::<String, (), Registry, Builder>::new(
+            config,
+            switch_tx,
+            Arc::new(FatalSignal::new()),
+            Arc::new(()),
+            info_rx,
+            Arc::new(AtomicU64::new(0)),
+        );
+        (manager, switch_rx)
+    }
+
+    #[test]
+    fn switch_to_default_stays_auto() {
+        let (manager, mut rx): (TestManager, _) = manager_with("device");
+        manager.set_mode(FallbackMode::Explicit);
+        assert!(manager.switch_to_default().is_err());
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn switch_to_succeeds_sets_explicit() {
+        let (manager, mut rx): (FakeManager, _) = manager_with("device");
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert!(manager.switch_to(FAKE_ID, FAKE_NAME).is_ok());
+        assert_eq!(manager.mode(), FallbackMode::Explicit);
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("must hand off fake device");
+        assert_eq!(request.info.name, FAKE_NAME);
+        assert_eq!(request.generation, 1);
+    }
+
+    #[test]
+    fn switch_to_default_succeeds_stays_auto() {
+        let (manager, mut rx): (FakeManager, _) = manager_with("device");
+        manager.set_mode(FallbackMode::Explicit);
+        assert!(manager.switch_to_default().is_ok());
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("must hand off default");
+        assert_eq!(request.info.name, FAKE_NAME);
+        assert_eq!(request.generation, 1);
+    }
+
+    #[test]
+    fn failed_build_leaves_generation() {
+        let (manager, mut rx): (FailingFakeManager, _) = manager_with("device");
+        assert!(manager.switch_to(FAKE_ID, FAKE_NAME).is_err());
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 0);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn handle_auto_reaches_default() {
+        let (manager, mut rx): (FakeManager, _) = manager_with("device");
+        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
+        assert!(handle_device_loss(&manager, &mut policy, Instant::now()));
+        assert_eq!(manager.mode(), FallbackMode::Auto);
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("must hand off default");
+        assert_eq!(request.info.name, FAKE_NAME);
+    }
+
+    #[test]
+    fn policy_decisions() {
+        let t0 = Instant::now();
+        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
+        assert_eq!(
+            policy.on_device_lost(t0, FallbackMode::Explicit, true),
+            FallbackDecision::ParkOnDummy
+        );
+        assert_eq!(
+            policy.on_device_lost(t0 + ms(100), FallbackMode::Explicit, true),
+            FallbackDecision::ParkOnDummy
+        );
+        assert!(policy.last_default_attempt.is_none());
+        for mode in [FallbackMode::Auto, FallbackMode::Explicit] {
+            assert_eq!(
+                policy.on_device_lost(t0, mode, false),
+                FallbackDecision::DoNothing
+            );
+        }
+        assert!(policy.last_default_attempt.is_none());
+        assert_eq!(
+            policy.on_device_lost(t0, FallbackMode::Auto, true),
+            FallbackDecision::RetryDefault
+        );
+        assert_eq!(
+            policy.on_device_lost(t0 + ms(100), FallbackMode::Auto, true),
+            FallbackDecision::DoNothing
+        );
+        assert_eq!(
+            policy.on_device_lost(t0 + FALLBACK_MIN_INTERVAL + ms(1), FallbackMode::Auto, true),
+            FallbackDecision::RetryDefault
+        );
+    }
+
+    #[test]
+    fn handle_auto_parks_on_failed_default() {
+        let (manager, mut rx): (TestManager, _) = manager_with("device");
+        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
+        assert!(handle_device_loss(&manager, &mut policy, Instant::now()));
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("must park on dummy");
+        assert_eq!(request.info.name, DUMMY_DEVICE_NAME);
+    }
+
+    #[test]
+    fn handle_explicit_parks() {
+        let (manager, mut rx): (TestManager, _) = manager_with("device");
+        manager.set_mode(FallbackMode::Explicit);
+        let mut policy = FallbackPolicy::new(FALLBACK_MIN_INTERVAL);
+        assert!(handle_device_loss(&manager, &mut policy, Instant::now()));
+        assert_eq!(manager.generation(), 1);
+        let request = rx.try_recv().expect("explicit must park");
+        assert_eq!(request.info.name, DUMMY_DEVICE_NAME);
+    }
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -449,25 +782,16 @@ mod tests {
     }
 
     #[test]
-    fn frozen_count_inside_grace_is_not_dead() {
+    fn stall_needs_grace_and_deadline() {
         let t0 = Instant::now();
         let mut liveness = live_at(t0);
         for dt in [100, 200, 1000] {
             assert!(
-                !liveness.poll_check_dead(t0 + ms(dt), 1, "device", 10, Some(ms(100))),
+                !liveness.check_stalled(t0 + ms(dt), 1, "device", 10, Some(ms(100))),
                 "frozen count at +{dt}ms must not trip inside grace"
             );
         }
-    }
-
-    #[test]
-    fn frozen_count_past_grace_and_deadline_is_dead() {
-        let t0 = Instant::now();
-        let mut liveness = live_at(t0);
-        // Inside grace but past deadline: grace wins.
-        assert!(!liveness.poll_check_dead(t0 + ms(1000), 1, "device", 10, Some(ms(100))));
-        // Past both: dead.
-        assert!(liveness.poll_check_dead(
+        assert!(liveness.check_stalled(
             t0 + STARTUP_GRACE + ms(501),
             1,
             "device",
@@ -481,48 +805,25 @@ mod tests {
         let t0 = Instant::now();
         let mut liveness = live_at(t0);
         let switch_at = t0 + STARTUP_GRACE + ms(10_000);
-        // New generation carries a longer (5s) deadline.
-        assert!(!liveness.poll_check_dead(
-            switch_at,
-            2,
-            "device",
-            10,
-            Some(Duration::from_secs(2))
-        ));
-        // Past grace and past the old 500ms deadline, but within the new one:
-        // alive, proving the fresh deadline governs.
-        assert!(!liveness.poll_check_dead(
-            switch_at + STARTUP_GRACE + ms(600),
-            2,
-            "device",
-            10,
-            Some(Duration::from_secs(2))
-        ));
-        // Past the new deadline: dead.
-        assert!(liveness.poll_check_dead(
-            switch_at + STARTUP_GRACE + ms(5001),
-            2,
-            "device",
-            10,
-            Some(Duration::from_secs(2))
-        ));
+        let period = Some(Duration::from_secs(2));
+        for (at, stalled) in [
+            (switch_at, false),
+            (switch_at + STARTUP_GRACE + ms(600), false),
+            (switch_at + STARTUP_GRACE + ms(5001), true),
+        ] {
+            assert_eq!(liveness.check_stalled(at, 2, "device", 10, period), stalled);
+        }
     }
 
     #[test]
     fn stall_timeout_scales_with_period_and_clamps() {
-        // 480 frames @ 48kHz = 10ms period -> 30ms, floored to the minimum.
-        assert_eq!(
-            stall_timeout_for_period(Some(Duration::from_millis(10))),
-            MIN_STALL_TIMEOUT
-        );
-        // Unknown period -> minimum.
-        assert_eq!(stall_timeout_for_period(None), MIN_STALL_TIMEOUT);
-        // 96000 frames @ 48kHz = 2s period -> 6s, capped at the maximum.
-        assert_eq!(
-            stall_timeout_for_period(Some(Duration::from_secs(2))),
-            MAX_STALL_TIMEOUT
-        );
-        // A mid-range period passes through scaled.
-        assert_eq!(stall_timeout_for_period(Some(ms(300))), ms(900));
+        for (period, expected) in [
+            (Some(Duration::from_millis(10)), MIN_STALL_TIMEOUT),
+            (None, MIN_STALL_TIMEOUT),
+            (Some(Duration::from_secs(2)), MAX_STALL_TIMEOUT),
+            (Some(ms(300)), ms(900)),
+        ] {
+            assert_eq!(stall_timeout_for_period(period), expected);
+        }
     }
 }

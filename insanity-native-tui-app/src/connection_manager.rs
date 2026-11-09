@@ -436,7 +436,7 @@ fn manage_peers(
     });
     tokio::spawn(async move {
         let mut managed_peers: HashMap<uuid::Uuid, ManagedPeer> = HashMap::new();
-        let mut audio = audio;
+        let audio = audio;
         loop {
             tokio::select! {
                 Some(augmented_info) = conn_info_rx.recv() => {
@@ -457,7 +457,7 @@ fn manage_peers(
                     }
                 },
                 Some(user_action) = user_action_rx.recv() => {
-                    if let Err(e) = handle_user_action(user_action, &mut audio, app_event_tx.clone(), &mut managed_peers).await {
+                    if let Err(e) = handle_user_action(user_action, &audio, app_event_tx.clone(), &mut managed_peers).await {
                         log::debug!("Failed to handle user action: {:?}", e);
                     }
                 }
@@ -529,7 +529,7 @@ fn update_peer_info(
 
 async fn handle_user_action(
     user_action: UserInputEvent,
-    audio: &mut SharedAudio,
+    audio: &SharedAudio,
     app_event_tx: Option<mpsc::UnboundedSender<AppEvent>>,
     managed_peers: &mut HashMap<uuid::Uuid, ManagedPeer>,
 ) -> anyhow::Result<()> {
@@ -592,12 +592,16 @@ async fn handle_user_action(
             }
         }
         UserInputEvent::SetInputDevice(id, name) => {
-            audio.input.manager.switch_to(&id, &name);
-            log::debug!("Switched input device to {name}");
+            match audio.input.manager.switch_to(&id, &name) {
+                Ok(()) => log::debug!("Switched input device to {name}"),
+                Err(e) => log::warn!("Failed to switch input device to {name}: {e:#}"),
+            }
         }
         UserInputEvent::SetOutputDevice(id, name) => {
-            audio.output.manager.switch_to(&id, &name);
-            log::debug!("Switched output device to {name}");
+            match audio.output.manager.switch_to(&id, &name) {
+                Ok(()) => log::debug!("Switched output device to {name}"),
+                Err(e) => log::warn!("Failed to switch output device to {name}: {e:#}"),
+            }
         }
         UserInputEvent::RefreshDevices => {
             let events = device_supervisor::refresh_device_events(

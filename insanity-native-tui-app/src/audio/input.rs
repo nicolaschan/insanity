@@ -88,6 +88,7 @@ pub(crate) struct InputChainBuilder;
 impl PayloadBuilder for InputChainBuilder {
     type Payload = InputChain;
     type Stats = InputStats;
+    type Device = CpalAudioDevice;
 
     fn build(
         device: CpalAudioDevice,
@@ -134,7 +135,7 @@ pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
         swap_rx,
         info_tx,
     };
-    let mut manager = InputManager::new(
+    let manager = InputManager::new(
         config,
         switch_tx,
         Arc::new(FatalSignal::new()),
@@ -142,8 +143,9 @@ pub(crate) fn start_input(config: AudioPipelineConfig) -> AudioInput {
         info_rx,
         Arc::new(AtomicU64::new(0)),
     );
-    // Request starting the actual input device
-    manager.switch_to_current_default();
+    if let Err(e) = manager.switch_to_default() {
+        log::warn!("Failed to switch to current default: {e:#}");
+    }
     AudioInput { manager, source }
 }
 

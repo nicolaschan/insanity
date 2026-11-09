@@ -223,6 +223,7 @@ fn try_output_candidate(
 impl PayloadBuilder for SinkBuilder {
     type Payload = Sink;
     type Stats = OutputStats;
+    type Device = CpalAudioDevice;
 
     fn build(
         device: CpalAudioDevice,
@@ -312,7 +313,7 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let (info_tx, info_rx) = watch::channel(dummy_info);
     let (op_tx, op_rx) = mpsc::channel(MIXER_OPS_BOUND);
 
-    let mut manager = OutputManager::new(
+    let manager = OutputManager::new(
         audio_config,
         switch_tx,
         Arc::new(FatalSignal::new()),
@@ -332,8 +333,9 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
         audio_config.block_samples(),
     ));
 
-    // Request starting the actual output device
-    manager.switch_to_current_default();
+    if let Err(e) = manager.switch_to_default() {
+        log::warn!("Failed to switch to current default: {e:#}");
+    }
     AudioOutput {
         client: MixerClient {
             tx: op_tx,
