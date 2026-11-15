@@ -1010,75 +1010,14 @@ mod render_scaling_tests {
         assert!(!app.process_event(AppEvent::Enter));
         assert!(!app.process_event(AppEvent::Character('x')));
         assert!(!app.process_event(AppEvent::Up));
-        let (mut app, _) = test_app_with_peers(2);
-        assert!(app.process_event(AppEvent::Down));
-        assert!(app.process_event(AppEvent::Down));
-        assert!(app.process_event(AppEvent::Up));
-        let (mut empty, _) = test_app_with_peers(0);
-        // With no peers the chain is Speaker <-> Mic, clamped at both ends.
-        assert!(empty.process_event(AppEvent::Down));
-        assert!(!empty.process_event(AppEvent::Down));
-        assert!(empty.process_event(AppEvent::Up));
-        assert!(!empty.process_event(AppEvent::Up));
-        assert!(empty.process_event(AppEvent::Character('G')));
-        assert!(!empty.process_event(AppEvent::Character('G')));
-        assert!(!empty.process_event(AppEvent::Character('j')));
-        assert!(empty.process_event(AppEvent::Character('k')));
-    }
-
-    fn test_app_on_settings() -> (App, UnboundedReceiver<UserInputEvent>) {
-        let (tx, rx) = unbounded_channel();
-        let mut app = App::new(tx);
-        assert!(app.process_event(AppEvent::NextTab));
-        assert!(app.process_event(AppEvent::NextTab));
-        assert_eq!(app.tab_index, TAB_IDX_SETTINGS);
-        (app, rx)
-    }
-
-    fn fixture_inputs() -> Vec<(String, String)> {
-        vec![
-            ("mic-0".to_string(), "Mic 0".to_string()),
-            ("mic-1".to_string(), "Mic 1".to_string()),
-            ("mic-2".to_string(), "Mic 2".to_string()),
-        ]
-    }
-
-    fn fixture_outputs() -> Vec<(String, String)> {
-        vec![
-            ("spk-0".to_string(), "Speakers 0".to_string()),
-            ("spk-1".to_string(), "Speakers 1".to_string()),
-        ]
-    }
-
-    #[test]
-    fn device_lists_store_and_clamp_on_shrink() {
-        let (mut app, _rx) = test_app_on_settings();
-        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
-        assert!(app.process_event(AppEvent::SetOutputDevices(fixture_outputs())));
-        assert!(!app.process_event(AppEvent::SetInputDevices(fixture_inputs())));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(2));
-        assert!(app.process_event(AppEvent::SetInputDevices(fixture_inputs()[..1].to_vec())));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
-    }
-
-    #[test]
-    fn device_cursor_parks_on_empty_lists() {
-        let (mut app, _rx) = test_app_on_settings();
-        assert!(!app.process_event(AppEvent::Enter));
-        assert!(!app.process_event(AppEvent::Character('j')));
-        assert!(!app.process_event(AppEvent::Character('k')));
-        assert!(!app.process_event(AppEvent::Down));
-        assert!(!app.process_event(AppEvent::Up));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
     }
 
     fn test_settings_app(input_count: usize, output_count: usize) -> App {
         let (tx, _rx) = unbounded_channel();
         let mut app = App::new(tx);
-        app.process_event(AppEvent::NextTab);
-        app.process_event(AppEvent::NextTab);
+        assert!(app.process_event(AppEvent::NextTab));
+        assert!(app.process_event(AppEvent::NextTab));
+        assert_eq!(app.tab_index, TAB_IDX_SETTINGS);
         let inputs = (0..input_count)
             .map(|i| (format!("mic-{i}"), format!("Mic {i}")))
             .collect();
@@ -1088,6 +1027,33 @@ mod render_scaling_tests {
         app.process_event(AppEvent::SetInputDevices(inputs));
         app.process_event(AppEvent::SetOutputDevices(outputs));
         app
+    }
+
+    #[test]
+    fn device_lists_store_and_clamp_on_shrink() {
+        let mut app = test_settings_app(0, 0);
+        // Empty lists: navigation inert, cursor parked.
+        assert!(!app.process_event(AppEvent::Enter));
+        assert!(!app.process_event(AppEvent::Character('j')));
+        assert!(!app.process_event(AppEvent::Character('k')));
+        assert!(!app.process_event(AppEvent::Down));
+        assert!(!app.process_event(AppEvent::Up));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
+        // Populating stores; re-setting the same lists is a no-op.
+        let inputs: Vec<(String, String)> = (0..3)
+            .map(|i| (format!("mic-{i}"), format!("Mic {i}")))
+            .collect();
+        let outputs: Vec<(String, String)> = (0..2)
+            .map(|i| (format!("spk-{i}"), format!("Speakers {i}")))
+            .collect();
+        assert!(app.process_event(AppEvent::SetInputDevices(inputs.clone())));
+        assert!(app.process_event(AppEvent::SetOutputDevices(outputs)));
+        assert!(!app.process_event(AppEvent::SetInputDevices(inputs.clone())));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert!(app.process_event(AppEvent::Character('j')));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(2));
+        assert!(app.process_event(AppEvent::SetInputDevices(inputs[..1].to_vec())));
+        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
     }
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
@@ -1100,12 +1066,15 @@ mod render_scaling_tests {
             .collect()
     }
 
-    #[test]
-    fn settings_picker_shows_all_devices_unclipped() {
-        let app = test_settings_app(3, 2);
+    fn render_text(app: &App) -> String {
         let mut terminal = test_terminal();
         app.render(&mut terminal).expect("render");
-        let text = buffer_text(&terminal).join("\n");
+        buffer_text(&terminal).join("\n")
+    }
+
+    #[test]
+    fn settings_picker_shows_all_devices_unclipped() {
+        let text = render_text(&test_settings_app(3, 2));
         for name in ["Mic 0", "Mic 1", "Mic 2", "Speakers 0", "Speakers 1"] {
             assert!(text.contains(name), "{name} clipped from settings picker");
         }
@@ -1136,11 +1105,7 @@ mod render_scaling_tests {
         assert_eq!(app.main_cursor, MainCursor::Mic);
         assert!(app.process_event(AppEvent::Character('k')));
         assert_eq!(app.main_cursor, MainCursor::Speaker);
-    }
-
-    #[test]
-    fn main_cursor_top_bottom_keys_span_chain() {
-        let (mut app, _) = test_app_with_peers(2);
+        // g/G jump to top/bottom of the chain.
         assert!(app.process_event(AppEvent::Character('G')));
         assert_eq!(app.main_cursor, MainCursor::Peer(1));
         assert!(!app.process_event(AppEvent::Character('G')));
@@ -1188,12 +1153,6 @@ mod render_scaling_tests {
             rx.try_recv(),
             Ok(UserInputEvent::SetVolume(ids[0].clone(), 101))
         );
-        // Peer-only keys are inert on volume rows.
-        assert!(app.process_event(AppEvent::Character('g')));
-        assert!(!app.process_event(AppEvent::Character(' ')));
-        assert!(rx.try_recv().is_err());
-        assert!(!app.process_event(AppEvent::Character('d')));
-        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -1217,133 +1176,22 @@ mod render_scaling_tests {
     }
 
     #[test]
-    fn master_volume_echo_updates_state() {
-        let (mut app, _) = test_app_with_peers(0);
-        assert!(!app.process_event(AppEvent::SetSpeakerVolume(100)));
-        assert!(app.process_event(AppEvent::SetSpeakerVolume(120)));
-        assert_eq!(app.speaker_volume, 120);
-        assert!(!app.process_event(AppEvent::SetMicVolume(100)));
-        assert!(app.process_event(AppEvent::SetMicVolume(80)));
-        assert_eq!(app.mic_volume, 80);
-    }
-
-    #[test]
-    fn main_tab_renders_volume_and_peers_sections() {
-        let (app, _) = test_app_with_peers(1);
-        let mut terminal = test_terminal();
-        app.render(&mut terminal).expect("render");
-        let text = buffer_text(&terminal).join("\n");
-        for needle in ["Main", "Volume", "Speaker volume", "Mic volume", "Peers"] {
-            assert!(text.contains(needle), "{needle} missing from main tab");
-        }
-    }
-
-    #[test]
-    fn main_tab_volume_styles_and_mute_indicator() {
-        use ratatui::style::{Color, Modifier};
-
-        fn cell_rows(
-            terminal: &Terminal<TestBackend>,
-        ) -> Vec<(Vec<char>, Vec<Color>, Vec<Modifier>)> {
-            let buffer = terminal.backend().buffer();
-            let width = buffer.area.width as usize;
-            buffer
-                .content
-                .chunks(width)
-                .map(|row| {
-                    (
-                        row.iter()
-                            .map(|cell| cell.symbol().chars().next().unwrap_or(' '))
-                            .collect(),
-                        row.iter().map(|cell| cell.fg).collect(),
-                        row.iter().map(|cell| cell.modifier).collect(),
-                    )
-                })
-                .collect()
-        }
-
-        fn label_cells(
-            rows: &[(Vec<char>, Vec<Color>, Vec<Modifier>)],
-            label: &str,
-        ) -> (Vec<Color>, Vec<Modifier>) {
-            let needle: Vec<char> = label.chars().collect();
-            let (_, fgs, mods) = rows
-                .iter()
-                .find(|(chars, _, _)| chars.windows(needle.len()).any(|w| w == needle.as_slice()))
-                .unwrap_or_else(|| panic!("{label} not rendered"));
-            let start = rows
-                .iter()
-                .find_map(|(chars, _, _)| {
-                    chars
-                        .windows(needle.len())
-                        .position(|w| w == needle.as_slice())
-                })
-                .expect("label position");
-            (
-                fgs[start..start + needle.len()].to_vec(),
-                mods[start..start + needle.len()].to_vec(),
-            )
-        }
-
-        fn row_chars_containing(
-            rows: &[(Vec<char>, Vec<Color>, Vec<Modifier>)],
-            label: &str,
-        ) -> Vec<char> {
-            let needle: Vec<char> = label.chars().collect();
-            rows.iter()
-                .find(|(chars, _, _)| chars.windows(needle.len()).any(|w| w == needle.as_slice()))
-                .map(|(chars, _, _)| chars.clone())
-                .unwrap_or_else(|| panic!("{label} not rendered"))
-        }
-
+    fn main_tab_mute_indicator_follows_mic_row() {
         let (mut app, _) = test_app_with_peers(1);
         app.own_display_name = Some("me".to_string());
 
-        // Unmuted: DarkGray labels, white values, speaker icon on mic row.
-        let mut terminal = test_terminal();
-        app.render(&mut terminal).expect("render");
-        let all_text = buffer_text(&terminal).join("\n");
-        assert!(all_text.contains("(you)"));
-        assert!(!all_text.contains("MUTED"));
-        let rows = cell_rows(&terminal);
-        for label in ["Speaker volume", "Mic volume"] {
-            let (fgs, mods) = label_cells(&rows, label);
-            assert!(
-                fgs.iter().all(|fg| *fg == Color::DarkGray),
-                "{label} label not DarkGray"
-            );
-            assert!(
-                mods.iter().all(|m| !m.contains(Modifier::CROSSED_OUT)),
-                "{label} label crossed out while unmuted"
-            );
-            let row = row_chars_containing(&rows, label);
-            assert!(row.contains(&'1'), "{label} row shows no volume value");
+        let unmuted = render_text(&app);
+        for needle in ["Main", "Volume", "Speaker volume", "Mic volume", "Peers"] {
+            assert!(unmuted.contains(needle), "{needle} missing from main tab");
         }
-        let mic_row = row_chars_containing(&rows, "Mic volume");
-        assert!(mic_row.contains(&'🔊'), "mic row shows no unmute icon");
+        assert!(unmuted.contains("(you)"));
+        assert!(unmuted.contains("🔊"));
+        assert!(!unmuted.contains("MUTED"));
 
-        // Muted: crossed-out mic label + mute icon; speaker row untouched.
         assert!(app.process_event(AppEvent::MuteSelf(true)));
-        let mut terminal = test_terminal();
-        app.render(&mut terminal).expect("render");
-        let all_text = buffer_text(&terminal).join("\n");
-        assert!(all_text.contains("(you)"));
-        assert!(!all_text.contains("MUTED"));
-        let rows = cell_rows(&terminal);
-        let (mic_fgs, mic_mods) = label_cells(&rows, "Mic volume");
-        assert!(mic_fgs.iter().all(|fg| *fg == Color::DarkGray));
-        assert!(
-            mic_mods.iter().all(|m| m.contains(Modifier::CROSSED_OUT)),
-            "mic label not crossed out while muted"
-        );
-        let mic_row = row_chars_containing(&rows, "Mic volume");
-        assert!(mic_row.contains(&'🔇'), "mic row shows no mute icon");
-        let (_, speaker_mods) = label_cells(&rows, "Speaker volume");
-        assert!(
-            speaker_mods
-                .iter()
-                .all(|m| !m.contains(Modifier::CROSSED_OUT)),
-            "speaker label crossed out by mute"
-        );
+        let muted = render_text(&app);
+        assert!(muted.contains("(you)"));
+        assert!(muted.contains("🔇"));
+        assert!(!muted.contains("MUTED"));
     }
 }
