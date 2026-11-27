@@ -136,7 +136,7 @@ fn build_device_sink(
     audio_config: &AudioPipelineConfig,
     stats: &Arc<OutputStats>,
 ) -> anyhow::Result<Sink> {
-    let (sample_format, cfg) = get_output_config(&device, audio_config)?;
+    let (sample_format, cfg) = get_output_config(&device)?;
     let channels = cfg.channels;
     let sample_rate = cfg.sample_rate;
     let device_format = AudioFormat::new(channels, sample_rate);

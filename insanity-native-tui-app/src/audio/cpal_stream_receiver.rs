@@ -156,7 +156,7 @@ fn make_single_input(
     audio_config: &AudioPipelineConfig,
     stats: &Arc<InputStats>,
 ) -> anyhow::Result<CpalStreamReceiver> {
-    let (fmt, cfg) = get_input_config(&device, audio_config)?;
+    let (fmt, cfg) = get_input_config(&device)?;
     let channels = cfg.channels;
     let sample_rate = cfg.sample_rate;
     let format = AudioFormat::new(channels, sample_rate);
