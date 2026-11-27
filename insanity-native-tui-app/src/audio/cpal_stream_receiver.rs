@@ -1,57 +1,32 @@
 use std::iter::ExactSizeIterator;
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering},
 };
 
 use cpal::{
     Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig,
     traits::{DeviceTrait, StreamTrait},
 };
-
-use super::config::{STREAM_BUILD_TIMEOUT, ordered_input_configs};
-use super::cpal_stream::sample_format_dispatch;
-use super::mixer::RING_CAPACITY_BLOCKS;
-use super::stream_errors::FatalReporter;
 use insanity_core::audio::AudioFormat;
+use insanity_core::audio::chunk::{AudioChunk, ChunkSource, SampleChunker};
 use insanity_core::audio::config::AudioPipelineConfig;
 use insanity_core::audio::sample::SampleSource;
+use rubato_audio_source::RubatoResampler;
+
+use super::config::{STREAM_BUILD_TIMEOUT, get_input_config};
+use super::cpal_registry::{default_input_device, device_name};
+use super::cpal_stream::sample_format_dispatch;
+use super::mixer::RING_CAPACITY_BLOCKS;
 
 #[derive(Default)]
 pub(crate) struct InputStats {
     overruns: AtomicUsize,
-    data_callbacks: AtomicU64,
-    callback_period_us: AtomicU64,
 }
 
 impl InputStats {
     fn note_overrun(&self, samples: usize) {
         self.overruns.fetch_add(samples, Ordering::Relaxed);
-    }
-
-    fn note_data_callback(&self) {
-        self.data_callbacks.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub(crate) fn data_callbacks(&self) -> u64 {
-        self.data_callbacks.load(Ordering::Relaxed)
-    }
-
-    pub(crate) fn set_callback_period(&self, frames: u32, sample_rate: u32) {
-        if sample_rate == 0 {
-            return;
-        }
-        let micros = frames as u64 * 1_000_000 / sample_rate as u64;
-        self.callback_period_us.store(micros, Ordering::Release);
-    }
-
-    pub(crate) fn callback_period(&self) -> Option<std::time::Duration> {
-        let micros = self.callback_period_us.load(Ordering::Acquire);
-        if micros == 0 {
-            None
-        } else {
-            Some(std::time::Duration::from_micros(micros))
-        }
     }
 
     pub(crate) fn overruns(&self) -> usize {
@@ -102,6 +77,56 @@ impl SampleSource for CpalStreamReceiver {
     }
 }
 
+pub(crate) enum InputSource {
+    Live(Box<SampleChunker<RubatoResampler<CpalStreamReceiver>>>),
+    Idle,
+}
+
+impl ChunkSource for InputSource {
+    async fn next_chunk(&mut self) -> Option<AudioChunk> {
+        match self {
+            Self::Live(chain) => chain.next_chunk().await,
+            Self::Idle => std::future::pending().await,
+        }
+    }
+}
+
+pub(crate) struct AudioInput {
+    pub(crate) source: InputSource,
+    pub(crate) stats: Arc<InputStats>,
+}
+
+pub(crate) fn start_input(audio_config: AudioPipelineConfig) -> AudioInput {
+    let stats = Arc::new(InputStats::default());
+    let Some(device) = default_input_device() else {
+        log::warn!("No default input device available, continuing without mic");
+        return AudioInput {
+            source: InputSource::Idle,
+            stats,
+        };
+    };
+    let name = device_name(&device);
+    match make_single_input(device, &audio_config, &stats) {
+        Ok(receiver) => {
+            log::info!("Using default input device: {name}");
+            let resampled =
+                RubatoResampler::new(receiver, audio_config.sample_rate(), audio_config.frames());
+            let chunked = SampleChunker::new(resampled, audio_config.frames());
+            AudioInput {
+                source: InputSource::Live(Box::new(chunked)),
+                stats,
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to start input stream on {name}, continuing without mic: {e:#}");
+            AudioInput {
+                source: InputSource::Idle,
+                stats,
+            }
+        }
+    }
+}
+
 fn publish_samples(
     producer: &mut NotifyingProducer,
     stats: &Arc<InputStats>,
@@ -126,36 +151,24 @@ fn publish_samples(
     }
 }
 
-fn try_input_candidate(
-    device: &Device,
+fn make_single_input(
+    device: Device,
     audio_config: &AudioPipelineConfig,
-    reporter: &FatalReporter,
     stats: &Arc<InputStats>,
-    wake: &Arc<tokio::sync::Notify>,
-    fmt: SampleFormat,
-    cfg: StreamConfig,
-) -> Result<CpalStreamReceiver, anyhow::Error> {
+) -> anyhow::Result<CpalStreamReceiver> {
+    let (fmt, cfg) = get_input_config(&device)?;
     let channels = cfg.channels;
     let sample_rate = cfg.sample_rate;
     let format = AudioFormat::new(channels, sample_rate);
     let block_samples = channels as usize * audio_config.frames();
     anyhow::ensure!(block_samples > 0, "invalid block size");
     let (producer, consumer) = rtrb::RingBuffer::new(block_samples * RING_CAPACITY_BLOCKS);
-    let build_wake = Arc::clone(wake);
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let build_wake = Arc::clone(&wake);
     let build_stats = Arc::clone(stats);
-    let build_reporter = reporter.clone();
-    let attempt_device = device.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        setup_input_stream(
-            fmt,
-            cfg,
-            &attempt_device,
-            producer,
-            build_wake,
-            build_stats,
-            build_reporter,
-        )
-        .map_err(|e| format!("{e:#}"))
+        setup_input_stream(fmt, cfg, &device, producer, build_wake, build_stats)
+            .map_err(|e| format!("{e:#}"))
     });
     if let Some(reason) = wrapper
         .execute(|slot| match slot {
@@ -165,64 +178,28 @@ fn try_input_candidate(
         })
         .unwrap_or_else(|_| Some("audio thread died".to_string()))
     {
-        log::trace!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
         anyhow::bail!("{fmt:?} {channels}ch {sample_rate}Hz: {reason}");
     }
+    let actual: Option<u32> = wrapper
+        .execute(|r| r.as_ref().ok()?.buffer_size().ok())
+        .ok()
+        .flatten();
+    log::info!(
+        "Selected input stream: {}ch {}Hz {} req={:?} actual={}",
+        channels,
+        sample_rate,
+        fmt,
+        cfg.buffer_size,
+        actual
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
     Ok(CpalStreamReceiver {
         _stream: wrapper,
         consumer,
-        wake: Arc::clone(wake),
+        wake,
         format,
     })
-}
-
-pub(crate) fn make_single_input(
-    device: Device,
-    audio_config: &AudioPipelineConfig,
-    reporter: FatalReporter,
-    stats: &Arc<InputStats>,
-) -> Result<CpalStreamReceiver, anyhow::Error> {
-    let candidates = ordered_input_configs(&device, audio_config);
-    log::debug!("Trying {} ranked input configs", candidates.len());
-    log::trace!("Candidate configs: {candidates:?}");
-    let wake = Arc::new(tokio::sync::Notify::new());
-    let mut failures = Vec::new();
-    for (fmt, cfg) in candidates {
-        match try_input_candidate(&device, audio_config, &reporter, stats, &wake, fmt, cfg) {
-            Ok(mut receiver) => {
-                let actual: Option<u32> = receiver
-                    ._stream
-                    .execute(|r| r.as_ref().ok()?.buffer_size().ok())
-                    .ok()
-                    .flatten();
-                // Fall back to requested pipeline frames.
-                let frames = actual
-                    .or(match cfg.buffer_size {
-                        cpal::BufferSize::Fixed(n) => Some(n),
-                        cpal::BufferSize::Default => None,
-                    })
-                    .unwrap_or_else(|| u32::try_from(audio_config.frames()).unwrap_or(u32::MAX));
-                stats.set_callback_period(frames, cfg.sample_rate);
-                log::info!(
-                    "Selected input stream: {}ch {}Hz {} req={:?} actual={}",
-                    cfg.channels,
-                    cfg.sample_rate,
-                    fmt,
-                    cfg.buffer_size,
-                    actual
-                        .map(|s| s.to_string())
-                        .unwrap_or("unknown".to_string())
-                );
-                return Ok(receiver);
-            }
-            Err(e) => failures.push(format!("{e:#}")),
-        }
-    }
-    anyhow::bail!(
-        "Failed to start input stream (tried {} configs: {}), parking input",
-        failures.len(),
-        failures.join("; ")
-    );
 }
 
 fn setup_input_stream(
@@ -232,18 +209,9 @@ fn setup_input_stream(
     producer: rtrb::Producer<f32>,
     wake: Arc<tokio::sync::Notify>,
     stats: Arc<InputStats>,
-    reporter: FatalReporter,
 ) -> anyhow::Result<Stream> {
     let producer = NotifyingProducer::new(producer, wake);
-    sample_format_dispatch!(
-        sample_format,
-        run_input,
-        config,
-        device,
-        producer,
-        stats,
-        reporter
-    )
+    sample_format_dispatch!(sample_format, run_input, config, device, producer, stats)
 }
 
 fn run_input<T>(
@@ -251,20 +219,16 @@ fn run_input<T>(
     device: &Device,
     mut producer: NotifyingProducer,
     stats: Arc<InputStats>,
-    reporter: FatalReporter,
 ) -> anyhow::Result<Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,
 {
-    let err_fn = move |err: cpal::Error| {
-        reporter.report_input(err.kind());
-    };
+    let err_fn = |err: cpal::Error| super::stream_errors::note_input_error(err.kind());
     device
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                stats.note_data_callback();
                 publish_samples(
                     &mut producer,
                     &stats,

@@ -3,7 +3,6 @@ pub mod codec;
 pub mod config;
 pub mod converter;
 pub mod denoiser;
-pub mod device;
 pub mod jitter;
 pub mod mixer;
 pub mod sample;

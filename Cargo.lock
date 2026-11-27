@@ -1131,7 +1131,8 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.18.2"
-source = "git+https://github.com/neelayjunnarkar/cpal?rev=81c03cf51b0f7535fdf32af348279d0ab98bd8ea#81c03cf51b0f7535fdf32af348279d0ab98bd8ea"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f02e8d0327b42d3e2e4ab2119af397344eb9fc54a34bf0ddeaa1277af8681f1"
 dependencies = [
  "alsa",
  "alsa-sys",
@@ -1139,7 +1140,6 @@ dependencies = [
  "block2",
  "coreaudio-rs",
  "dasp_sample",
- "futures",
  "jni",
  "js-sys",
  "libc",
@@ -1156,8 +1156,6 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation",
  "pipewire",
- "portable-atomic",
- "pulseaudio",
  "web-sys",
  "windows",
  "windows-core",
@@ -1713,17 +1711,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "enum-primitive-derive"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba7795da175654fe16979af73f81f26a8ea27638d8d9823d317016888a63dc4c"
-dependencies = [
- "num-traits",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -2657,7 +2644,6 @@ dependencies = [
  "clap 4.6.1",
  "cpal",
  "criterion",
- "crossbeam-utils",
  "dirs",
  "ed25519-dalek",
  "fern",
@@ -4055,21 +4041,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "pulseaudio"
-version = "0.3.1"
-source = "git+https://github.com/neelayjunnarkar/pulseaudio-rs?rev=9cbea6a600c5e8eea4b44f86c77a562b1c4035f8#9cbea6a600c5e8eea4b44f86c77a562b1c4035f8"
-dependencies = [
- "bitflags 2.13.2",
- "byteorder",
- "enum-primitive-derive",
- "futures",
- "log",
- "mio",
- "num-traits",
- "thiserror 1.0.69",
 ]
 
 [[package]]

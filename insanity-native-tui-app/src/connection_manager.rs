@@ -20,8 +20,8 @@ use crate::audio::hub::AudioInputHub;
 use crate::{
     audio::{
         codec::rebuild_opus_encoder,
-        device_supervisor,
-        input::{AudioInput, InputManager, start_input},
+        cpal_registry,
+        cpal_stream_receiver::{AudioInput, InputStats, start_input},
         mixer::format_audio_interval,
         output::{AudioOutput, start_output},
         stream_errors,
@@ -57,14 +57,9 @@ pub struct ConnectionManager {
 }
 
 #[derive(Clone)]
-struct InputSide {
-    hub: Arc<AudioInputHub<EncodedChunk>>,
-    manager: InputManager,
-}
-
-#[derive(Clone)]
 struct SharedAudio {
-    input: InputSide,
+    hub: Arc<AudioInputHub<EncodedChunk>>,
+    input_stats: Arc<InputStats>,
     output: AudioOutput,
 }
 
@@ -292,8 +287,8 @@ fn manage_peers(
     // single input hub and single output mixer
     let audio_config = AudioPipelineConfig::default();
     let AudioInput {
-        manager: input,
         source,
+        stats: input_stats,
     } = start_input(audio_config);
     let hub = Arc::new(AudioInputHub::from_chunk_source(
         source,
@@ -301,67 +296,18 @@ fn manage_peers(
         rebuild_opus_encoder,
     ));
     let output = start_output(audio_config);
-    if let Some(app_event_tx) = &app_event_tx {
-        for event in device_supervisor::refresh_device_events(&input, &output.manager) {
-            if app_event_tx.send(event).is_err() {
-                log::warn!("Could not send initial device state to UI");
-                break;
-            }
-        }
-        let name_tx = app_event_tx.clone();
-        let mut input_info = input.subscribe();
-        tokio::spawn(async move {
-            while input_info.changed().await.is_ok() {
-                if name_tx
-                    .send(AppEvent::SetInputDeviceName(
-                        input_info.borrow().name.clone(),
-                    ))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-    }
-
-    if let Some(app_event_tx) = &app_event_tx {
-        let name_tx = app_event_tx.clone();
-        let mut output_info = output.manager.subscribe();
-        tokio::spawn(async move {
-            while output_info.changed().await.is_ok() {
-                if name_tx
-                    .send(AppEvent::SetOutputDeviceName(
-                        output_info.borrow().name.clone(),
-                    ))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-    }
+    log::info!(
+        "Audio started: host={} pipeline=({}ch {}Hz frames={})",
+        cpal_registry::shared_host().id().name(),
+        audio_config.channels(),
+        audio_config.sample_rate(),
+        audio_config.frames(),
+    );
     let audio = SharedAudio {
-        input: InputSide {
-            hub: hub.clone(),
-            manager: input,
-        },
+        hub,
+        input_stats,
         output: output.clone(),
     };
-    {
-        let supervisor_input = audio.input.manager.clone();
-        let supervisor_output = audio.output.manager.clone();
-        let supervisor_tx = app_event_tx.clone();
-        let supervisor_cancel = cancellation_token.clone();
-        tokio::spawn(async move {
-            device_supervisor::run_device_supervisor(
-                supervisor_input,
-                supervisor_output,
-                supervisor_tx,
-                supervisor_cancel,
-            )
-            .await;
-        });
-    }
     let metrics_audio = audio.clone();
     let metrics_token = cancellation_token.clone();
     tokio::spawn(async move {
@@ -373,23 +319,23 @@ fn manage_peers(
             .map(|(snapshot, _)| snapshot)
             .unwrap_or_default();
         let mut prev_dropped = metrics_audio.output.client.dropped();
-        let mut prev_underruns = metrics_audio.output.manager.stats().underruns();
-        let mut prev_overruns = metrics_audio.output.manager.stats().overruns();
+        let mut prev_underruns = metrics_audio.output.stats.underruns();
+        let mut prev_overruns = metrics_audio.output.stats.overruns();
         let mut prev_input_errors = stream_errors::input_errors();
         let mut prev_output_errors = stream_errors::output_errors();
-        let mut prev_input_overruns = metrics_audio.input.manager.stats().overruns();
+        let mut prev_input_overruns = metrics_audio.input_stats.overruns();
         let mut ticker = tokio::time::interval(AUDIO_METRICS_INTERVAL);
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
                     if let Some((current, peers)) = metrics_audio.output.client.snapshot().await {
                         let dropped = metrics_audio.output.client.dropped();
-                        let ring_underruns = metrics_audio.output.manager.stats().underruns();
-                        let ring_overruns = metrics_audio.output.manager.stats().overruns();
+                        let ring_underruns = metrics_audio.output.stats.underruns();
+                        let ring_overruns = metrics_audio.output.stats.overruns();
                         let line = format_audio_interval(
                             &prev,
                             &current,
-                            metrics_audio.output.manager.stats().avg_nanos(),
+                            metrics_audio.output.stats.avg_nanos(),
                             peers,
                             dropped.saturating_sub(prev_dropped),
                             ring_underruns.saturating_sub(prev_underruns),
@@ -417,7 +363,7 @@ fn manage_peers(
                     }
                     prev_input_errors = input_errors;
                     prev_output_errors = output_errors;
-                    let input_overruns = metrics_audio.input.manager.stats().overruns();
+                    let input_overruns = metrics_audio.input_stats.overruns();
                     let new_overruns = input_overruns.saturating_sub(prev_input_overruns);
                     if new_overruns > 0 {
                         log::warn!(
@@ -518,7 +464,7 @@ fn update_peer_info(
                 .display_name(new_info.display_name)
                 .denoise(DenoiseSelection::default())
                 .volume(100)
-                .hub(audio.input.hub)
+                .hub(audio.hub)
                 .client(audio.output.client.clone())
                 .build();
             managed_peers.insert(id, managed_peer.clone());
@@ -568,8 +514,8 @@ async fn handle_user_action(
             }
         }
         UserInputEvent::SetMicVolume(volume) => {
-            audio.input.hub.set_mic_volume(volume);
-            let clamped = audio.input.hub.mic_volume();
+            audio.hub.set_mic_volume(volume);
+            let clamped = audio.hub.mic_volume();
             if let Some(app_event_tx) = app_event_tx
                 && let Err(e) = app_event_tx.send(AppEvent::SetMicVolume(clamped))
             {
@@ -584,36 +530,11 @@ async fn handle_user_action(
             }
         }
         UserInputEvent::SetMuteSelf(is_muted) => {
-            audio.input.hub.set_muted(is_muted);
+            audio.hub.set_muted(is_muted);
             if let Some(app_event_tx) = app_event_tx
                 && let Err(e) = app_event_tx.send(AppEvent::MuteSelf(is_muted))
             {
                 log::debug!("Failed to send mute self event: {:?}", e);
-            }
-        }
-        UserInputEvent::SetInputDevice(id, name) => {
-            match audio.input.manager.switch_to(&id, &name) {
-                Ok(()) => log::debug!("Switched input device to {name}"),
-                Err(e) => log::warn!("Failed to switch input device to {name}: {e:#}"),
-            }
-        }
-        UserInputEvent::SetOutputDevice(id, name) => {
-            match audio.output.manager.switch_to(&id, &name) {
-                Ok(()) => log::debug!("Switched output device to {name}"),
-                Err(e) => log::warn!("Failed to switch output device to {name}: {e:#}"),
-            }
-        }
-        UserInputEvent::RefreshDevices => {
-            let events = device_supervisor::refresh_device_events(
-                &audio.input.manager,
-                &audio.output.manager,
-            );
-            if let Some(app_event_tx) = app_event_tx {
-                for event in events {
-                    if app_event_tx.send(event).is_err() {
-                        log::debug!("Failed to resend device list to UI");
-                    }
-                }
             }
         }
     }
