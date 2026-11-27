@@ -1,9 +1,6 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cpal::ErrorKind;
-use crossbeam_utils::atomic::AtomicCell;
-use tokio::sync::Notify;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct StreamErrorCounts {
@@ -55,89 +52,14 @@ impl Counters {
 static INPUT: Counters = Counters::new();
 static OUTPUT: Counters = Counters::new();
 
-/// Last fatal error kind per direction.
-static INPUT_FATAL_KIND: AtomicCell<Option<ErrorKind>> = AtomicCell::new(None);
-static OUTPUT_FATAL_KIND: AtomicCell<Option<ErrorKind>> = AtomicCell::new(None);
-
-pub(crate) fn input_fatal_kind() -> Option<ErrorKind> {
-    INPUT_FATAL_KIND.take()
-}
-
-pub(crate) fn output_fatal_kind() -> Option<ErrorKind> {
-    OUTPUT_FATAL_KIND.take()
-}
-
-fn is_fatal(kind: ErrorKind) -> bool {
-    !matches!(
-        kind,
-        ErrorKind::Xrun | ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied
-    )
-}
-
-#[derive(Default)]
-pub(crate) struct FatalSignal {
-    generation: AtomicU64,
-    notify: Notify,
-}
-
-impl FatalSignal {
-    pub(crate) fn new() -> Self {
-        FatalSignal {
-            generation: AtomicU64::new(0),
-            notify: Notify::new(),
-        }
-    }
-
-    pub(crate) fn signal(&self, generation: u64) {
-        self.generation.store(generation, Ordering::Relaxed);
-        self.notify.notify_one();
-    }
-
-    pub(crate) fn notified(&self) -> impl Future<Output = ()> + '_ {
-        self.notify.notified()
-    }
-
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Relaxed)
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct FatalReporter {
-    fatal: Arc<FatalSignal>,
-    generation: u64,
-}
-
-impl FatalReporter {
-    pub(crate) fn new(fatal: Arc<FatalSignal>, generation: u64) -> Self {
-        FatalReporter { fatal, generation }
-    }
-
-    pub(crate) fn report_input(&self, kind: ErrorKind) {
-        note_input_error(kind, &self.fatal, self.generation);
-    }
-
-    pub(crate) fn report_output(&self, kind: ErrorKind) {
-        note_output_error(kind, &self.fatal, self.generation);
-    }
-}
-
-/// Safe on a real-time audio thread
-fn note_input_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
+/// Safe on a real-time audio thread: one relaxed atomic add, no I/O.
+pub(crate) fn note_input_error(kind: ErrorKind) {
     INPUT.note(kind);
-    if is_fatal(kind) {
-        INPUT_FATAL_KIND.store(Some(kind));
-        fatal.signal(generation);
-    }
 }
 
-/// Safe on a real-time audio thread
-fn note_output_error(kind: ErrorKind, fatal: &Arc<FatalSignal>, generation: u64) {
+/// Safe on a real-time audio thread: one relaxed atomic add, no I/O.
+pub(crate) fn note_output_error(kind: ErrorKind) {
     OUTPUT.note(kind);
-    if is_fatal(kind) {
-        OUTPUT_FATAL_KIND.store(Some(kind));
-        fatal.signal(generation);
-    }
 }
 
 pub(crate) fn input_errors() -> StreamErrorCounts {
@@ -150,17 +72,10 @@ pub(crate) fn output_errors() -> StreamErrorCounts {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::{
-        FatalSignal, StreamErrorCounts, input_errors, is_fatal, note_input_error,
-        note_output_error, output_errors,
+        StreamErrorCounts, input_errors, note_input_error, note_output_error, output_errors,
     };
     use cpal::ErrorKind;
-
-    fn test_fatal() -> Arc<FatalSignal> {
-        Arc::new(FatalSignal::new())
-    }
 
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -169,10 +84,10 @@ mod tests {
         let _guard = SERIAL.lock().unwrap();
         let input_before = input_errors();
         let output_before = output_errors();
-        note_input_error(ErrorKind::Xrun, &test_fatal(), 1);
-        note_input_error(ErrorKind::Xrun, &test_fatal(), 1);
-        note_input_error(ErrorKind::RealtimeDenied, &test_fatal(), 1);
-        note_output_error(ErrorKind::DeviceNotAvailable, &test_fatal(), 1);
+        note_input_error(ErrorKind::Xrun);
+        note_input_error(ErrorKind::Xrun);
+        note_input_error(ErrorKind::RealtimeDenied);
+        note_output_error(ErrorKind::DeviceNotAvailable);
         assert_eq!(
             input_errors().since(input_before),
             StreamErrorCounts { xruns: 2, other: 1 }
@@ -184,63 +99,10 @@ mod tests {
     }
 
     #[test]
-    fn only_recoverable_errors_are_non_fatal() {
-        assert!(!is_fatal(ErrorKind::Xrun));
-        assert!(!is_fatal(ErrorKind::DeviceChanged));
-        assert!(!is_fatal(ErrorKind::RealtimeDenied));
-        assert!(is_fatal(ErrorKind::DeviceNotAvailable));
-        assert!(is_fatal(ErrorKind::DeviceBusy));
-    }
-
-    #[tokio::test]
-    async fn fatal_errors_wake_the_owner_with_generation() {
-        let fatal = test_fatal();
-        {
-            let _guard = SERIAL.lock().unwrap();
-            note_input_error(ErrorKind::DeviceNotAvailable, &fatal, 3);
-        }
-        assert_eq!(fatal.generation(), 3);
-        fatal.notified().await;
-        let quiet = test_fatal();
-        {
-            let _guard = SERIAL.lock().unwrap();
-            note_output_error(ErrorKind::Xrun, &quiet, 7);
-        }
-        assert_eq!(quiet.generation(), 0);
-        assert!(
-            tokio::time::timeout(std::time::Duration::from_millis(10), quiet.notified())
-                .await
-                .is_err()
-        );
-    }
-    #[test]
     fn since_saturates_and_reports_zero() {
         let later = StreamErrorCounts { xruns: 1, other: 1 };
         let earlier = StreamErrorCounts { xruns: 3, other: 5 };
         assert!(later.since(earlier).is_zero());
         assert!(!earlier.since(later).is_zero());
-    }
-
-    #[test]
-    fn fatal_kind_follows_production_path() {
-        let _guard = SERIAL.lock().unwrap();
-        // Start clean regardless of test order.
-        let _ = super::input_fatal_kind();
-        let fatal = test_fatal();
-        // Fatal errors record their kind.
-        note_input_error(ErrorKind::DeviceNotAvailable, &fatal, 3);
-        assert_eq!(
-            super::input_fatal_kind(),
-            Some(ErrorKind::DeviceNotAvailable)
-        );
-        // Non-fatals must not clobber the last fatal.
-        note_input_error(ErrorKind::DeviceNotAvailable, &fatal, 4);
-        note_input_error(ErrorKind::Xrun, &fatal, 4);
-        assert_eq!(
-            super::input_fatal_kind(),
-            Some(ErrorKind::DeviceNotAvailable)
-        );
-        // Consumed on take; slot left clean for the next test.
-        assert_eq!(super::input_fatal_kind(), None);
     }
 }

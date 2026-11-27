@@ -36,7 +36,6 @@ pub(crate) const MOVE_UP_PEER_LIST_KEY: char = 'k';
 pub(crate) const MOVE_TOP_PEER_LIST_KEY: char = 'g';
 pub(crate) const MOVE_BOTTOM_PEER_LIST_KEY: char = 'G';
 pub(crate) const MUTE_KEY: char = 'm';
-pub(crate) const REFRESH_DEVICES_KEY: char = 'r';
 
 const NUM_TABS: usize = 3;
 const TAB_NAMES: [&str; NUM_TABS] = [TAB_NAME_MAIN, TAB_NAME_CHAT, TAB_NAME_SETTINGS];
@@ -130,8 +129,6 @@ pub enum AppEvent {
     Loudness(String, f64),
     SetInputDeviceName(String),
     SetOutputDeviceName(String),
-    SetInputDevices(Vec<(String, String)>),
-    SetOutputDevices(Vec<(String, String)>),
 }
 
 impl AppEvent {
@@ -161,9 +158,6 @@ pub struct App {
     pub mute_self: bool,
     pub input_device_name: String,
     pub output_device_name: String,
-    pub input_devices: Vec<(String, String)>, // (Device ID, Device Name)
-    pub output_devices: Vec<(String, String)>, // (Device ID, Device Name)
-    pub device_cursor: DeviceCursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,12 +165,6 @@ pub enum MainCursor {
     Speaker,
     Mic,
     Peer(usize),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceCursor {
-    Input(usize),
-    Output(usize),
 }
 
 impl App {
@@ -202,9 +190,6 @@ impl App {
             mute_self: false,
             input_device_name: "".into(),
             output_device_name: "".into(),
-            input_devices: vec![],
-            output_devices: vec![],
-            device_cursor: DeviceCursor::Input(0),
         }
     }
 
@@ -274,27 +259,12 @@ impl App {
                     self.editor.append(c);
                     true
                 }
-                TAB_IDX_SETTINGS => match c {
-                    MOVE_DOWN_PEER_LIST_KEY => self.move_device_cursor(1),
-                    MOVE_UP_PEER_LIST_KEY => self.move_device_cursor(-1),
-                    REFRESH_DEVICES_KEY => {
-                        self.refresh_devices();
-                        true
-                    }
-                    _ => false,
-                },
                 _ => false,
             },
             AppEvent::Enter => {
-                if self.tab_index == TAB_IDX_SETTINGS {
-                    self.select_focused_device()
-                } else if self.tab_index == TAB_IDX_CHAT {
-                    if !self.editor.is_empty() {
-                        self.send_message();
-                        true
-                    } else {
-                        false
-                    }
+                if self.tab_index == TAB_IDX_CHAT && !self.editor.is_empty() {
+                    self.send_message();
+                    true
                 } else {
                     false
                 }
@@ -381,7 +351,6 @@ impl App {
                     }
                     old != self.chat_offset
                 }
-                TAB_IDX_SETTINGS => self.move_device_cursor(1),
                 _ => false,
             },
             AppEvent::Up => match self.tab_index {
@@ -391,7 +360,6 @@ impl App {
                     self.chat_offset = std::cmp::min(self.chat_history.len(), self.chat_offset + 1);
                     old != self.chat_offset
                 }
-                TAB_IDX_SETTINGS => self.move_device_cursor(-1),
                 _ => false,
             },
             AppEvent::TogglePeer => self.toggle_peer(),
@@ -438,16 +406,6 @@ impl App {
                 let changed = self.output_device_name != output_device_name;
                 self.output_device_name = output_device_name;
                 changed
-            }
-            AppEvent::SetInputDevices(devices) => {
-                let changed = self.input_devices != devices;
-                self.input_devices = devices;
-                self.clamp_device_cursor() || changed
-            }
-            AppEvent::SetOutputDevices(devices) => {
-                let changed = self.output_devices != devices;
-                self.output_devices = devices;
-                self.clamp_device_cursor() || changed
             }
             AppEvent::Loudness(peer_id, level) => {
                 if let Some(peer) = self.peers.get_mut(&peer_id) {
@@ -515,95 +473,6 @@ impl App {
             MainCursor::Peer(i) => self.peers.values().nth(i),
             _ => None,
         }
-    }
-
-    fn clamp_device_cursor(&mut self) -> bool {
-        let clamp = |row: usize, len: usize| std::cmp::min(row, len.saturating_sub(1));
-        let clamped = match (
-            self.device_cursor,
-            self.input_devices.is_empty(),
-            self.output_devices.is_empty(),
-        ) {
-            (_, true, true) => DeviceCursor::Input(0),
-            (DeviceCursor::Input(row), false, _) => {
-                DeviceCursor::Input(clamp(row, self.input_devices.len()))
-            }
-            (DeviceCursor::Output(row), _, false) => {
-                DeviceCursor::Output(clamp(row, self.output_devices.len()))
-            }
-            (DeviceCursor::Input(_), true, false) => DeviceCursor::Output(0),
-            (DeviceCursor::Output(_), false, true) => {
-                DeviceCursor::Input(self.input_devices.len() - 1)
-            }
-        };
-        let changed = clamped != self.device_cursor;
-        self.device_cursor = clamped;
-        changed
-    }
-
-    fn move_device_cursor(&mut self, delta: isize) -> bool {
-        if self.input_devices.is_empty() && self.output_devices.is_empty() {
-            return false;
-        }
-        let old = self.device_cursor;
-        self.device_cursor = match (self.device_cursor, delta.signum()) {
-            (DeviceCursor::Input(row), 1) => {
-                if row + 1 < self.input_devices.len() {
-                    DeviceCursor::Input(row + 1)
-                } else if self.output_devices.is_empty() {
-                    DeviceCursor::Input(row)
-                } else {
-                    DeviceCursor::Output(0)
-                }
-            }
-            (DeviceCursor::Output(row), 1) => {
-                if row + 1 < self.output_devices.len() {
-                    DeviceCursor::Output(row + 1)
-                } else {
-                    DeviceCursor::Output(row)
-                }
-            }
-            (DeviceCursor::Input(row), _) => {
-                if row > 0 && !self.input_devices.is_empty() {
-                    DeviceCursor::Input(row - 1)
-                } else {
-                    DeviceCursor::Input(0)
-                }
-            }
-            (DeviceCursor::Output(row), _) => {
-                if row > 0 && !self.output_devices.is_empty() {
-                    DeviceCursor::Output(row - 1)
-                } else if self.input_devices.is_empty() {
-                    DeviceCursor::Output(0)
-                } else {
-                    DeviceCursor::Input(self.input_devices.len() - 1)
-                }
-            }
-        };
-        old != self.device_cursor
-    }
-
-    fn select_focused_device(&mut self) -> bool {
-        let selected = match self.device_cursor {
-            DeviceCursor::Input(row) => self
-                .input_devices
-                .get(row)
-                .map(|(id, name)| UserInputEvent::SetInputDevice(id.clone(), name.clone())),
-            DeviceCursor::Output(row) => self
-                .output_devices
-                .get(row)
-                .map(|(id, name)| UserInputEvent::SetOutputDevice(id.clone(), name.clone())),
-        };
-        match selected {
-            Some(event) => self.user_action_sender.send(event).is_ok(),
-            None => false,
-        }
-    }
-
-    fn refresh_devices(&mut self) {
-        self.user_action_sender
-            .send(UserInputEvent::RefreshDevices)
-            .unwrap();
     }
 
     fn toggle_peer(&mut self) -> bool {
@@ -1012,50 +881,6 @@ mod render_scaling_tests {
         assert!(!app.process_event(AppEvent::Up));
     }
 
-    fn test_settings_app(input_count: usize, output_count: usize) -> App {
-        let (tx, _rx) = unbounded_channel();
-        let mut app = App::new(tx);
-        assert!(app.process_event(AppEvent::NextTab));
-        assert!(app.process_event(AppEvent::NextTab));
-        assert_eq!(app.tab_index, TAB_IDX_SETTINGS);
-        let inputs = (0..input_count)
-            .map(|i| (format!("mic-{i}"), format!("Mic {i}")))
-            .collect();
-        let outputs = (0..output_count)
-            .map(|i| (format!("spk-{i}"), format!("Speakers {i}")))
-            .collect();
-        app.process_event(AppEvent::SetInputDevices(inputs));
-        app.process_event(AppEvent::SetOutputDevices(outputs));
-        app
-    }
-
-    #[test]
-    fn device_lists_store_and_clamp_on_shrink() {
-        let mut app = test_settings_app(0, 0);
-        // Empty lists: navigation inert, cursor parked.
-        assert!(!app.process_event(AppEvent::Enter));
-        assert!(!app.process_event(AppEvent::Character('j')));
-        assert!(!app.process_event(AppEvent::Character('k')));
-        assert!(!app.process_event(AppEvent::Down));
-        assert!(!app.process_event(AppEvent::Up));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
-        // Populating stores; re-setting the same lists is a no-op.
-        let inputs: Vec<(String, String)> = (0..3)
-            .map(|i| (format!("mic-{i}"), format!("Mic {i}")))
-            .collect();
-        let outputs: Vec<(String, String)> = (0..2)
-            .map(|i| (format!("spk-{i}"), format!("Speakers {i}")))
-            .collect();
-        assert!(app.process_event(AppEvent::SetInputDevices(inputs.clone())));
-        assert!(app.process_event(AppEvent::SetOutputDevices(outputs)));
-        assert!(!app.process_event(AppEvent::SetInputDevices(inputs.clone())));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert!(app.process_event(AppEvent::Character('j')));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(2));
-        assert!(app.process_event(AppEvent::SetInputDevices(inputs[..1].to_vec())));
-        assert_eq!(app.device_cursor, DeviceCursor::Input(0));
-    }
-
     fn buffer_text(terminal: &Terminal<TestBackend>) -> Vec<String> {
         let buffer = terminal.backend().buffer();
         let width = buffer.area.width as usize;
@@ -1073,10 +898,20 @@ mod render_scaling_tests {
     }
 
     #[test]
-    fn settings_picker_shows_all_devices_unclipped() {
-        let text = render_text(&test_settings_app(3, 2));
-        for name in ["Mic 0", "Mic 1", "Mic 2", "Speakers 0", "Speakers 1"] {
-            assert!(text.contains(name), "{name} clipped from settings picker");
+    fn settings_shows_current_audio_devices() {
+        let (tx, _rx) = unbounded_channel();
+        let mut app = App::new(tx);
+        assert!(app.process_event(AppEvent::NextTab));
+        assert!(app.process_event(AppEvent::NextTab));
+        assert_eq!(app.tab_index, TAB_IDX_SETTINGS);
+        assert!(app.process_event(AppEvent::SetInputDeviceName("System Mic".into())));
+        assert!(app.process_event(AppEvent::SetOutputDeviceName("System Speakers".into())));
+        let text = render_text(&app);
+        for needle in [
+            "Current input device: System Mic",
+            "Current output device: System Speakers",
+        ] {
+            assert!(text.contains(needle), "{needle} missing from settings tab");
         }
     }
 
