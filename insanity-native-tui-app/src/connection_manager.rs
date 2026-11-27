@@ -289,7 +289,6 @@ fn manage_peers(
     let AudioInput {
         source,
         stats: input_stats,
-        name: input_name,
     } = start_input(audio_config);
     let hub = Arc::new(AudioInputHub::from_chunk_source(
         source,
@@ -298,28 +297,12 @@ fn manage_peers(
     ));
     let output = start_output(audio_config);
     log::info!(
-        "Audio started: host={} pipeline=({}ch {}Hz frames={}) input={} output={}",
+        "Audio started: host={} pipeline=({}ch {}Hz frames={})",
         cpal_registry::shared_host().id().name(),
         audio_config.channels(),
         audio_config.sample_rate(),
         audio_config.frames(),
-        input_name,
-        output.name,
     );
-    if let Some(app_event_tx) = &app_event_tx {
-        if app_event_tx
-            .send(AppEvent::SetInputDeviceName(input_name))
-            .is_err()
-        {
-            log::warn!("Could not send input device name to UI");
-        }
-        if app_event_tx
-            .send(AppEvent::SetOutputDeviceName(output.name.clone()))
-            .is_err()
-        {
-            log::warn!("Could not send output device name to UI");
-        }
-    }
     let audio = SharedAudio {
         hub,
         input_stats,

@@ -18,8 +18,8 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use rubato_audio_source::StreamResampler;
 use tokio::sync::mpsc;
 
-use super::config::{STREAM_BUILD_TIMEOUT, ordered_output_configs};
-use super::cpal_registry::{UNKNOWN_DEVICE_NAME, default_output_device, device_name};
+use super::config::{STREAM_BUILD_TIMEOUT, get_output_config};
+use super::cpal_registry::{default_output_device, device_name};
 use super::cpal_stream::sample_format_dispatch;
 use super::mixer::{
     AppMixer, MAX_VOLUME, MIXER_OPS_BOUND, MixerClient, MixerOp, RING_CAPACITY_BLOCKS,
@@ -72,7 +72,6 @@ impl OutputStats {
 pub(crate) struct AudioOutput {
     pub(crate) client: MixerClient,
     pub(crate) stats: Arc<OutputStats>,
-    pub(crate) name: String,
     speaker_gain: Arc<GainControl>,
 }
 
@@ -132,13 +131,12 @@ impl Sink {
     }
 }
 
-fn try_output_candidate(
-    device: &Device,
+fn build_device_sink(
+    device: Device,
     audio_config: &AudioPipelineConfig,
     stats: &Arc<OutputStats>,
-    sample_format: SampleFormat,
-    cfg: StreamConfig,
 ) -> anyhow::Result<Sink> {
+    let (sample_format, cfg) = get_output_config(&device, audio_config)?;
     let channels = cfg.channels;
     let sample_rate = cfg.sample_rate;
     let device_format = AudioFormat::new(channels, sample_rate);
@@ -152,9 +150,8 @@ fn try_output_candidate(
         device_block * RING_CAPACITY_BLOCKS,
     );
     let build_stats = Arc::clone(stats);
-    let attempt_device = device.clone();
     let mut wrapper = send_safe::SendWrapperThread::new(move || {
-        build_output_stream(sample_format, cfg, &attempt_device, consumer, build_stats)
+        build_output_stream(sample_format, cfg, &device, consumer, build_stats)
             .map_err(|e| format!("{e:#}"))
     });
     if let Some(reason) = wrapper
@@ -165,9 +162,22 @@ fn try_output_candidate(
         })
         .unwrap_or_else(|_| Some("audio thread died".to_string()))
     {
-        log::trace!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
         anyhow::bail!("{sample_format:?} {channels}ch {sample_rate}Hz: {reason}");
     }
+    let actual: Option<u32> = wrapper
+        .execute(|r| r.as_ref().ok()?.buffer_size().ok())
+        .ok()
+        .flatten();
+    log::info!(
+        "Selected output stream: {}ch {}Hz {} req={:?} actual={}",
+        channels,
+        sample_rate,
+        sample_format,
+        cfg.buffer_size,
+        actual
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
     Ok(Sink {
         producer,
         stream: Some(wrapper),
@@ -175,45 +185,6 @@ fn try_output_candidate(
         device_format,
         device_block,
     })
-}
-
-fn build_device_sink(
-    device: &Device,
-    audio_config: &AudioPipelineConfig,
-    stats: &Arc<OutputStats>,
-) -> anyhow::Result<Sink> {
-    let candidates = ordered_output_configs(device, audio_config);
-    log::debug!("Trying {} ranked output configs", candidates.len());
-    log::trace!("Candidate configs: {candidates:?}");
-    let mut failures = Vec::new();
-    for (sample_format, cfg) in candidates {
-        match try_output_candidate(device, audio_config, stats, sample_format, cfg) {
-            Ok(mut sink) => {
-                let actual: Option<u32> = sink
-                    .stream
-                    .as_mut()
-                    .and_then(|w| w.execute(|r| r.as_ref().ok()?.buffer_size().ok()).ok())
-                    .flatten();
-                log::info!(
-                    "Selected output stream: {}ch {}Hz {} req={:?} actual={}",
-                    cfg.channels,
-                    cfg.sample_rate,
-                    sample_format,
-                    cfg.buffer_size,
-                    actual
-                        .map(|s| s.to_string())
-                        .unwrap_or("unknown".to_string())
-                );
-                return Ok(sink);
-            }
-            Err(e) => failures.push(format!("{e:#}")),
-        }
-    }
-    anyhow::bail!(
-        "Failed to start output stream (tried {} configs: {})",
-        failures.len(),
-        failures.join("; ")
-    );
 }
 
 fn build_dummy_sink(audio_config: &AudioPipelineConfig) -> Sink {
@@ -238,22 +209,25 @@ fn build_dummy_sink(audio_config: &AudioPipelineConfig) -> Sink {
 
 pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
     let stats = Arc::new(OutputStats::default());
-    let (sink, name) = match default_output_device() {
+    let sink = match default_output_device() {
         Some(device) => {
             let name = device_name(&device);
-            match build_device_sink(&device, &audio_config, &stats) {
-                Ok(sink) => (sink, name),
+            match build_device_sink(device, &audio_config, &stats) {
+                Ok(sink) => {
+                    log::info!("Using default output device: {name}");
+                    sink
+                }
                 Err(e) => {
                     log::warn!(
                         "Failed to start output stream on {name}, falling back to dummy: {e:#}"
                     );
-                    (build_dummy_sink(&audio_config), UNKNOWN_DEVICE_NAME.into())
+                    build_dummy_sink(&audio_config)
                 }
             }
         }
         None => {
             log::warn!("No default output device available, falling back to dummy");
-            (build_dummy_sink(&audio_config), UNKNOWN_DEVICE_NAME.into())
+            build_dummy_sink(&audio_config)
         }
     };
 
@@ -273,7 +247,6 @@ pub(crate) fn start_output(audio_config: AudioPipelineConfig) -> AudioOutput {
             dropped: Arc::new(AtomicUsize::new(0)),
         },
         stats,
-        name,
         speaker_gain,
     }
 }

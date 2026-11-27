@@ -15,7 +15,6 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
         .constraints([
             Constraint::Length(6),
             Constraint::Length(4),
-            Constraint::Length(4),
             Constraint::Min(0),
         ])
         .split(area);
@@ -87,23 +86,4 @@ pub fn render_settings(f: &mut Frame, app: &App, area: Rect) {
     .block(default_block())
     .style(Style::default().fg(Color::White));
     f.render_widget(version_widget, chunks[1]);
-
-    let audio_widget = audio_widget(&app.input_device_name, &app.output_device_name);
-    f.render_widget(audio_widget, chunks[2]);
-}
-
-fn device_line<'a>(label: &'static str, value: &'a str) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(label, Style::default().fg(Color::DarkGray)),
-        Span::styled(value, Style::default().fg(Color::LightBlue)),
-    ])
-}
-
-fn audio_widget<'a>(input_device_name: &'a str, output_device_name: &'a str) -> Paragraph<'a> {
-    Paragraph::new(vec![
-        device_line("Current input device: ", input_device_name),
-        device_line("Current output device: ", output_device_name),
-    ])
-    .block(default_block())
-    .style(Style::default().fg(Color::White))
 }

@@ -127,8 +127,6 @@ pub enum AppEvent {
     SetMicVolume(usize),
     MuteSelf(bool),
     Loudness(String, f64),
-    SetInputDeviceName(String),
-    SetOutputDeviceName(String),
 }
 
 impl AppEvent {
@@ -156,8 +154,6 @@ pub struct App {
     pub unread_messages: bool,
     pub chat_offset: usize, // Offset from bottom of chat in full messages.
     pub mute_self: bool,
-    pub input_device_name: String,
-    pub output_device_name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,8 +184,6 @@ impl App {
             unread_messages: false,
             chat_offset: 0,
             mute_self: false,
-            input_device_name: "".into(),
-            output_device_name: "".into(),
         }
     }
 
@@ -395,16 +389,6 @@ impl App {
             AppEvent::MuteSelf(is_muted) => {
                 let changed = self.mute_self != is_muted;
                 self.mute_self = is_muted;
-                changed
-            }
-            AppEvent::SetInputDeviceName(input_device_name) => {
-                let changed = self.input_device_name != input_device_name;
-                self.input_device_name = input_device_name;
-                changed
-            }
-            AppEvent::SetOutputDeviceName(output_device_name) => {
-                let changed = self.output_device_name != output_device_name;
-                self.output_device_name = output_device_name;
                 changed
             }
             AppEvent::Loudness(peer_id, level) => {
@@ -895,24 +879,6 @@ mod render_scaling_tests {
         let mut terminal = test_terminal();
         app.render(&mut terminal).expect("render");
         buffer_text(&terminal).join("\n")
-    }
-
-    #[test]
-    fn settings_shows_current_audio_devices() {
-        let (tx, _rx) = unbounded_channel();
-        let mut app = App::new(tx);
-        assert!(app.process_event(AppEvent::NextTab));
-        assert!(app.process_event(AppEvent::NextTab));
-        assert_eq!(app.tab_index, TAB_IDX_SETTINGS);
-        assert!(app.process_event(AppEvent::SetInputDeviceName("System Mic".into())));
-        assert!(app.process_event(AppEvent::SetOutputDeviceName("System Speakers".into())));
-        let text = render_text(&app);
-        for needle in [
-            "Current input device: System Mic",
-            "Current output device: System Speakers",
-        ] {
-            assert!(text.contains(needle), "{needle} missing from settings tab");
-        }
     }
 
     #[test]
